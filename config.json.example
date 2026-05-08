@@ -1,0 +1,26 @@
+{
+  "app": {
+    "name": "novel-backend",
+    "host": "0.0.0.0",
+    "port": 9001,
+    "debug": true
+  },
+  "database": {
+    "host": "127.0.0.1",
+    "port": 5432,
+    "user": "your_db_user",
+    "password": "your_db_password",
+    "db_name": "novel"
+  },
+  "llm": {
+    "base_url": "https://your-llm-api-base-url/v1",
+    "api_key": "your_llm_api_key",
+    "model": "your_model_name"
+  },
+  "observability": {
+    "langsmith_api_key": "your_langsmith_api_key",
+    "langsmith_project": "Novel",
+    "langsmith_endpoint": "https://api.smith.langchain.com",
+    "langsmith_tracing_v2": true
+  }
+}
