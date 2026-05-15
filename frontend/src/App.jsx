@@ -1,11 +1,14 @@
 import { Navigate, Route, Routes } from "react-router-dom";
+import { AgentArchPage } from "./pages/AgentArchPage";
 import { AgentPage } from "./pages/AgentPage";
 import { AuthGuard } from "./components/AuthGuard";
 import { ChaptersPage } from "./pages/ChaptersPage";
+import { CharacterListPage } from "./pages/CharacterListPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
 import { NewWorkPage } from "./pages/NewWorkPage";
 import { RegisterPage } from "./pages/RegisterPage";
+import { UnifiedAgentPage } from "./pages/UnifiedAgentPage";
 import { WorkDetailPage } from "./pages/WorkDetailPage";
 
 export default function App() {
@@ -38,6 +41,14 @@ export default function App() {
         }
       />
       <Route
+        path="/works/:workId/characters"
+        element={
+          <AuthGuard>
+            <CharacterListPage />
+          </AuthGuard>
+        }
+      />
+      <Route
         path="/works/:workId/agent/:chapterNum"
         element={
           <AuthGuard>
@@ -50,6 +61,22 @@ export default function App() {
         element={
           <AuthGuard>
             <WorkDetailPage />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/architecture"
+        element={
+          <AuthGuard>
+            <AgentArchPage />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/agent"
+        element={
+          <AuthGuard>
+            <UnifiedAgentPage />
           </AuthGuard>
         }
       />

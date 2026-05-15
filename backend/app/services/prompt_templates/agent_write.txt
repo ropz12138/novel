@@ -9,6 +9,9 @@
 ## 本章纲要
 {chapter_outline}
 
+## 章节标题
+{chapter_title}
+
 ## 构思笔记
 {thinking_notes}
 
@@ -27,22 +30,5 @@
 5. **细节丰富**：通过对话、心理描写、环境描写、动作描写让故事生动
 6. **章节结构**：包含开头引入、中间推进、结尾悬念或转折
 7. **人物一致性**：保持已出场人物的性格、说话方式一致，严格遵守上下文资料中的人物状态
-8. **输出格式**：第一行输出章节标题（格式：第X章 标题），然后空一行，再输出正文内容
 
-## 输出 JSON
-
-你需要输出一个 JSON 对象，包含以下字段：
-
-```json
-{{
-  "title": "第X章 标题",
-  "content": "完整的章节正文内容（不含标题行）",
-  "outline_changes_needed": false,
-  "outline_change_reason": "",
-  "outline_change_operations": []
-}}
-```
-
-如果撰写过程中发现需要修改大纲才能继续（例如需要新增角色、调整章节范围等），将 `outline_changes_needed` 设为 `true`，并在 `outline_change_reason` 中说明原因，在 `outline_change_operations` 中列出具体的操作（格式同大纲编辑工具调用格式）。
-
-如果不需要修改大纲，`outline_changes_needed` 保持 `false`，后两个字段留空。
+直接输出正文内容，不要输出标题、不要输出章节号、不要输出任何元信息或 JSON。只输出纯正文。

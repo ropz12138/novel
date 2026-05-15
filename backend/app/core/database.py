@@ -27,7 +27,15 @@ def _ensure_database_exists() -> None:
 
 _ensure_database_exists()
 
-engine = create_engine(build_database_url(), pool_pre_ping=True, echo=settings.debug)
+engine = create_engine(
+    build_database_url(),
+    pool_pre_ping=True,
+    echo=settings.db_echo,
+    pool_size=settings.db_pool_size,
+    max_overflow=settings.db_max_overflow,
+    pool_timeout=settings.db_pool_timeout,
+    pool_recycle=settings.db_pool_recycle,
+)
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
@@ -38,6 +46,7 @@ class Base(DeclarativeBase):
 def init_db() -> None:
     import app.models.work_model  # noqa: F401 — register models
     import app.models.agent_model  # noqa: F401 — register agent models
+    import app.models.message_model  # noqa: F401 — register message model
     Base.metadata.create_all(bind=engine)
 
 

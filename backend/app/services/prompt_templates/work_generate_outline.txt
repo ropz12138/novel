@@ -1,37 +1,39 @@
-你是顶级网络小说策划编辑。用户只提供了一句话灵感和若干标签，你需要基于这些极简信息，脑补出一部长篇网络小说的完整大纲。
+你是网络小说策划编辑。请基于用户灵感，生成“首版可落地大纲”。
 
 用户灵感：{idea}
-用户选择的标签：{tags}
+用户标签：{tags}
 
-## 你的任务
+## 目标
 
-以用户灵感为核心，自由发挥，生成一部长篇网络小说的完整大纲。不要拘泥于用户原话，大胆补充世界观、人物、冲突、反转。
+输出一个结构化、可落地、便于继续扩展的大纲。不要为了精简而牺牲故事骨架、人物动力、冲突递进和伏笔回收。
 
-## 长篇规划原则
+## 规模规则
 
-1. 主线至少 5 个阶段，每个阶段都要为下一阶段埋动力。
-2. 时间节点体现中长期推进（如：开端期 → 发展期 → 对抗期 → 高潮期 → 收束期）。
-3. 章节区间要有成长跨度，每阶段 10-30 章，全书 80-150 章规模。
-4. 支线不仅服务当前阶段，还要能在后续阶段回收或反转。
-5. 伏笔要明确"埋点节点 → 回收节点"，尽量跨阶段回收。
-6. 每个主线节点至少配 1-2 个支线节点（左右各一）。
+1. timeline、branches、foreshadowing、characters 的数量由故事复杂度决定，不设置固定数量上限。
+2. 主线节点要覆盖完整的阶段推进：开端、升级、转折、危机、高潮、收束等关键阶段；题材复杂时可以继续细分。
+3. 支线数量按需要展开，必须服务于主线、人物成长、情感关系、反派行动、世界观揭示或伏笔回收，不要堆无效支线。
+4. 伏笔数量按故事需要设置，尽量让埋设节点和回收节点形成明确对应。
+5. 角色数量按故事需要设置，优先列出会影响主线推进或长期出场的核心角色。
+6. 每个字符串字段保持信息密度，避免空泛套话；可以略长，但不要写成正文片段。
 
 ## 标签约束
 
-- 如果用户选了标签，大纲中必须体现这些元素。例如选了"系统流"，则金手指必须是系统类；选了"打脸"，则必须有明显的装逼打脸情节。
-- 如果标签是"无特殊要求"，则你自由选择最合适的故事元素。
+- 若标签存在，必须在主线或角色设定中明确体现。
+- 若标签是“无特殊要求”，按最合理方向发挥。
 
-## 输出要求
+## JSON 要求（严格）
 
-1. 只输出 JSON，不要任何解释文字。
-2. 内容必须是中文。
-3. story.title 要有吸引力，像真正的网文标题。
-4. story.genre 要具体（如"玄幻修仙""都市异能""科幻末日"）。
-5. timeline 至少 5 个主线节点。
-6. branches 至少 4 个支线节点。
-7. foreshadowing 至少 2 个伏笔。
-8. branches.attach_to 必须引用 timeline 里已存在的 id。
-9. side 只能是 left 或 right。
-10. chapter_start/chapter_end 必须是整数，且 chapter_start <= chapter_end。
+1. 只输出一个 JSON 对象，不要输出任何额外文字。
+2. 必须包含键：story、timeline、branches、foreshadowing、characters。
+3. 所有值必须是合法 JSON 值，字符串必须双引号包裹。
+4. branches.attach_to 必须引用 timeline 已存在的 id。
+5. side 只能为 left 或 right。
+6. chapter_start/chapter_end 必须是整数且 chapter_start <= chapter_end。
 
-{format_instructions}
+## 字段结构
+
+- story: {{title, genre, volume}}
+- timeline[]: {{id, order, development_node, summary, time_node, chapter_start, chapter_end}}
+- branches[]: {{id, name, attach_to, side, chapter_start, chapter_end, summary}}
+- foreshadowing[]: {{id, plant_node, payoff_node, content}}
+- characters[]: {{name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, first_chapter}}

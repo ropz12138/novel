@@ -27,7 +27,7 @@ def update_outline(work_id: str, payload: OutlineUpdateRequest, db: Session) -> 
 
 
 def chat_edit(work_id: str, payload: ChatEditRequest, db: Session) -> ChatEditResponse:
-    return service.chat_edit(work_id, payload.message, payload.history, db)
+    return service.chat_edit(work_id, payload.message, payload.history, db, session_id=payload.session_id)
 
 
 def list_works(db: Session) -> list[WorkOut]:

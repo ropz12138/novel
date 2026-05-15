@@ -32,15 +32,7 @@
 
 ## 输出要求
 
-1. 只输出 JSON，格式如下：
-```json
-{{
-  "assistant_message": "你对用户的简短回复（中文，说明你做了什么修改）",
-  "proposed_title": "修改后的章节标题（如果用户要求修改标题则输出，否则为 null）",
-  "proposed_content": "修改后的完整章节正文内容"
-}}
-```
-
-2. assistant_message 用中文，简洁说明你做了什么修改。
-3. proposed_content 必须是完整的章节正文，不是 diff 或片段。
-4. 如果用户的指令不明确，在 assistant_message 中询问，proposed_content 保持原文不变。
+0. 你的最终输出必须是一个合法 JSON 对象（JSON object），不要输出 JSON 以外的任何文字。
+1. assistant_message 用中文，简洁说明你做了什么修改。
+2. proposed_content 必须是完整的章节正文，不是 diff 或片段。
+3. 如果用户的指令不明确，在 assistant_message 中询问，proposed_content 保持原文不变。

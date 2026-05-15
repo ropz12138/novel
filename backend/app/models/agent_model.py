@@ -1,3 +1,5 @@
+"""Agent models — AgentState for chapter agent, SupervisorSession for supervisor agent"""
+
 from datetime import datetime, timezone
 
 from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
@@ -30,6 +32,26 @@ class AgentState(Base):
 
     # LangGraph checkpoint: serialized graph state for resume
     graph_checkpoint: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+
+class SupervisorSession(Base):
+    """统筹 Agent 的会话状态"""
+    __tablename__ = "supervisor_sessions"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    # 关联作品（可为空，创建大纲后绑定）
+    work_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("works.id", ondelete="SET NULL"), nullable=True)
+
+    # 执行阶段: idle / routing / executing / done
+    stage: Mapped[str] = mapped_column(String(20), nullable=False, default="idle")
+    # 执行状态: running / waiting / completed / error
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+
+    # 当前执行中的子 Agent 会话信息
+    active_child: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

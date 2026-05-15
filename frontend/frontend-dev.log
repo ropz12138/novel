@@ -1,0 +1,19 @@
+npm warn Unknown env config "devdir". This will stop working in the next major version of npm.
+
+> novel-frontend@0.1.0 dev
+> vite --host 0.0.0.0 --port 9000
+
+
+  VITE v5.4.21  ready in 244 ms
+
+  ➜  Local:   http://localhost:9000/
+  ➜  Network: http://10.0.16.13:9000/
+  ➜  Network: http://172.22.0.1:9000/
+4:47:19 PM [vite] hmr update /src/pages/AgentPage.jsx, /src/styles.css
+4:47:40 PM [vite] hmr update /src/pages/AgentPage.jsx, /src/styles.css
+4:48:03 PM [vite] hmr update /src/pages/AgentPage.jsx, /src/styles.css
+4:48:37 PM [vite] hmr update /src/pages/AgentPage.jsx, /src/styles.css
+6:41:39 PM [vite] hmr update /src/App.jsx, /src/styles.css
+6:43:14 PM [vite] hmr update /src/App.jsx, /src/styles.css
+6:44:34 PM [vite] hmr update /src/pages/DashboardPage.jsx, /src/styles.css
+6:45:17 PM [vite] hmr update /src/pages/DashboardPage.jsx, /src/styles.css

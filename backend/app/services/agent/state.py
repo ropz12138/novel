@@ -18,11 +18,17 @@ class AgentGraphState:
     chapter_outline: str = ""
     previous_chapters: str = ""
 
+    # ── Plan (populated by plan node) ──
+    plan_text: str = ""
+
     # ── Outputs from nodes ──
     thinking_notes: str = ""
     context_pack: str = ""
     chapter_title: str = ""
     chapter_content: str = ""
+
+    # ── Selective query (populated by thinking node) ──
+    needed_queries: list[str] = field(default_factory=list)
 
     # ── Outline modification ──
     outline_changes_needed: bool = False

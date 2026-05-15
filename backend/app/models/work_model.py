@@ -45,6 +45,7 @@ class Work(Base):
 
     user: Mapped["User"] = relationship(back_populates="works")
     chapters: Mapped[list["Chapter"]] = relationship(back_populates="work", cascade="all, delete-orphan")
+    characters: Mapped[list["Character"]] = relationship(back_populates="work", cascade="all, delete-orphan")
 
 
 class Chapter(Base):
@@ -58,8 +59,61 @@ class Chapter(Base):
     chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
     title: Mapped[str] = mapped_column(String(200), nullable=False, default="")
     content: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    status: Mapped[str] = mapped_column(String(20), nullable=False, default="待生成")
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="生成中")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
     work: Mapped["Work"] = relationship(back_populates="chapters")
+
+
+class Character(Base):
+    __tablename__ = "characters"
+    __table_args__ = (
+        UniqueConstraint("work_id", "name", name="uq_work_char_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    work_id: Mapped[str] = mapped_column(String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False)
+
+    # ── 基础设定（框架层） ──
+    name: Mapped[str] = mapped_column(String(100), nullable=False, default="")
+    role_type: Mapped[str] = mapped_column(String(100), nullable=False, default="配角")
+    gender: Mapped[str] = mapped_column(String(10), nullable=False, default="")
+    age: Mapped[str] = mapped_column(String(50), nullable=False, default="")
+    appearance: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    personality: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    background: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    skills: Mapped[str] = mapped_column(Text, nullable=False, default="")
+
+    # ── 动态状态（正文反馈更新） ──
+    current_status: Mapped[str] = mapped_column(Text, nullable=False, default="存活")
+    current_goal: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    last_location: Mapped[str] = mapped_column(String(200), nullable=False, default="")
+    last_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
+    relationships: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+
+    # ── 元数据 ──
+    first_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
+    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    work: Mapped["Work"] = relationship(back_populates="characters")
+
+
+class AgentLog(Base):
+    """Records every message/event in agent conversations for debugging and review."""
+    __tablename__ = "agent_logs"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    work_id: Mapped[str] = mapped_column(String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False)
+    session_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    # session_type: outline_chat / agent_writing / chapter_chat
+    session_type: Mapped[str] = mapped_column(String(30), nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=True)
+    # role: user / assistant / system / tool / event
+    role: Mapped[str] = mapped_column(String(20), nullable=False)
+    content: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    # Extra metadata: stage, event type, tool calls, etc.
+    meta: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

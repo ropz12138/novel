@@ -1,8 +1,8 @@
 import json
 from pathlib import Path
 
-BASE_DIR = Path(__file__).resolve().parents[2]
-CONFIG_PATH = BASE_DIR / "config.json"
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+CONFIG_PATH = PROJECT_ROOT / "config.json"
 
 
 class Settings:
@@ -20,6 +20,11 @@ class Settings:
         self.db_user = config["database"]["user"]
         self.db_password = config["database"]["password"]
         self.db_name = config["database"]["db_name"]
+        self.db_echo = bool(config["database"].get("echo", False))
+        self.db_pool_size = int(config["database"].get("pool_size", 10))
+        self.db_max_overflow = int(config["database"].get("max_overflow", 20))
+        self.db_pool_timeout = int(config["database"].get("pool_timeout", 30))
+        self.db_pool_recycle = int(config["database"].get("pool_recycle", 1800))
 
         self.llm_base_url = config["llm"]["base_url"]
         self.llm_api_key = config["llm"]["api_key"]

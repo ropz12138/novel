@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookOpen, GitBranch, PenTool, Sparkles, Users, Trash2, Calendar } from "lucide-react";
+import { BookOpen, GitBranch, Trash2, Calendar, Cpu, Bot } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 
@@ -59,7 +59,14 @@ export function DashboardPage() {
             </div>
             <div className="flex gap-3">
               <Button asChild>
-                <Link to="/works/new">新建作品</Link>
+                <Link to="/agent" className="flex items-center gap-1.5">
+                  <Bot className="h-4 w-4" /> AI 写作助手
+                </Link>
+              </Button>
+              <Button variant="outline" asChild>
+                <Link to="/architecture" className="flex items-center gap-1.5">
+                  <Cpu className="h-4 w-4" /> Agent 架构
+                </Link>
               </Button>
               <Button variant="outline" onClick={handleLogout}>退出登录</Button>
             </div>
@@ -137,9 +144,6 @@ export function DashboardPage() {
               <h2 className="text-lg font-semibold text-slate-700">还没有作品</h2>
               <p className="mt-1 text-sm text-slate-500">写一句话灵感，AI 帮你生成完整大纲</p>
             </div>
-            <Button asChild>
-              <Link to="/works/new">新建作品</Link>
-            </Button>
           </section>
         )}
       </div>

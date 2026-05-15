@@ -10,7 +10,12 @@
     "port": 5432,
     "user": "your_db_user",
     "password": "your_db_password",
-    "db_name": "novel"
+    "db_name": "novel",
+    "echo": false,
+    "pool_size": 10,
+    "max_overflow": 20,
+    "pool_timeout": 30,
+    "pool_recycle": 1800
   },
   "llm": {
     "base_url": "https://your-llm-api-base-url/v1",

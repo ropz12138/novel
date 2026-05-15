@@ -1,0 +1,1107 @@
+INFO:     Will watch for changes in these directories: ['/root/Novel/backend']
+INFO:     Uvicorn running on http://0.0.0.0:9001 (Press CTRL+C to quit)
+INFO:     Started reloader process [1414332] using WatchFiles
+INFO:     Started server process [1414353]
+INFO:     Waiting for application startup.
+2026-05-10 16:22:54,566 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 16:22:54,566 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:22:54,567 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 16:22:54,567 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:22:54,567 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 16:22:54,567 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:22:54,568 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:22:54,571 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,571 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,572 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,572 INFO sqlalchemy.engine.Engine [cached since 0.001561s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,573 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,573 INFO sqlalchemy.engine.Engine [cached since 0.002233s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,574 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,574 INFO sqlalchemy.engine.Engine [cached since 0.002846s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,574 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,574 INFO sqlalchemy.engine.Engine [cached since 0.003423s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,575 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:22:54,575 INFO sqlalchemy.engine.Engine [cached since 0.003993s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:22:54,575 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+2026-05-10 16:23:38,619 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:23:38,621 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:23:38,621 INFO sqlalchemy.engine.Engine [generated in 0.00023s] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:23:38,624 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58936 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:23:38,627 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:23:38,627 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:23:38,627 INFO sqlalchemy.engine.Engine [cached since 0.005996s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:23:38,630 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:23:38,630 INFO sqlalchemy.engine.Engine [generated in 0.00016s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:23:38,632 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58926 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:23:38,642 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:23:38,642 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:23:38,642 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:23:38,643 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:23:38,643 INFO sqlalchemy.engine.Engine [cached since 0.02152s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:23:38,643 INFO sqlalchemy.engine.Engine [cached since 0.02167s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:23:38,644 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:23:38,645 INFO sqlalchemy.engine.Engine [cached since 0.01473s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:23:38,645 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58938 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:23:38,646 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:58936 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:27:49,608 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:27:49,608 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:27:49,608 INFO sqlalchemy.engine.Engine [cached since 251s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:27:49,610 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59514 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:27:49,629 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:27:49,629 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:27:49,629 INFO sqlalchemy.engine.Engine [cached since 251s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:27:49,631 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59530 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:45,944 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:45,944 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:45,944 INFO sqlalchemy.engine.Engine [cached since 427.3s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:45,946 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59028 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:45,965 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:45,965 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:45,966 INFO sqlalchemy.engine.Engine [cached since 427.3s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:45,967 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59034 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,492 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,492 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,492 INFO sqlalchemy.engine.Engine [cached since 427.9s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,493 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59034 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,503 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,504 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,504 INFO sqlalchemy.engine.Engine [cached since 427.9s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,505 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59028 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,657 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,657 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,657 INFO sqlalchemy.engine.Engine [cached since 428s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,659 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59028 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,669 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,669 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,669 INFO sqlalchemy.engine.Engine [cached since 428s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,671 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59034 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,818 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,818 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,819 INFO sqlalchemy.engine.Engine [cached since 428.2s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,820 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59034 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,831 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,831 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,831 INFO sqlalchemy.engine.Engine [cached since 428.2s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,833 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59028 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:46,988 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:46,988 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:46,988 INFO sqlalchemy.engine.Engine [cached since 428.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:46,990 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59028 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:30:47,000 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:30:47,000 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:30:47,001 INFO sqlalchemy.engine.Engine [cached since 428.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:30:47,002 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59034 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:31:53,037 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:53,037 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:53,037 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:53,037 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:53,038 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:53,038 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:53,040 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:31:53,040 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 16:31:53,040 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+INFO:     127.0.0.1:35630 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:31:53,041 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:35618 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:31:53,059 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:53,059 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:53,059 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:53,060 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:53,060 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:53,060 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:53,061 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:31:53,062 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 16:31:53,062 INFO sqlalchemy.engine.Engine [cached since 494.4s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+INFO:     127.0.0.1:35634 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:31:53,063 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:35646 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+INFO:     127.0.0.1:35646 - "OPTIONS /api/agent/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters/1/start HTTP/1.1" 200 OK
+2026-05-10 16:31:58,016 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:58,017 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s AND chapters.chapter_number = %(chapter_number_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:58,017 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'chapter_number_1': 1, 'param_1': 1}
+2026-05-10 16:31:58,019 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number DESC 
+ LIMIT %(param_1)s
+2026-05-10 16:31:58,019 INFO sqlalchemy.engine.Engine [generated in 0.00016s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:58,021 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:31:58,022 INFO sqlalchemy.engine.Engine [generated in 0.00026s] {'id': '164c8d9c-3e67-4e8f-be86-f41098303481', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'user', 'content': '写第一章', 'meta': '{"action": "start"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 31, 58, 21819, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:31:58,023 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:35646 - "POST /api/agent/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters/1/start HTTP/1.1" 200 OK
+2026-05-10 16:31:58,026 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:58,029 INFO sqlalchemy.engine.Engine SELECT agent_states.id AS agent_states_id, agent_states.work_id AS agent_states_work_id, agent_states.chapter_number AS agent_states_chapter_number, agent_states.stage AS agent_states_stage, agent_states.status AS agent_states_status, agent_states.user_instruction AS agent_states_user_instruction, agent_states.thinking_notes AS agent_states_thinking_notes, agent_states.context_pack AS agent_states_context_pack, agent_states.chapter_title AS agent_states_chapter_title, agent_states.chapter_content AS agent_states_chapter_content, agent_states.outline_proposal AS agent_states_outline_proposal, agent_states.graph_checkpoint AS agent_states_graph_checkpoint, agent_states.created_at AS agent_states_created_at, agent_states.updated_at AS agent_states_updated_at 
+FROM agent_states 
+WHERE agent_states.work_id = %(work_id_1)s AND agent_states.chapter_number = %(chapter_number_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:58,029 INFO sqlalchemy.engine.Engine [generated in 0.00016s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'chapter_number_1': 1, 'param_1': 1}
+2026-05-10 16:31:58,031 INFO sqlalchemy.engine.Engine UPDATE agent_states SET stage=%(stage)s, updated_at=%(updated_at)s WHERE agent_states.id = %(agent_states_id)s
+2026-05-10 16:31:58,031 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {'stage': 'plan', 'updated_at': datetime.datetime(2026, 5, 10, 8, 31, 58, 31466, tzinfo=datetime.timezone.utc), 'agent_states_id': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:31:58,032 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:31:58,034 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:58,035 INFO sqlalchemy.engine.Engine SELECT agent_states.id, agent_states.work_id, agent_states.chapter_number, agent_states.stage, agent_states.status, agent_states.user_instruction, agent_states.thinking_notes, agent_states.context_pack, agent_states.chapter_title, agent_states.chapter_content, agent_states.outline_proposal, agent_states.graph_checkpoint, agent_states.created_at, agent_states.updated_at 
+FROM agent_states 
+WHERE agent_states.id = %(pk_1)s
+2026-05-10 16:31:58,035 INFO sqlalchemy.engine.Engine [generated in 0.00017s] {'pk_1': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:31:58,036 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:31:58,037 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:31:58,037 INFO sqlalchemy.engine.Engine [cached since 0.01569s ago] {'id': 'a6b5efbc-0f30-47a5-b8b9-986d3973ec39', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '进入阶段: 规划阶段', 'meta': '{"event": "stage_start", "stage": "plan", "label": "\\u89c4\\u5212\\u9636\\u6bb5"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 31, 58, 37279, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:31:58,038 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:31:58,039 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:31:58,040 INFO sqlalchemy.engine.Engine [cached since 499.4s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:31:58,042 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s AND chapters.chapter_number < %(chapter_number_1)s AND chapters.content != %(content_1)s ORDER BY chapters.chapter_number DESC 
+ LIMIT %(param_1)s
+2026-05-10 16:31:58,042 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'chapter_number_1': 1, 'content_1': '', 'param_1': 3}
+2026-05-10 16:32:19,412 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:32:19,412 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:32:19,412 INFO sqlalchemy.engine.Engine [cached since 21.39s ago] {'id': '78c047ce-3fbe-4eab-8d03-dd9361544249', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '', 'meta': '{"event": "plan_done", "plan": "## \\u7b2c\\u4e00\\u7ae0\\u5199\\u4f5c\\u89c4\\u5212\\n\\n### \\u6838\\u5fc3\\u76ee\\u6807\\n\\u5efa\\u7acb\\u672b\\u ... (5085 characters truncated) ... \\u8981\\u5728\\u201c\\u88ab\\u54ac\\u4e0e\\u6289\\u62e9\\u201d\\u573a\\u666f\\u4e2d\\u81ea\\u7136\\u3001\\u5fae\\u5999\\u5730\\u690d\\u5165\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 32, 19, 412440, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:32:19,414 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:32:19,415 INFO sqlalchemy.engine.Engine UPDATE agent_states SET stage=%(stage)s, updated_at=%(updated_at)s WHERE agent_states.id = %(agent_states_id)s
+2026-05-10 16:32:19,415 INFO sqlalchemy.engine.Engine [cached since 21.38s ago] {'stage': 'thinking', 'updated_at': datetime.datetime(2026, 5, 10, 8, 32, 19, 415452, tzinfo=datetime.timezone.utc), 'agent_states_id': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:32:19,416 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:32:19,417 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:32:19,417 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:32:19,417 INFO sqlalchemy.engine.Engine [cached since 21.4s ago] {'id': '22d171af-416c-43fb-a070-eefb2b039b95', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '进入阶段: 构思阶段', 'meta': '{"event": "stage_start", "stage": "thinking", "label": "\\u6784\\u601d\\u9636\\u6bb5"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 32, 19, 417783, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:32:19,418 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:33:12,463 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:33:12,464 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:33:12,464 INFO sqlalchemy.engine.Engine [cached since 74.44s ago] {'id': 'b51d5c02-63c8-465a-b2a0-2ebf5649f49a', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'assistant', 'content': '', 'meta': '{"event": "thinking_done", "notes": "# \\u7b2c1\\u7ae0\\u6784\\u601d\\u7b14\\u8bb0\\uff1a\\u300a\\u672b\\u6cd5\\u7eaa\\u5143\\uff1a\\u4ece\\u88ab\\u5 ... (17628 characters truncated) ... u9700\\u4fee\\u6539\\u3002\\u4f0f\\u7b14F1\\u7684\\u690d\\u5165\\u65b9\\u5f0f\\u5df2\\u786e\\u4fdd\\u81ea\\u7136\\u4e14\\u4e0d\\u8fc7\\u706b\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 33, 12, 463986, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:33:12,465 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:33:12,467 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:33:12,467 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:33:12,467 INFO sqlalchemy.engine.Engine [cached since 74.45s ago] {'id': 'b17a258c-239e-48f7-bbd1-38a7c2bda608', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'assistant', 'content': '第1章 暗金瞳', 'meta': '{"event": "title_proposed", "title": "\\u7b2c1\\u7ae0 \\u6697\\u91d1\\u77b3"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 33, 12, 467382, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:33:12,468 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:33:12,469 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:33:12,470 INFO sqlalchemy.engine.Engine SELECT agent_states.id AS agent_states_id, agent_states.work_id AS agent_states_work_id, agent_states.chapter_number AS agent_states_chapter_number, agent_states.graph_checkpoint AS agent_states_graph_checkpoint, agent_states.created_at AS agent_states_created_at, agent_states.updated_at AS agent_states_updated_at 
+FROM agent_states 
+WHERE agent_states.id = %(pk_1)s
+2026-05-10 16:33:12,470 INFO sqlalchemy.engine.Engine [generated in 0.00014s] {'pk_1': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:33:12,471 INFO sqlalchemy.engine.Engine UPDATE agent_states SET stage=%(stage)s, status=%(status)s, user_instruction=%(user_instruction)s, thinking_notes=%(thinking_notes)s, context_pack=%(context_pack)s, chapter_title=%(chapter_title)s, chapter_content=%(chapter_content)s, outline_proposal=%(outline_proposal)s::JSONB, updated_at=%(updated_at)s WHERE agent_states.id = %(agent_states_id)s
+2026-05-10 16:33:12,471 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'stage': 'thinking', 'status': 'waiting', 'user_instruction': '写第一章', 'thinking_notes': '# 第1章构思笔记：《末法纪元：从被咬开始觉醒》\n\n## 本章定位\n本章作为故事的**开篇与基石**，核心任务是：\n1.  **建立世界观**：快速勾勒末日降临前的社会氛围与病毒爆发时的混乱景象。\n2.  **确立主角状态**：完成男主李烬从“普通大学生”到“被咬感染的未知存在”的转变， ... (2989 characters truncated) ... 弃符合其背景（护理相关或性格坚韧）和对李烬的感情。\n3.  **情节逻辑与衔接**：作为第一章，情节从平静到骤变，逻辑清晰。结尾的悬念（李烬濒死状态、藏身危机）自然引出下一章（可能是在林霜照顾下李烬发生异变）。\n4.  **修正**：经审查，构思无需修改。伏笔F1的植入方式已确保自然且不过火。', 'context_pack': '', 'chapter_title': '第1章 暗金瞳', 'chapter_content': '', 'outline_proposal': 'null', 'updated_at': datetime.datetime(2026, 5, 10, 8, 33, 12, 471431, tzinfo=datetime.timezone.utc), 'agent_states_id': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:33:12,472 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:33:12,474 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:33:12,474 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:33:12,474 INFO sqlalchemy.engine.Engine [cached since 74.45s ago] {'id': '84ba3633-02c6-4383-ba24-9ba9ed267434', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '431583fe-0d71-45df-acbb-090e4f51ce34', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '等待确认: thinking | 标题: 第1章 暗金瞳', 'meta': '{"event": "need_confirm", "type": "thinking", "preview": "# \\u7b2c1\\u7ae0\\u6784\\u601d\\u7b14\\u8bb0\\uff1a\\u300a\\u672b\\u6cd5\\u7eaa\\u5143\\uf ... (2570 characters truncated) ... \u7a0b\\uff0c\\u6216\\u57cb\\u9996\\u4e8e\\u76f8\\u5173\\u6587\\u732e\\uff0c\\u5c55\\u73b0\\u5176", "title": "\\u7b2c1\\u7ae0 \\u6697\\u91d1\\u77b3"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 33, 12, 474626, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:33:12,475 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:56326 - "OPTIONS /api/agent/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters/1/resume HTTP/1.1" 200 OK
+2026-05-10 16:34:33,830 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,831 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,831 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': '6004dc91-fe53-473a-88da-1428db187484', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'user', 'content': '(confirm)', 'meta': '{"action": "confirm"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 831281, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,832 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     127.0.0.1:56326 - "POST /api/agent/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters/1/resume HTTP/1.1" 200 OK
+2026-05-10 16:34:33,834 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,834 INFO sqlalchemy.engine.Engine SELECT agent_states.id AS agent_states_id, agent_states.work_id AS agent_states_work_id, agent_states.chapter_number AS agent_states_chapter_number, agent_states.stage AS agent_states_stage, agent_states.status AS agent_states_status, agent_states.user_instruction AS agent_states_user_instruction, agent_states.thinking_notes AS agent_states_thinking_notes, agent_states.context_pack AS agent_states_context_pack, agent_states.chapter_title AS agent_states_chapter_title, agent_states.chapter_content AS agent_states_chapter_content, agent_states.outline_proposal AS agent_states_outline_proposal, agent_states.graph_checkpoint AS agent_states_graph_checkpoint, agent_states.created_at AS agent_states_created_at, agent_states.updated_at AS agent_states_updated_at 
+FROM agent_states 
+WHERE agent_states.work_id = %(work_id_1)s AND agent_states.chapter_number = %(chapter_number_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:34:33,834 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'chapter_number_1': 1, 'param_1': 1}
+2026-05-10 16:34:33,836 INFO sqlalchemy.engine.Engine UPDATE agent_states SET stage=%(stage)s, status=%(status)s, updated_at=%(updated_at)s WHERE agent_states.id = %(agent_states_id)s
+2026-05-10 16:34:33,836 INFO sqlalchemy.engine.Engine [generated in 0.00015s] {'stage': 'query', 'status': 'running', 'updated_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 836341, tzinfo=datetime.timezone.utc), 'agent_states_id': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:34:33,837 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,838 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,838 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,839 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': 'ccdc1c35-de85-432d-9ec4-d4b8d6d66679', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '进入阶段: 查询上下文', 'meta': '{"event": "stage_start", "stage": "query", "label": "\\u67e5\\u8be2\\u4e0a\\u4e0b\\u6587"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 838936, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,839 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,840 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,841 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:34:33,841 INFO sqlalchemy.engine.Engine [cached since 655.2s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:34:33,842 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s AND chapters.chapter_number < %(chapter_number_1)s AND chapters.content != %(content_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:34:33,842 INFO sqlalchemy.engine.Engine [generated in 0.00015s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'chapter_number_1': 1, 'content_1': ''}
+2026-05-10 16:34:33,843 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,844 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,844 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': 'adc33cb7-2022-4c7a-8043-2c7cefcbaffd', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 作品设定 — 标题：末法纪元：从被咬开始觉醒，类型：科幻末日异能，卷：第一卷：血脉觉醒', 'meta': '{"event": "query_result", "source": "\\u4f5c\\u54c1\\u8bbe\\u5b9a", "summary": "\\u6807\\u9898\\uff1a\\u672b\\u6cd5\\u7eaa\\u5143\\uff1a\\u4ece\\u88a ... (36 characters truncated) ... \\uff0c\\u7c7b\\u578b\\uff1a\\u79d1\\u5e7b\\u672b\\u65e5\\u5f02\\u80fd\\uff0c\\u5377\\uff1a\\u7b2c\\u4e00\\u5377\\uff1a\\u8840\\u8109\\u89c9\\u9192"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 844159, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,844 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,846 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,847 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,847 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': '7b4c663e-d46e-4385-8a05-8dad4effb560', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 伏笔 f1 — 男主被咬时，脑海中闪过一个模糊的帝王身影和‘朕等你很久了’的低语，实为秦始皇血脉的共鸣。', 'meta': '{"event": "query_result", "source": "\\u4f0f\\u7b14 f1", "summary": "\\u7537\\u4e3b\\u88ab\\u54ac\\u65f6\\uff0c\\u8111\\u6d77\\u4e2d\\u95ea\\u8fc7\\u ... (81 characters truncated) ... \\u7b49\\u4f60\\u5f88\\u4e45\\u4e86\\u2019\\u7684\\u4f4e\\u8bed\\uff0c\\u5b9e\\u4e3a\\u79e6\\u59cb\\u7687\\u8840\\u8109\\u7684\\u5171\\u9e23\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 847074, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,847 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,848 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,849 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,849 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': '2a486a5f-85ed-4ac2-b51b-6b4679e009f4', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 伏笔 f2 — 男主在安全区图书馆发现一本残破古籍，记载‘祖龙不死，龙脉永镇’，但被人为撕去了关键部分。', 'meta': '{"event": "query_result", "source": "\\u4f0f\\u7b14 f2", "summary": "\\u7537\\u4e3b\\u5728\\u5b89\\u5168\\u533a\\u56fe\\u4e66\\u9986\\u53d1\\u73b0\\u ... (81 characters truncated) ... \\u4e0d\\u6b7b\\uff0c\\u9f99\\u8109\\u6c38\\u9547\\u2019\\uff0c\\u4f46\\u88ab\\u4eba\\u4e3a\\u6495\\u53bb\\u4e86\\u5173\\u952e\\u90e8\\u5206\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 849116, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,849 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,851 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,851 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,851 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': '1e0501e0-3ddd-4161-bf74-d4a4e26fe999', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 伏笔 f3 — 男主激活血脉时，九鼎的虚影在脑海中一闪而过，并隐约感知到九个方位的呼唤。', 'meta': '{"event": "query_result", "source": "\\u4f0f\\u7b14 f3", "summary": "\\u7537\\u4e3b\\u6fc0\\u6d3b\\u8840\\u8109\\u65f6\\uff0c\\u4e5d\\u9f0e\\u7684\\u ... (25 characters truncated) ... \\u6d77\\u4e2d\\u4e00\\u95ea\\u800c\\u8fc7\\uff0c\\u5e76\\u9690\\u7ea6\\u611f\\u77e5\\u5230\\u4e5d\\u4e2a\\u65b9\\u4f4d\\u7684\\u547c\\u5524\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 851474, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,852 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,855 INFO sqlalchemy.engine.Engine SELECT characters.id AS characters_id, characters.work_id AS characters_work_id, characters.name AS characters_name, characters.role_type AS characters_role_type, characters.gender AS characters_gender, characters.age AS characters_age, characters.appearance AS characters_appearance, characters.personality AS characters_personality, characters.background AS characters_background, characters.skills AS characters_skills, characters.current_status AS characters_current_status, characters.current_goal AS characters_current_goal, characters.last_location AS characters_last_location, characters.last_chapter AS characters_last_chapter, characters.relationships AS characters_relationships, characters.first_chapter AS characters_first_chapter, characters.notes AS characters_notes, characters.created_at AS characters_created_at, characters.updated_at AS characters_updated_at 
+FROM characters 
+WHERE characters.work_id = %(work_id_1)s
+2026-05-10 16:34:33,855 INFO sqlalchemy.engine.Engine [generated in 0.00014s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:34:33,856 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,856 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,856 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': 'c2207c53-9149-47d2-ba83-6ce429d45dce', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 角色 李烬 — 男主角，状态：末日爆发，被咬感染后觉醒。，目的：保护林霜，在末日下活下去。', 'meta': '{"event": "query_result", "source": "\\u89d2\\u8272 \\u674e\\u70ec", "summary": "\\u7537\\u4e3b\\u89d2\\uff0c\\u72b6\\u6001\\uff1a\\u672b\\u65e5\\u72 ... (44 characters truncated) ... \\u540e\\u89c9\\u9192\\u3002\\uff0c\\u76ee\\u7684\\uff1a\\u4fdd\\u62a4\\u6797\\u971c\\uff0c\\u5728\\u672b\\u65e5\\u4e0b\\u6d3b\\u4e0b\\u53bb\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 856632, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,857 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,858 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,858 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,859 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': '8345fb70-dcd0-45fd-8397-81ce8127d98e', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'tool', 'content': '查询: 角色 林霜 — 女主角，状态：末日爆发，正全力照顾被咬的李烬。，目的：确保李烬存活，找到安全的落脚点。', 'meta': '{"event": "query_result", "source": "\\u89d2\\u8272 \\u6797\\u971c", "summary": "\\u5973\\u4e3b\\u89d2\\uff0c\\u72b6\\u6001\\uff1a\\u672b\\u65e5\\u72 ... (86 characters truncated) ... \\u3002\\uff0c\\u76ee\\u7684\\uff1a\\u786e\\u4fdd\\u674e\\u70ec\\u5b58\\u6d3b\\uff0c\\u627e\\u5230\\u5b89\\u5168\\u7684\\u843d\\u811a\\u70b9\\u3002"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 858934, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,859 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,860 INFO sqlalchemy.engine.Engine SELECT agent_states.id AS agent_states_id, agent_states.work_id AS agent_states_work_id, agent_states.chapter_number AS agent_states_chapter_number, agent_states.graph_checkpoint AS agent_states_graph_checkpoint, agent_states.created_at AS agent_states_created_at, agent_states.updated_at AS agent_states_updated_at 
+FROM agent_states 
+WHERE agent_states.id = %(pk_1)s
+2026-05-10 16:34:33,861 INFO sqlalchemy.engine.Engine [cached since 81.39s ago] {'pk_1': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:34:33,861 INFO sqlalchemy.engine.Engine UPDATE agent_states SET stage=%(stage)s, status=%(status)s, user_instruction=%(user_instruction)s, thinking_notes=%(thinking_notes)s, context_pack=%(context_pack)s, chapter_title=%(chapter_title)s, chapter_content=%(chapter_content)s, outline_proposal=%(outline_proposal)s::JSONB, updated_at=%(updated_at)s WHERE agent_states.id = %(agent_states_id)s
+2026-05-10 16:34:33,861 INFO sqlalchemy.engine.Engine [cached since 81.39s ago] {'stage': 'write', 'status': 'running', 'user_instruction': '写第一章', 'thinking_notes': '# 第1章构思笔记：《末法纪元：从被咬开始觉醒》\n\n## 本章定位\n本章作为故事的**开篇与基石**，核心任务是：\n1.  **建立世界观**：快速勾勒末日降临前的社会氛围与病毒爆发时的混乱景象。\n2.  **确立主角状态**：完成男主李烬从“普通大学生”到“被咬感染的未知存在”的转变， ... (2989 characters truncated) ... 弃符合其背景（护理相关或性格坚韧）和对李烬的感情。\n3.  **情节逻辑与衔接**：作为第一章，情节从平静到骤变，逻辑清晰。结尾的悬念（李烬濒死状态、藏身危机）自然引出下一章（可能是在林霜照顾下李烬发生异变）。\n4.  **修正**：经审查，构思无需修改。伏笔F1的植入方式已确保自然且不过火。', 'context_pack': '作品设定：标题：末法纪元：从被咬开始觉醒，类型：科幻末日异能，卷：第一卷：血脉觉醒\n\n伏笔 f1：男主被咬时，脑海中闪过一个模糊的帝王身影和‘朕等你很久了’的低语，实为秦始皇血脉的共鸣。（埋设于mainline_1，回收于mainline_4）\n\n伏笔 f2：男主在安全区图书馆发现一本残破 ... (453 characters truncated) ... 坚韧，末日下迅速成长。。背景：李烬青梅竹马，比男主大两岁。父母在末日初期丧尸化，被男主含泪击杀。目前是男主最信任的人。。技能：初期：基础格斗、医疗护理。中期：觉醒冰系异能，可制造冰刃、冰墙，后期可大范围冰封。。当前状态：末日爆发，正全力照顾被咬的李烬。。当前目的：确保李烬存活，找到安全的落脚点。。', 'chapter_title': '第1章 暗金瞳', 'chapter_content': '', 'outline_proposal': 'null', 'updated_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 861558, tzinfo=datetime.timezone.utc), 'agent_states_id': '91d3746a-808c-4cde-856e-79d8b6671c9b'}
+2026-05-10 16:34:33,862 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:34:33,864 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:34:33,864 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:34:33,864 INFO sqlalchemy.engine.Engine [cached since 155.8s ago] {'id': 'ce53e0b3-d76b-4cf0-9346-eeaafc06a64e', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '进入阶段: 撰写正文', 'meta': '{"event": "stage_start", "stage": "write", "label": "\\u64b0\\u5199\\u6b63\\u6587"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 34, 33, 864454, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:34:33,865 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:36:16,148 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:36:16,149 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:36:16,149 INFO sqlalchemy.engine.Engine [cached since 258.1s ago] {'id': 'fb7ab8da-6811-4f44-ba9b-133fd5e21f8b', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'assistant', 'content': '第1章 暗金瞳', 'meta': '{"event": "write_done", "title": "\\u7b2c1\\u7ae0 \\u6697\\u91d1\\u77b3", "content": "\\u4e5d\\u6708\\u7684\\u9633\\u5149\\u900f\\u8fc7\\u5386\\u53f2 ... (38767 characters truncated) ... 6\\u754c\\u91cc\\uff0c\\u6700\\u540e\\u4e00\\u70b9\\u6e3a\\u832b\\u800c\\u56fa\\u6267\\u7684\\u5e0c\\u671b\\u5fae\\u5149\\u3002", "word_count": 5501}', 'created_at': datetime.datetime(2026, 5, 10, 8, 36, 16, 149223, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:36:16,151 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:36:16,153 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:36:16,153 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:36:16,153 INFO sqlalchemy.engine.Engine [cached since 258.1s ago] {'id': 'b9625f65-07fb-45bc-b163-9d17a98ef0bb', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'assistant', 'content': '九月的阳光透过历史系阶梯教室高大的玻璃窗，在陈旧的木质课桌上投下斑驳的光影，空气中浮动着细微的尘埃。李烬坐在靠窗的位置，目光落在讲台前方的投影幕布上，那里正展示着一组秦代兵马俑的高清图片。老教授略带沙哑的声音在安静的教室里回响，讲述着秦帝国的军功爵制与边疆戍防。\n\n“……始皇帝二十六年，一统天 ... (4850 characters truncated) ... 骨髓的寒意取代。他想说话，却发不出清晰的声音，只能从喉咙里挤出破碎的呻吟。\n\n林霜听到他的声音，立刻回到他身边，握住他那只没有受伤的手。她的手很凉，但在他忽冷忽热的感知里，那一点点凉意反而成了此刻唯一的、真实的存在。\n\n“我在，我在这儿。”她低声说，声音沙哑，却异常清晰，“别怕。我不会让你', 'meta': '{"event": "write_stream_aggregated", "total_chars": 5671}', 'created_at': datetime.datetime(2026, 5, 10, 8, 36, 16, 153613, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:36:16,155 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:36:16,156 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:36:16,156 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:36:16,156 INFO sqlalchemy.engine.Engine [cached since 258.1s ago] {'id': '99d4fc87-0e9a-4ce5-9b40-555e27d9a314', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': '进入阶段: 质量评估', 'meta': '{"event": "stage_start", "stage": "evaluate", "label": "\\u8d28\\u91cf\\u8bc4\\u4f30"}', 'created_at': datetime.datetime(2026, 5, 10, 8, 36, 16, 156718, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:36:16,157 INFO sqlalchemy.engine.Engine COMMIT
+2026-05-10 16:36:16,158 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:36:16,159 INFO sqlalchemy.engine.Engine INSERT INTO agent_logs (id, work_id, session_id, session_type, chapter_number, role, content, meta, created_at) VALUES (%(id)s, %(work_id)s, %(session_id)s, %(session_type)s, %(chapter_number)s, %(role)s, %(content)s, %(meta)s::JSONB, %(created_at)s)
+2026-05-10 16:36:16,159 INFO sqlalchemy.engine.Engine [cached since 258.1s ago] {'id': '92297e47-9348-43f0-a96f-4e5a463f5e3e', 'work_id': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'session_id': '57fe2fa9-599c-4f6b-9f7b-33b9249bbe53', 'session_type': 'agent_writing', 'chapter_number': 1, 'role': 'event', 'content': 'Invalid format specifier in f-string template. Nested replacement fields are not allowed.', 'meta': '{"event": "error", "message": "Invalid format specifier in f-string template. Nested replacement fields are not allowed."}', 'created_at': datetime.datetime(2026, 5, 10, 8, 36, 16, 159011, tzinfo=datetime.timezone.utc)}
+2026-05-10 16:36:16,159 INFO sqlalchemy.engine.Engine COMMIT
+WARNING:  WatchFiles detected changes in 'app/schemas/agent_schema.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1414353]
+INFO:     Started server process [1421999]
+INFO:     Waiting for application startup.
+2026-05-10 16:43:52,625 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 16:43:52,625 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:43:52,626 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 16:43:52,626 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:43:52,626 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 16:43:52,626 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:43:52,627 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:43:52,630 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,630 INFO sqlalchemy.engine.Engine [generated in 0.00021s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,632 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,632 INFO sqlalchemy.engine.Engine [cached since 0.001528s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,632 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,632 INFO sqlalchemy.engine.Engine [cached since 0.002172s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,633 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,633 INFO sqlalchemy.engine.Engine [cached since 0.002768s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,634 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,634 INFO sqlalchemy.engine.Engine [cached since 0.00335s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,634 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:43:52,634 INFO sqlalchemy.engine.Engine [cached since 0.003893s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:43:52,635 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/agent/graph.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1421999]
+INFO:     Started server process [1422533]
+INFO:     Waiting for application startup.
+2026-05-10 16:45:26,244 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 16:45:26,245 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:45:26,245 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 16:45:26,246 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:45:26,246 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 16:45:26,246 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:45:26,247 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:45:26,251 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,251 INFO sqlalchemy.engine.Engine [generated in 0.00021s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,252 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,252 INFO sqlalchemy.engine.Engine [cached since 0.001641s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,253 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,253 INFO sqlalchemy.engine.Engine [cached since 0.002318s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,254 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,254 INFO sqlalchemy.engine.Engine [cached since 0.002961s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,254 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,254 INFO sqlalchemy.engine.Engine [cached since 0.003618s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,255 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:45:26,255 INFO sqlalchemy.engine.Engine [cached since 0.004241s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:45:26,256 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routers/agent_router.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1422533]
+INFO:     Started server process [1422910]
+INFO:     Waiting for application startup.
+2026-05-10 16:46:22,898 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 16:46:22,898 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:46:22,898 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 16:46:22,898 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:46:22,899 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 16:46:22,899 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 16:46:22,899 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:46:22,903 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,903 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,904 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,904 INFO sqlalchemy.engine.Engine [cached since 0.001538s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,905 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,905 INFO sqlalchemy.engine.Engine [cached since 0.002145s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,905 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,905 INFO sqlalchemy.engine.Engine [cached since 0.002698s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,906 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,906 INFO sqlalchemy.engine.Engine [cached since 0.003248s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,906 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 16:46:22,906 INFO sqlalchemy.engine.Engine [cached since 0.003814s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 16:46:22,907 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+2026-05-10 16:47:20,200 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:20,204 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:20,204 INFO sqlalchemy.engine.Engine [generated in 0.00038s] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:20,208 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:47:20,209 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:20,209 INFO sqlalchemy.engine.Engine [generated in 0.00054s] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:47:20,209 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:20,210 INFO sqlalchemy.engine.Engine [cached since 0.005767s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:20,211 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 16:47:20,213 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:43794 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+INFO:     127.0.0.1:43786 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:47:40,999 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:40,999 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:40,999 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:41,000 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:41,000 INFO sqlalchemy.engine.Engine [cached since 20.8s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:41,000 INFO sqlalchemy.engine.Engine [cached since 20.8s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:41,001 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:47:41,002 INFO sqlalchemy.engine.Engine [cached since 20.79s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:47:41,003 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:44434 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:47:41,004 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:44450 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:47:41,014 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:41,015 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:41,015 INFO sqlalchemy.engine.Engine [cached since 20.81s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:41,016 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:47:41,016 INFO sqlalchemy.engine.Engine [cached since 20.81s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:47:41,017 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:44434 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:47:41,021 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:47:41,021 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:47:41,021 INFO sqlalchemy.engine.Engine [cached since 20.82s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:47:41,023 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:44466 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:48:03,839 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:48:03,839 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:48:03,840 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:48:03,840 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:48:03,840 INFO sqlalchemy.engine.Engine [cached since 43.64s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:48:03,840 INFO sqlalchemy.engine.Engine [cached since 43.64s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:48:03,842 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:48:03,843 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 16:48:03,843 INFO sqlalchemy.engine.Engine [cached since 43.63s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+INFO:     127.0.0.1:59046 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 16:48:03,845 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:59052 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 16:48:37,452 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:48:37,452 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 16:48:37,452 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:48:37,452 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 16:48:37,453 INFO sqlalchemy.engine.Engine [cached since 77.25s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:48:37,453 INFO sqlalchemy.engine.Engine [cached since 77.25s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 16:48:37,455 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 16:48:37,455 INFO sqlalchemy.engine.Engine [cached since 77.25s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 16:48:37,456 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 16:48:37,456 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:44272 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+INFO:     127.0.0.1:44288 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 17:10:47,553 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:10:47,554 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:10:47,554 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:10:47,555 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:10:47,555 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:10:47,555 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:10:47,556 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 17:10:47,557 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 17:10:47,559 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:47572 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 17:10:47,559 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:47564 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 17:10:47,572 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:10:47,573 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:10:47,573 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:10:47,575 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:47572 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 17:10:47,580 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:10:47,580 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:10:47,580 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:10:47,582 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 17:10:47,582 INFO sqlalchemy.engine.Engine [cached since 1407s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 17:10:47,583 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:47576 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 17:34:23,009 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:23,009 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:23,009 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:23,010 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:23,010 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:23,010 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:23,011 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 17:34:23,012 INFO sqlalchemy.engine.Engine ROLLBACK
+2026-05-10 17:34:23,012 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+INFO:     127.0.0.1:50212 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 17:34:23,013 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50218 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 17:34:23,024 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:23,024 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:23,024 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:23,025 INFO sqlalchemy.engine.Engine SELECT chapters.id AS chapters_id, chapters.work_id AS chapters_work_id, chapters.chapter_number AS chapters_chapter_number, chapters.title AS chapters_title, chapters.content AS chapters_content, chapters.status AS chapters_status, chapters.created_at AS chapters_created_at, chapters.updated_at AS chapters_updated_at 
+FROM chapters 
+WHERE chapters.work_id = %(work_id_1)s ORDER BY chapters.chapter_number
+2026-05-10 17:34:23,026 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'work_id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73'}
+2026-05-10 17:34:23,026 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50212 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73/chapters HTTP/1.1" 200 OK
+2026-05-10 17:34:23,030 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:23,030 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:23,030 INFO sqlalchemy.engine.Engine [cached since 2823s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:23,032 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50222 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 17:34:26,950 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:26,950 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:26,950 INFO sqlalchemy.engine.Engine [cached since 2827s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:26,952 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50222 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+2026-05-10 17:34:26,961 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 17:34:26,962 INFO sqlalchemy.engine.Engine SELECT works.id AS works_id, works.user_id AS works_user_id, works.title AS works_title, works.genre AS works_genre, works.idea AS works_idea, works.tags AS works_tags, works.outline_tree AS works_outline_tree, works.status AS works_status, works.created_at AS works_created_at, works.updated_at AS works_updated_at 
+FROM works 
+WHERE works.id = %(id_1)s 
+ LIMIT %(param_1)s
+2026-05-10 17:34:26,962 INFO sqlalchemy.engine.Engine [cached since 2827s ago] {'id_1': '65fbc8ad-0b87-4b81-a0b5-9f050e775e73', 'param_1': 1}
+2026-05-10 17:34:26,963 INFO sqlalchemy.engine.Engine ROLLBACK
+INFO:     127.0.0.1:50212 - "GET /api/works/65fbc8ad-0b87-4b81-a0b5-9f050e775e73 HTTP/1.1" 200 OK
+WARNING:  WatchFiles detected changes in 'app/models/agent_model.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1422910]
+INFO:     Started server process [1450247]
+INFO:     Waiting for application startup.
+2026-05-10 18:06:25,618 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:06:25,618 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:06:25,618 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:06:25,618 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:06:25,619 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:06:25,619 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:06:25,619 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:06:25,623 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,623 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,624 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,624 INFO sqlalchemy.engine.Engine [cached since 0.001528s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,625 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,625 INFO sqlalchemy.engine.Engine [cached since 0.00215s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,625 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,625 INFO sqlalchemy.engine.Engine [cached since 0.002734s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,626 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,626 INFO sqlalchemy.engine.Engine [cached since 0.003308s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,626 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,627 INFO sqlalchemy.engine.Engine [cached since 0.003893s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,627 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:06:25,627 INFO sqlalchemy.engine.Engine [cached since 0.004432s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:06:25,629 INFO sqlalchemy.engine.Engine 
+CREATE TABLE supervisor_sessions (
+	id VARCHAR(36) NOT NULL, 
+	work_id VARCHAR(36), 
+	stage VARCHAR(20) NOT NULL, 
+	status VARCHAR(20) NOT NULL, 
+	history JSONB NOT NULL, 
+	last_intent JSONB, 
+	active_child JSONB, 
+	created_at TIMESTAMP WITH TIME ZONE NOT NULL, 
+	updated_at TIMESTAMP WITH TIME ZONE NOT NULL, 
+	PRIMARY KEY (id), 
+	FOREIGN KEY(work_id) REFERENCES works (id) ON DELETE SET NULL
+)
+
+
+2026-05-10 18:06:25,629 INFO sqlalchemy.engine.Engine [no key 0.00011s] {}
+2026-05-10 18:06:25,741 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/schemas/supervisor_schema.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1450247]
+INFO:     Started server process [1452004]
+INFO:     Waiting for application startup.
+2026-05-10 18:11:13,273 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:11:13,273 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:11:13,274 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:11:13,274 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:11:13,274 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:11:13,274 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:11:13,274 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:11:13,278 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,278 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,279 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,279 INFO sqlalchemy.engine.Engine [cached since 0.001543s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,280 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,280 INFO sqlalchemy.engine.Engine [cached since 0.002123s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,281 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,281 INFO sqlalchemy.engine.Engine [cached since 0.002712s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,281 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,281 INFO sqlalchemy.engine.Engine [cached since 0.003263s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,282 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,282 INFO sqlalchemy.engine.Engine [cached since 0.003833s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,282 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:11:13,282 INFO sqlalchemy.engine.Engine [cached since 0.004379s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:11:13,283 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/supervisor/__init__.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1452004]
+INFO:     Started server process [1454233]
+INFO:     Waiting for application startup.
+2026-05-10 18:17:02,256 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:17:02,256 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:02,257 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:17:02,257 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:02,257 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:17:02,257 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:02,258 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:17:02,261 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,261 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,263 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,263 INFO sqlalchemy.engine.Engine [cached since 0.001506s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,263 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,263 INFO sqlalchemy.engine.Engine [cached since 0.002135s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,264 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,264 INFO sqlalchemy.engine.Engine [cached since 0.002759s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,264 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,264 INFO sqlalchemy.engine.Engine [cached since 0.003384s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,265 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,265 INFO sqlalchemy.engine.Engine [cached since 0.003975s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,266 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:02,266 INFO sqlalchemy.engine.Engine [cached since 0.004546s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:02,266 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/supervisor/intent_classifier.py', 'app/services/supervisor/outline_agent.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1454233]
+INFO:     Started server process [1454733]
+INFO:     Waiting for application startup.
+2026-05-10 18:17:54,278 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:17:54,278 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:54,279 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:17:54,279 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:54,279 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:17:54,279 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:17:54,280 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:17:54,283 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,283 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,285 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,285 INFO sqlalchemy.engine.Engine [cached since 0.001498s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,285 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,285 INFO sqlalchemy.engine.Engine [cached since 0.00207s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,286 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,286 INFO sqlalchemy.engine.Engine [cached since 0.002621s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,286 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,286 INFO sqlalchemy.engine.Engine [cached since 0.00315s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,287 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,287 INFO sqlalchemy.engine.Engine [cached since 0.003696s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,287 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:17:54,287 INFO sqlalchemy.engine.Engine [cached since 0.004254s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:17:54,288 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/supervisor/outline_agent.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1454733]
+INFO:     Started server process [1455830]
+INFO:     Waiting for application startup.
+2026-05-10 18:20:59,392 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:20:59,392 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:20:59,393 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:20:59,393 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:20:59,394 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:20:59,394 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:20:59,394 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:20:59,398 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,398 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,399 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,399 INFO sqlalchemy.engine.Engine [cached since 0.001528s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,400 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,400 INFO sqlalchemy.engine.Engine [cached since 0.002198s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,400 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,400 INFO sqlalchemy.engine.Engine [cached since 0.002864s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,401 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,401 INFO sqlalchemy.engine.Engine [cached since 0.003473s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,402 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,402 INFO sqlalchemy.engine.Engine [cached since 0.004113s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,402 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:20:59,402 INFO sqlalchemy.engine.Engine [cached since 0.004731s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:20:59,403 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/services/supervisor/supervisor_agent.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1455830]
+INFO:     Started server process [1456247]
+INFO:     Waiting for application startup.
+2026-05-10 18:21:54,580 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:21:54,580 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:21:54,580 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:21:54,581 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:21:54,581 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:21:54,581 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:21:54,581 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:21:54,585 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,585 INFO sqlalchemy.engine.Engine [generated in 0.00019s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,586 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,586 INFO sqlalchemy.engine.Engine [cached since 0.001469s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,587 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,587 INFO sqlalchemy.engine.Engine [cached since 0.002059s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,587 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,587 INFO sqlalchemy.engine.Engine [cached since 0.002618s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,588 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,588 INFO sqlalchemy.engine.Engine [cached since 0.003139s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,588 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,588 INFO sqlalchemy.engine.Engine [cached since 0.003695s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,589 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:21:54,589 INFO sqlalchemy.engine.Engine [cached since 0.004214s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:21:54,590 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/routers/supervisor_router.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1456247]
+INFO:     Started server process [1458088]
+INFO:     Waiting for application startup.
+2026-05-10 18:27:40,489 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:27:40,489 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:27:40,489 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:27:40,490 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:27:40,490 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:27:40,490 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:27:40,490 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:27:40,494 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,494 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,495 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,495 INFO sqlalchemy.engine.Engine [cached since 0.001554s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,496 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,496 INFO sqlalchemy.engine.Engine [cached since 0.00216s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,497 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,497 INFO sqlalchemy.engine.Engine [cached since 0.002768s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,497 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,497 INFO sqlalchemy.engine.Engine [cached since 0.003344s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,498 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,498 INFO sqlalchemy.engine.Engine [cached since 0.003967s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,498 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:27:40,498 INFO sqlalchemy.engine.Engine [cached since 0.004544s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:27:40,499 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1458088]
+INFO:     Started server process [1458546]
+INFO:     Waiting for application startup.
+2026-05-10 18:28:39,124 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:28:39,124 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:28:39,125 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:28:39,125 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:28:39,125 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:28:39,125 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:28:39,126 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:28:39,129 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,129 INFO sqlalchemy.engine.Engine [generated in 0.00020s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,130 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,130 INFO sqlalchemy.engine.Engine [cached since 0.001467s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,131 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,131 INFO sqlalchemy.engine.Engine [cached since 0.00203s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,132 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,132 INFO sqlalchemy.engine.Engine [cached since 0.002597s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,132 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,132 INFO sqlalchemy.engine.Engine [cached since 0.00312s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,133 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,133 INFO sqlalchemy.engine.Engine [cached since 0.003673s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,133 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:28:39,133 INFO sqlalchemy.engine.Engine [cached since 0.004198s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:28:39,134 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+WARNING:  WatchFiles detected changes in 'app/main.py'. Reloading...
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1458546]
+INFO:     Started server process [1458915]
+INFO:     Waiting for application startup.
+2026-05-10 18:29:35,962 INFO sqlalchemy.engine.Engine select pg_catalog.version()
+2026-05-10 18:29:35,962 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:29:35,963 INFO sqlalchemy.engine.Engine select current_schema()
+2026-05-10 18:29:35,963 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:29:35,963 INFO sqlalchemy.engine.Engine show standard_conforming_strings
+2026-05-10 18:29:35,963 INFO sqlalchemy.engine.Engine [raw sql] {}
+2026-05-10 18:29:35,964 INFO sqlalchemy.engine.Engine BEGIN (implicit)
+2026-05-10 18:29:35,967 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,968 INFO sqlalchemy.engine.Engine [generated in 0.00022s] {'table_name': 'users', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,969 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,969 INFO sqlalchemy.engine.Engine [cached since 0.001525s ago] {'table_name': 'works', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,969 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,969 INFO sqlalchemy.engine.Engine [cached since 0.002156s ago] {'table_name': 'chapters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,970 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,970 INFO sqlalchemy.engine.Engine [cached since 0.002738s ago] {'table_name': 'characters', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,971 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,971 INFO sqlalchemy.engine.Engine [cached since 0.003352s ago] {'table_name': 'agent_logs', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,971 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,971 INFO sqlalchemy.engine.Engine [cached since 0.00393s ago] {'table_name': 'agent_states', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,972 INFO sqlalchemy.engine.Engine SELECT pg_catalog.pg_class.relname 
+FROM pg_catalog.pg_class JOIN pg_catalog.pg_namespace ON pg_catalog.pg_namespace.oid = pg_catalog.pg_class.relnamespace 
+WHERE pg_catalog.pg_class.relname = %(table_name)s AND pg_catalog.pg_class.relkind = ANY (ARRAY[%(param_1)s, %(param_2)s, %(param_3)s, %(param_4)s, %(param_5)s]) AND pg_catalog.pg_table_is_visible(pg_catalog.pg_class.oid) AND pg_catalog.pg_namespace.nspname != %(nspname_1)s
+2026-05-10 18:29:35,972 INFO sqlalchemy.engine.Engine [cached since 0.004503s ago] {'table_name': 'supervisor_sessions', 'param_1': 'r', 'param_2': 'p', 'param_3': 'f', 'param_4': 'v', 'param_5': 'm', 'nspname_1': 'pg_catalog'}
+2026-05-10 18:29:35,972 INFO sqlalchemy.engine.Engine COMMIT
+INFO:     Application startup complete.
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1458915]
+INFO:     Stopping reloader process [1414332]

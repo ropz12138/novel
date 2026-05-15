@@ -6,6 +6,7 @@ from pydantic import BaseModel, Field
 class AgentStartRequest(BaseModel):
     """Start a new agent session for a chapter."""
     instruction: str = Field(default="", max_length=2000)
+    auto_mode: bool = Field(default=False, description="全自动模式：跳过中间确认，自动完成全流程")
 
 
 class AgentResumeRequest(BaseModel):

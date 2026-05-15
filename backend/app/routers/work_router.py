@@ -1,4 +1,8 @@
+import asyncio
+import json
+
 from fastapi import APIRouter, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -32,12 +36,58 @@ from app.schemas.work_schema import (
 router = APIRouter(prefix="/works", tags=["works"])
 
 
+def _sse_format(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
 @router.post("/generate-outline", response_model=OutlineGenerateResponse)
 def generate_outline_api(
     payload: OutlineQuickGenerateRequest,
     db: Session = Depends(get_db),
 ):
     return generate_outline(payload, db)
+
+
+@router.post("/generate-outline-stream")
+async def generate_outline_stream_api(
+    payload: OutlineQuickGenerateRequest,
+):
+    """Stream outline generation via SSE. Events: outline_stream, outline_done, error."""
+    from app.services.work_service import WorkService
+
+    service = WorkService()
+    queue: asyncio.Queue = asyncio.Queue()
+
+    def emit(event: str, data: dict):
+        queue.put_nowait((event, data))
+
+    async def event_generator():
+        async def run():
+            try:
+                await service.generate_outline_stream(payload, emit)
+            except Exception as exc:
+                emit("error", {"message": str(exc)})
+            finally:
+                await queue.put(None)
+
+        task = asyncio.create_task(run())
+
+        while True:
+            item = await queue.get()
+            if item is None:
+                break
+            event, data = item
+            yield _sse_format(event, data)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @router.get("", response_model=list[WorkOut])

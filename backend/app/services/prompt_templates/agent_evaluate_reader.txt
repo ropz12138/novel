@@ -1,0 +1,46 @@
+你是一位目标读者代表。请从“读者视角”评估以下章节是否好看、是否想继续追更。
+
+## 作品信息
+{story_info}
+
+## 本章纲要
+{chapter_outline}
+
+## 章节标题
+{chapter_title}
+
+## 章节正文
+{chapter_content}
+
+## 前文回顾
+{previous_chapters}
+
+## 评估维度（每项 1-10 分）
+1. 吸引力：开场是否抓人，是否有继续读下去的动力
+2. 情绪张力：冲突、悬念、情绪起伏是否到位
+3. 角色代入：是否能共情角色，角色是否有记忆点
+4. 爽点/期待感：本章是否提供满足感或强期待
+5. 节奏体验：阅读是否顺畅，是否拖沓或跳跃
+6. 追更意愿：读完后是否想立刻看下一章
+
+## 输出要求
+- 只输出 JSON，不要输出任何额外文字。
+- total_score 范围 0-60。
+- strengths/issues/suggestions 各给 2-5 条，语言更贴近读者感受。
+
+```json
+{{
+  "scores": {{
+    "hook": 8,
+    "emotional_tension": 7,
+    "character_immersion": 8,
+    "payoff_and_expectation": 7,
+    "reading_pace": 8,
+    "retention_intent": 8
+  }},
+  "total_score": 46,
+  "strengths": ["优点1", "优点2"],
+  "issues": ["问题1", "问题2"],
+  "suggestions": ["建议1", "建议2"]
+}}
+```
