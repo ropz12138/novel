@@ -109,6 +109,21 @@ print(db.get("db_name", "postgres"))
   DB_NAME="${_db_lines[4]}"
 }
 
+# --- 读取端口配置 ---
+read_port_config() {
+  local cfg="$ROOT_DIR/config.json"
+  if [ ! -f "$cfg" ]; then
+    echo "缺少配置文件: $cfg"
+    return 1
+  fi
+  DEV_PORT="$(python3 -c '
+import json
+from pathlib import Path
+cfg = json.loads(Path("'"$cfg"'").read_text(encoding="utf-8"))
+print(cfg["app"]["dev_port"])
+')"
+}
+
 # --- 数据库预检查 ---
 precheck_database() {
   read_db_config || return 1
@@ -146,8 +161,10 @@ precheck_database() {
 cleanup_old "$RUN_DIR/backend-dev.pid" "backend"
 cleanup_old "$RUN_DIR/frontend-dev.pid" "frontend"
 
+read_port_config
+
 # 额外清理残留端口占用
-for port in 9000 9001; do
+for port in 9000 "$DEV_PORT"; do
   pids_on_port="$(find_port_pids "$port")"
   for pid_on_port in $pids_on_port; do
     if [ -n "$pid_on_port" ]; then
@@ -172,13 +189,13 @@ source .venv/bin/activate
 pip install -r requirements.txt 2>&1 | tail -3
 
 start_backend() {
-  nohup uvicorn app.main:app --host 0.0.0.0 --port 9001 > "$RUN_DIR/backend-dev.log" 2>&1 &
+  nohup uvicorn app.main:app --host 0.0.0.0 --port "$DEV_PORT" > "$RUN_DIR/backend-dev.log" 2>&1 &
   echo $! > "$RUN_DIR/backend-dev.pid"
 }
 
 start_backend
 sleep 0.5
-if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:9001/health" 20; then
+if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
   echo "backend 首次启动失败，尝试重启一次..."
   if pid_alive "$RUN_DIR/backend-dev.pid"; then
     kill_tree "$(cat "$RUN_DIR/backend-dev.pid")"
@@ -186,7 +203,7 @@ if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://12
   fi
   start_backend
   sleep 0.5
-  if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:9001/health" 20; then
+  if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
     echo "backend 启动失败，最近日志："
     tail -n 120 "$RUN_DIR/backend-dev.log" || true
     deactivate
@@ -209,4 +226,4 @@ if ! pid_alive "$RUN_DIR/frontend-dev.pid" || ! wait_http_ok "frontend" "http://
   exit 1
 fi
 
-echo "dev started: frontend=9000 backend=9001"
+echo "dev started: frontend=9000 backend=$DEV_PORT"

@@ -1,3 +1,4 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -22,10 +23,11 @@ import { Textarea } from "../components/ui/textarea";
 import { DiffViewer } from "../components/agent/DiffViewer";
 import { OutlineDiffViewer } from "../components/agent/OutlineDiffViewer";
 import { CharacterDiffViewer } from "../components/agent/CharacterDiffViewer";
+import { PatchDiffViewer } from "../components/agent/PatchDiffViewer";
+import { MetadataDiffViewer } from "../components/agent/MetadataDiffViewer";
 import { SessionSidebar } from "../components/SessionSidebar";
 import { sessionApi } from "../lib/api";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 const mdComponents = {
   h1: ({ node, ...props }) => <h1 className="text-base font-bold text-slate-800 mt-3 mb-1.5" {...props} />,
@@ -100,10 +102,12 @@ export function UnifiedAgentPage() {
   const [characterDiff, setCharacterDiff] = useState(null); // { diff, summary }
   const [confirming, setConfirming] = useState(false);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(false);
+  const [autoMode, setAutoMode] = useState(true);
 
   const chatEndRef = useRef(null);
   const sseRef = useRef(null);
   const assistantDraftRef = useRef("");
+  const lastOutlinePhaseRef = useRef("");
 
   const syncSessionId = (id) => {
     activeSessionIdRef.current = id;
@@ -244,6 +248,23 @@ export function UnifiedAgentPage() {
               };
             }
 
+            if (
+              m.role === "assistant"
+              && m.meta?.intent === "requirements_planner"
+              && m.meta?.requirements_plan
+            ) {
+              return {
+                kind: "message",
+                id,
+                role: "assistant",
+                content: "",
+                type: "requirements_todolist",
+                todoCard: m.meta.requirements_plan,
+                meta: m.meta || {},
+                timestamp: ts,
+              };
+            }
+
             return {
               kind: "message",
               id,
@@ -252,6 +273,11 @@ export function UnifiedAgentPage() {
               type: m.meta?.type,
               title: m.meta?.title,
               diffCard: m.meta?.diffCard,
+              outlineDiffCard: m.meta?.outlineDiffCard,
+              characterDiffCard: m.meta?.characterDiffCard,
+              chapterMetaCard: m.meta?.chapterMetaCard,
+              metadataDiffCard: m.meta?.metadataDiffCard,
+              consistencyReportCard: m.meta?.consistencyReportCard,
               meta: m.meta || {},
               timestamp: ts,
             };
@@ -276,6 +302,7 @@ export function UnifiedAgentPage() {
     timelineIdRef.current = 0;
     setEditDiff(null);
     setConfirming(false);
+    setAutoMode(false);
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
@@ -415,7 +442,13 @@ export function UnifiedAgentPage() {
       case "outline_stream":
         break;
       case "outline_status":
-        if (d?.message) appendLastRunningStream(`${d.message}\n`);
+        if (d?.phase && d.phase !== lastOutlinePhaseRef.current) {
+          finalizeLastRunningStep();
+          pushExecStep(d?.message || d.phase);
+          lastOutlinePhaseRef.current = d.phase;
+        } else if (d?.message) {
+          appendLastRunningStream(`${d.message}\n`);
+        }
         break;
       case "outline_tree_progress": {
         const line = formatOutlineProgress(d);
@@ -424,6 +457,7 @@ export function UnifiedAgentPage() {
       }
       case "outline_done": {
         finalizeLastRunningStep();
+        lastOutlinePhaseRef.current = "";
         if (d.work_id) {
           setWorkId(d.work_id);
           setWorkTitle(d.title);
@@ -473,6 +507,29 @@ export function UnifiedAgentPage() {
       case "characters_updated":
         if (d?.message) pushExecStepDone(d.message);
         break;
+      case "todolist_generated":
+        finalizeLastRunningStep();
+        addMessage("assistant", "", {
+          type: "requirements_todolist",
+          todoCard: {
+            intent_summary: d.intent_summary,
+            todolist: d.todolist || [],
+            ready_to_execute: d.ready_to_execute,
+          },
+        });
+        break;
+
+      case "edit_chapter_hunk_diff":
+        {
+        addMessage("assistant", "", {
+          type: "patch_diff_card",
+          patchDiffCard: {
+            hunks: d.hunks || [],
+            summary: d.summary || {},
+          },
+        });
+        }
+        break;
 
       case "edit_chapter_diff":
         finalizeLastRunningStep();
@@ -501,15 +558,54 @@ export function UnifiedAgentPage() {
         addMessage("assistant", "", { type: "edit_diff_card", diffCard: card });
         }
         setRunning(false);
-        addMessage("assistant", `第${d.chapter_number}章「${d.title}」已自动优化并保存，共 ${d.word_count} 字。`, {
+        {
+        const title = d?.title || `第${d.chapter_number}章`;
+        const wordCount = Number.isFinite(d?.word_count) ? d.word_count : "未知";
+        addMessage("assistant", `第${d.chapter_number}章「${title}」已自动优化并保存，共 ${wordCount} 字。`, {
           type: "chapter_edited",
         });
+        }
         break;
       case "edit_chapter_accepted":
         setEditDiff(null);
         setRunning(false);
         addMessage("assistant", `第${d.chapter_number}章「${d.title}」修改已保存，共 ${d.word_count} 字。`, {
           type: "chapter_edited",
+        });
+        break;
+      case "chapter_metadata_diff":
+        addMessage("assistant", "", {
+          type: "metadata_diff_card",
+          metadataDiffCard: {
+            chapter_number: d.chapter_number,
+            summary: d.summary,
+            key_plot_points: d.key_plot_points || [],
+            foreshadows: d.foreshadows || [],
+            diff: d.diff || {},
+            diff_summary: d.diff_summary || {},
+          },
+        });
+        break;
+      case "chapter_metadata_generated":
+        addMessage("assistant", "", {
+          type: "chapter_meta_card",
+          chapterMetaCard: {
+            chapter_number: d.chapter_number,
+            summary: d.summary,
+            key_plot_points: d.key_plot_points || [],
+            foreshadows_added: d.foreshadows_added || [],
+          },
+        });
+        break;
+      case "consistency_checked":
+        addMessage("assistant", "", {
+          type: "consistency_report_card",
+          consistencyReportCard: {
+            chapter_number: d.chapter_number,
+            consistency_status: d.consistency_status,
+            decision: d.decision,
+            reason: d.reason,
+          },
         });
         break;
 
@@ -520,13 +616,17 @@ export function UnifiedAgentPage() {
           summary: d.summary,
           message: d.message,
           operations: d.operations,
+          readonly: !!d.readonly,
         });
+        setRunning(false);
         break;
       case "character_edit_diff":
         setCharacterDiff({
           diff: d.diff,
           summary: d.summary,
+          readonly: !!d.readonly,
         });
+        setRunning(false);
         break;
 
       case "error":
@@ -550,7 +650,7 @@ export function UnifiedAgentPage() {
     const sid = activeSessionIdRef.current;
     if (!sid) {
       // Start new supervisor session
-      connectSSE(`${API_BASE}/supervisor/start`, { message: msg, work_id: workId });
+      connectSSE(`${API_BASE}/supervisor/start`, { message: msg, work_id: workId, auto_mode: autoMode });
     } else {
       // Resume existing session
       connectSSE(`${API_BASE}/supervisor/resume`, { session_id: sid, message: msg });
@@ -646,6 +746,26 @@ export function UnifiedAgentPage() {
           {currentIntent && intentBadge(currentIntent)}
         </div>
         <div className="flex items-center gap-2">
+          {!sessionId && (
+            <button
+              onClick={() => setAutoMode(!autoMode)}
+              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors ${
+                autoMode
+                  ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
+                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
+              }`}
+              title={autoMode ? "自动模式：编辑直接生效" : "手动模式：编辑需要确认"}
+            >
+              <Zap className="h-3 w-3" />
+              {autoMode ? "自动" : "手动"}
+            </button>
+          )}
+          {sessionId && autoMode && !running && (
+            <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-600">
+              <Zap className="h-3 w-3" />
+              自动模式
+            </span>
+          )}
           {running && (
             <span className="flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-600">
               <Loader2 className="h-3 w-3 animate-spin" />
@@ -774,7 +894,22 @@ export function UnifiedAgentPage() {
                               : "bg-slate-100 text-slate-800"
                       }`}
                     >
-                      {msg.type === "edit_diff_card" ? (
+                      {msg.type === "patch_diff_card" ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-slate-700">
+                              章节局部修改
+                              <span className="ml-2 text-xs text-slate-400">
+                                {msg.patchDiffCard?.summary?.applied ?? 0} 处改动
+                              </span>
+                            </p>
+                          </div>
+                          <PatchDiffViewer
+                            hunks={msg.patchDiffCard?.hunks ?? []}
+                            summary={msg.patchDiffCard?.summary ?? {}}
+                          />
+                        </div>
+                      ) : msg.type === "edit_diff_card" ? (
                         <div className="space-y-2">
                           <div className="flex items-center justify-between">
                             <p className="text-sm text-slate-700">
@@ -816,6 +951,106 @@ export function UnifiedAgentPage() {
                               </Button>
                             </div>
                           )}
+                        </div>
+                      ) : msg.type === "requirements_todolist" ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm font-medium text-slate-700">需求任务清单</p>
+                            <span
+                              className={`rounded-full px-2 py-0.5 text-[10px] ${
+                                msg.todoCard?.ready_to_execute
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : "bg-amber-100 text-amber-700"
+                              }`}
+                            >
+                              {msg.todoCard?.ready_to_execute ? "可执行" : "待澄清"}
+                            </span>
+                          </div>
+                          {msg.todoCard?.intent_summary && (
+                            <p className="text-xs text-slate-600">
+                              目标：{msg.todoCard.intent_summary}
+                            </p>
+                          )}
+                          {(msg.todoCard?.todolist || []).length > 0 ? (
+                            <div className="space-y-2">
+                              {(msg.todoCard.todolist || []).map((t, idx) => (
+                                <div key={`${t.id || "T"}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                                  <div className="flex items-center gap-2 text-xs">
+                                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.id || `T${idx + 1}`}</span>
+                                    <span className="font-medium text-slate-700">{t.task || "未命名任务"}</span>
+                                  </div>
+                                  <div className="mt-1 space-y-1 text-[11px] text-slate-500">
+                                    <p>负责人：{t.owner || "supervisor"}</p>
+                                    <p>状态：{t.status || "pending"}</p>
+                                    {Array.isArray(t.depends_on) && t.depends_on.length > 0 && (
+                                      <p>依赖：{t.depends_on.join(", ")}</p>
+                                    )}
+                                    {t.done_criteria && <p>验收：{t.done_criteria}</p>}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
+                          ) : (
+                            <p className="text-xs text-slate-500">暂无任务项。</p>
+                          )}
+                        </div>
+                      ) : msg.type === "outline_diff_card" ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-slate-700">
+                              大纲变更建议
+                              <span className="ml-2 text-xs text-slate-400">
+                                +{msg.outlineDiffCard?.summary?.total_added ?? 0} / ~{msg.outlineDiffCard?.summary?.total_modified ?? 0} / -{msg.outlineDiffCard?.summary?.total_removed ?? 0}
+                              </span>
+                            </p>
+                          </div>
+                          <OutlineDiffViewer diff={msg.outlineDiffCard?.diff ?? {}} summary={msg.outlineDiffCard?.summary ?? {}} collapsed />
+                        </div>
+                      ) : msg.type === "character_diff_card" ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-slate-700">
+                              角色变更建议
+                              <span className="ml-2 text-xs text-slate-400">
+                                +{msg.characterDiffCard?.summary?.total_added ?? 0} / ~{msg.characterDiffCard?.summary?.total_modified ?? 0} / -{msg.characterDiffCard?.summary?.total_removed ?? 0}
+                              </span>
+                            </p>
+                          </div>
+                          <CharacterDiffViewer diff={msg.characterDiffCard?.diff ?? {}} summary={msg.characterDiffCard?.summary ?? {}} collapsed />
+                        </div>
+                      ) : msg.type === "metadata_diff_card" ? (
+                        <div className="space-y-2">
+                          <div className="flex items-center justify-between">
+                            <p className="text-sm text-slate-700">
+                              第{msg.metadataDiffCard?.chapter_number}章元数据变更
+                              <span className="ml-2 text-xs text-slate-400">
+                                +{msg.metadataDiffCard?.diff_summary?.total_added ?? 0} / ~{msg.metadataDiffCard?.diff_summary?.total_modified ?? 0} / -{msg.metadataDiffCard?.diff_summary?.total_removed ?? 0}
+                              </span>
+                            </p>
+                          </div>
+                          <MetadataDiffViewer diff={msg.metadataDiffCard?.diff ?? {}} summary={msg.metadataDiffCard?.diff_summary ?? {}} collapsed />
+                        </div>
+                      ) : msg.type === "chapter_meta_card" ? (
+                        <div className="space-y-2">
+                          <p className="text-sm font-medium text-slate-700">章节结构元数据（第{msg.chapterMetaCard?.chapter_number}章）</p>
+                          <p className="text-xs text-slate-600 whitespace-pre-wrap">{msg.chapterMetaCard?.summary || "无摘要"}</p>
+                          <div className="text-xs text-slate-600">
+                            <p className="font-medium text-slate-700">关键剧情点</p>
+                            {(msg.chapterMetaCard?.key_plot_points || []).length > 0 ? (
+                              <ul className="list-disc pl-4">
+                                {(msg.chapterMetaCard?.key_plot_points || []).map((p, idx) => <li key={`kp-${idx}`}>{p}</li>)}
+                              </ul>
+                            ) : (
+                              <p>无</p>
+                            )}
+                          </div>
+                        </div>
+                      ) : msg.type === "consistency_report_card" ? (
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-slate-700">一致性检查（第{msg.consistencyReportCard?.chapter_number}章）</p>
+                          <p className="text-xs text-slate-600">状态：{msg.consistencyReportCard?.consistency_status || "aligned"}</p>
+                          <p className="text-xs text-slate-600">决策：{msg.consistencyReportCard?.decision || "none"}</p>
+                          <p className="text-xs text-slate-600 whitespace-pre-wrap">{msg.consistencyReportCard?.reason || ""}</p>
                         </div>
                       ) : msg.role === "user" ? (
                         <p>{msg.content}</p>
@@ -890,31 +1125,37 @@ export function UnifiedAgentPage() {
                         </div>
                       </div>
                     )}
-                    <div className="flex items-center gap-2 justify-end">
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-8 px-3 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50"
-                        onClick={() => handleConfirmOutline("reject")}
-                        disabled={confirming}
-                      >
-                        <X className="mr-1.5 h-3.5 w-3.5" />
-                        拒绝
-                      </Button>
-                      <Button
-                        size="sm"
-                        className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                        onClick={() => handleConfirmOutline("accept")}
-                        disabled={confirming}
-                      >
-                        {confirming ? (
-                          <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                        ) : (
-                          <Check className="mr-1.5 h-3.5 w-3.5" />
-                        )}
-                        接受修改
-                      </Button>
-                    </div>
+                    {outlineDiff?.readonly ? (
+                      <div className="text-xs text-slate-500 text-right">
+                        已自动应用并保存，无需确认。
+                      </div>
+                    ) : (
+                      <div className="flex items-center gap-2 justify-end">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-8 px-3 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50"
+                          onClick={() => handleConfirmOutline("reject")}
+                          disabled={confirming}
+                        >
+                          <X className="mr-1.5 h-3.5 w-3.5" />
+                          拒绝
+                        </Button>
+                        <Button
+                          size="sm"
+                          className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
+                          onClick={() => handleConfirmOutline("accept")}
+                          disabled={confirming}
+                        >
+                          {confirming ? (
+                            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+                          ) : (
+                            <Check className="mr-1.5 h-3.5 w-3.5" />
+                          )}
+                          接受修改
+                        </Button>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -947,18 +1188,24 @@ export function UnifiedAgentPage() {
           </div>
 
           {/* Input area */}
-          <div className="shrink-0 border-t border-slate-200 bg-white px-4 py-3">
-            <div className="mx-auto max-w-3xl flex items-end gap-2">
+          <div className="shrink-0 px-4 py-3">
+            <div className="mx-auto flex max-w-3xl items-end gap-2 pr-2">
               <Textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder={running ? "Agent 运行中..." : "输入你的需求，例如：帮我写一个科幻大纲"}
-                className="min-h-[44px] max-h-[120px] resize-none text-sm"
+                placeholder={running ? "Agent 运行中..." : "输入指令... (如「修改大纲」「写第1章」「修改第1章的...」)"}
+                className="min-h-[48px] max-h-[140px] resize-none text-sm"
                 rows={1}
                 disabled={running}
                 onKeyDown={handleKeyDown}
               />
-              <Button size="sm" className="h-11 shrink-0" disabled={running || !input.trim()} onClick={handleSend}>
+              <Button
+                size="icon"
+                className="h-11 w-11 shrink-0 rounded-full"
+                disabled={running || !input.trim()}
+                onClick={handleSend}
+                aria-label="发送消息"
+              >
                 {running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
               </Button>
             </div>

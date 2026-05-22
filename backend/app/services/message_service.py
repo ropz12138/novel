@@ -19,6 +19,7 @@ def create_message(
     meta: dict | None = None,
     sort_order: int | None = None,
     work_id: str | None = None,
+    commit: bool = True,
 ) -> Message:
     """Insert one message row."""
     if sort_order is None:
@@ -32,8 +33,11 @@ def create_message(
         sort_order=sort_order,
     )
     db.add(msg)
-    db.commit()
-    db.refresh(msg)
+    if commit:
+        db.commit()
+        db.refresh(msg)
+    else:
+        db.flush()
     return msg
 
 

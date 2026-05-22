@@ -4,20 +4,52 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
+import { API_BASE } from "../lib/runtime-config";
 
 export function LoginPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState({ email: "", password: "" });
+  const [error, setError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const parseError = (data, fallback) => {
+    if (typeof data?.detail === "string" && data.detail) return data.detail;
+    if (Array.isArray(data?.detail) && data.detail.length > 0) {
+      const first = data.detail[0];
+      if (first?.msg) return first.msg;
+    }
+    return fallback;
+  };
 
   if (localStorage.getItem("novel_token")) {
     return <Navigate to="/dashboard" replace />;
   }
 
-  const onSubmit = (event) => {
+  const onSubmit = async (event) => {
     event.preventDefault();
-    localStorage.setItem("novel_token", "mock-token");
-    localStorage.setItem("novel_user", form.email.split("@")[0] || "创作者");
-    navigate("/dashboard", { replace: true });
+    if ((form.password || "").length < 6) {
+      setError("密码至少需要 6 位");
+      return;
+    }
+    setSubmitting(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/auth/login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(form),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(parseError(data, "登录失败"));
+      }
+      localStorage.setItem("novel_token", data.token || "token");
+      localStorage.setItem("novel_user", data?.user?.username || form.email.split("@")[0] || "创作者");
+      navigate("/dashboard", { replace: true });
+    } catch (err) {
+      setError(err.message || "登录失败");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -52,8 +84,9 @@ export function LoginPage() {
               />
             </div>
             <Button type="submit" className="w-full">
-              登录
+              {submitting ? "登录中..." : "登录"}
             </Button>
+            {error && <p className="text-sm text-red-600">{error}</p>}
           </form>
           <p className="mt-4 text-center text-sm text-muted-foreground">
             还没有账号？

@@ -8,6 +8,7 @@ class SupervisorStartRequest(BaseModel):
     """Start a new supervisor session."""
     message: str = Field(description="用户消息")
     work_id: str | None = Field(default=None, description="关联作品ID（可选）")
+    auto_mode: bool = Field(default=True, description="自动模式：所有编辑操作直接执行，不等待确认")
 
 
 class SupervisorResumeRequest(BaseModel):

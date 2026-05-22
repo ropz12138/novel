@@ -1,7 +1,7 @@
 """测试 SupervisorAgent LangGraph Tool-Calling 重构
 
 覆盖:
-1. 工具注册：6 个工具是否正确创建（3 查询 + 3 派发）
+1. 工具注册：8 个工具是否正确创建（3 查询 + 5 派发）
 2. SupervisorState 定义
 3. LangGraph StateGraph 构建
 4. 查询工具的单元测试（mock DB）
@@ -21,9 +21,9 @@ class TestToolRegistration:
     """验证所有工具正确注册"""
 
     def test_all_tools_count(self):
-        """应该恰好注册 6 个工具（3 查询 + 3 派发）"""
+        """应该恰好注册 9 个工具（5 查询 + 4 派发）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 6
+        assert len(ALL_TOOLS) == 9
 
     def test_query_characters_registered(self):
         from app.services.supervisor.tools import query_characters
@@ -45,6 +45,11 @@ class TestToolRegistration:
         assert dispatch_outline.name == "dispatch_outline"
         assert dispatch_outline.coroutine is not None
 
+    def test_dispatch_requirements_planner_registered(self):
+        from app.services.supervisor.tools import dispatch_requirements_planner
+        assert dispatch_requirements_planner.name == "dispatch_requirements_planner"
+        assert dispatch_requirements_planner.coroutine is not None
+
     def test_dispatch_chapter_registered(self):
         from app.services.supervisor.tools import dispatch_chapter
         assert dispatch_chapter.name == "dispatch_chapter"
@@ -54,6 +59,11 @@ class TestToolRegistration:
         from app.services.supervisor.tools import dispatch_evaluation
         assert dispatch_evaluation.name == "dispatch_evaluation"
         assert dispatch_evaluation.coroutine is not None
+
+    def test_dispatch_writing_expert_registered(self):
+        from app.services.supervisor.tools import dispatch_writing_expert
+        assert dispatch_writing_expert.name == "dispatch_writing_expert"
+        assert dispatch_writing_expert.coroutine is not None
 
     def test_tool_names_unique(self):
         """所有工具名不应重复"""
@@ -70,10 +80,18 @@ class TestToolRegistration:
 
     def test_async_tools_have_coroutine(self):
         """派发类工具（async）应有 coroutine"""
-        from app.services.supervisor.tools import dispatch_outline, dispatch_chapter, dispatch_evaluation
+        from app.services.supervisor.tools import (
+            dispatch_chapter,
+            dispatch_evaluation,
+            dispatch_outline,
+            dispatch_requirements_planner,
+            dispatch_writing_expert,
+        )
+        assert dispatch_requirements_planner.coroutine is not None
         assert dispatch_outline.coroutine is not None
         assert dispatch_chapter.coroutine is not None
         assert dispatch_evaluation.coroutine is not None
+        assert dispatch_writing_expert.coroutine is not None
 
 
 # ────────────────────────── 2. Tool Schema 测试 ──────────────────────────
@@ -130,6 +148,17 @@ class TestToolSchemas:
         assert "work_id" in required
         assert "chapter_number" in required
         assert "chapter_content" not in required
+
+    def test_dispatch_writing_expert_schema(self):
+        from app.services.supervisor.tools import DispatchWritingExpertInput
+        schema = DispatchWritingExpertInput.model_json_schema()
+        assert "work_id" in schema["properties"]
+        assert "problem_type" in schema["properties"]
+        assert "genre_tags" in schema["properties"]
+        required = schema.get("required", [])
+        assert "work_id" in required
+        assert "problem_type" in required
+        assert "genre_tags" in required
 
 
 # ────────────────────────── 3. SupervisorState 测试 ──────────────────────────
@@ -237,6 +266,32 @@ class TestQueryToolsUnit:
                 config=config,
             )
         assert "张三" in result
+
+
+# ────────────────────────── 5. 写作专家派发测试 ──────────────────────────
+
+
+class TestWritingExpertDispatch:
+    @pytest.mark.asyncio
+    async def test_dispatch_writing_expert_success(self):
+        from app.services.supervisor.tools import dispatch_writing_expert
+
+        mock_db = MagicMock()
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        fake_result = {
+            "options": [{"event_name": "误会升级型冲突", "how_to_use_in_this_chapter": "第8章建议..."}],
+            "recommended_pick": {"event_name": "误会升级型冲突"},
+            "apply_prompt_for_chapter_agent": "请改写第8章...",
+        }
+        with patch("app.services.supervisor.writing_expert_agent.WritingExpertAgent.advise", new=AsyncMock(return_value=fake_result)):
+            result = await dispatch_writing_expert.coroutine(
+                work_id="w1",
+                problem_type="conflict_event",
+                genre_tags=["玄幻"],
+                config=config,
+            )
+        assert "写作专家已返回" in result
+        assert "误会升级型冲突" in result
 
 
 # ────────────────────────── 5. LangGraph StateGraph 构建测试 ──────────────────────────

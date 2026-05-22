@@ -29,7 +29,7 @@ from app.services.supervisor.tools import ALL_TOOLS
 
 logger = logging.getLogger(__name__)
 
-PROMPT_DIR = Path(__file__).resolve().parent / "prompts"
+PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 def _utcnow():
@@ -136,10 +136,11 @@ class SupervisorAgent:
 
     def _build_graph(self) -> StateGraph:
         """构建 LangGraph StateGraph"""
+        model_conf = settings.get_model_config()
         llm = ChatOpenAI(
-            model=settings.llm_model,
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
+            model=settings.default_model,
+            api_key=model_conf["api_key"],
+            base_url=model_conf["base_url"],
             temperature=0.7,
             streaming=True,
         )
@@ -156,12 +157,69 @@ class SupervisorAgent:
 
             self.emit("stage_start", {"stage": "thinking", "label": "AI 思考中"})
 
+            # 记录输入上下文规模
+            _log_msg_summary = []
+            for i, m in enumerate(full_messages):
+                role = getattr(m, "type", type(m).__name__)
+                content_len = len(getattr(m, "content", "") or "")
+                tc_count = len(getattr(m, "tool_calls", []) or [])
+                _log_msg_summary.append(f"[{i}]{role}:content_len={content_len},tool_calls={tc_count}")
+            logger.info(
+                "supervisor.agent_node input_messages=%d total_input_len=%d msg_summary=[%s]",
+                len(full_messages),
+                sum(len(getattr(m, "content", "") or "") for m in full_messages),
+                " | ".join(_log_msg_summary),
+            )
+
             aggregated: AIMessageChunk | None = None
+            chunk_count = 0
+            text_chunk_count = 0
+            tool_chunk_count = 0
+            t_stream = time.perf_counter()
             async for chunk in llm_with_tools.astream(full_messages):
                 aggregated = chunk if aggregated is None else aggregated + chunk
+                chunk_count += 1
                 delta = _supervisor_stream_text_delta(chunk)
                 if delta:
+                    text_chunk_count += 1
                     self.emit("supervisor_stream", {"chunk": delta})
+                # 检测 tool_call 分片
+                if getattr(chunk, "tool_call_chunks", None):
+                    tool_chunk_count += 1
+                # 每50个chunk采样一次，记录原始chunk内容
+                if chunk_count <= 3 or chunk_count % 50 == 0:
+                    chunk_content = getattr(chunk, "content", "")
+                    chunk_tc = getattr(chunk, "tool_call_chunks", None)
+                    logger.debug(
+                        "supervisor.agent_node chunk#%d content=%s tool_call_chunks=%s",
+                        chunk_count,
+                        repr(chunk_content)[:300] if chunk_content else "(empty)",
+                        repr(chunk_tc)[:300] if chunk_tc else "(none)",
+                    )
+
+            stream_elapsed_ms = (time.perf_counter() - t_stream) * 1000
+
+            # 记录流式输出摘要
+            if aggregated is None:
+                logger.error(
+                    "supervisor.agent_node stream_returned_empty chunk_count=0 elapsed_ms=%.1f",
+                    stream_elapsed_ms,
+                )
+            else:
+                agg_content_len = len(getattr(aggregated, "content", "") or "")
+                agg_tc = len(getattr(aggregated, "tool_calls", []) or [])
+                logger.info(
+                    "supervisor.agent_node stream_done chunks=%d text_chunks=%d tool_chunks=%d "
+                    "agg_content_len=%d agg_tool_calls=%d elapsed_ms=%.1f",
+                    chunk_count, text_chunk_count, tool_chunk_count,
+                    agg_content_len, agg_tc, stream_elapsed_ms,
+                )
+                # 记录聚合内容预览（前500字）用于排查空输出
+                if agg_content_len == 0 and agg_tc == 0:
+                    logger.warning(
+                        "supervisor.agent_node empty_output aggregated_repr=%s",
+                        repr(aggregated)[:1000],
+                    )
 
             if aggregated is None:
                 raise RuntimeError("统筹 LLM 未返回任何流式分片")
@@ -171,9 +229,6 @@ class SupervisorAgent:
             tool_names = []
             if hasattr(response, "tool_calls") and response.tool_calls:
                 tool_names = [tc.get("name", "") for tc in response.tool_calls]
-                self.emit("tool_calls", {
-                    "tools": tool_names,
-                })
 
             return {"messages": [response], "current_tool": ", ".join(tool_names)}
 
@@ -187,23 +242,23 @@ class SupervisorAgent:
 
         return graph.compile()
 
-    async def start(self, message: str) -> dict:
+    async def start(self, message: str, *, auto_mode: bool = True) -> dict:
         """启动新会话"""
         t0 = time.perf_counter()
 
+        # 会话和首条 user 消息必须原子落库，避免出现“空 session”残留。
         session = SupervisorSession(
             work_id=self.work_id,
             stage="running",
             status="running",
+            auto_mode=auto_mode,
         )
         self.db.add(session)
-        self.db.commit()
-        self.db.refresh(session)
+        self.db.flush()
 
         logger.info("supervisor.start session_id=%s work_id=%s", session.id, self.work_id)
-        self.emit("session_created", {"session_id": session.id})
 
-        # 用户消息写入 messages 表
+        # 用户消息写入 messages 表（不单独提交，与 session 一起提交）
         message_service.create_message(
             self.db,
             session_id=session.id,
@@ -211,7 +266,16 @@ class SupervisorAgent:
             content=message,
             work_id=self.work_id,
             sort_order=0,
+            commit=False,
         )
+        try:
+            self.db.commit()
+            self.db.refresh(session)
+        except Exception:
+            self.db.rollback()
+            raise
+
+        self.emit("session_created", {"session_id": session.id})
 
         result = await self._run_graph(session, message)
 
@@ -241,7 +305,11 @@ class SupervisorAgent:
 
         session.status = "running"
         session.stage = "running"
-        self.db.commit()
+        try:
+            self.db.commit()
+        except Exception:
+            self.db.rollback()
+            raise
 
         if session.work_id:
             self.work_id = session.work_id
@@ -252,23 +320,41 @@ class SupervisorAgent:
 
     async def _run_graph(self, session: SupervisorSession, user_message: str) -> dict:
         """执行 LangGraph StateGraph"""
+        import threading
+
         config = {
             "configurable": {
                 "db": self.db,
+                "db_lock": threading.Lock(),
                 "emit": self.emit,
                 "supervisor_session_id": session.id,
+                "auto_mode": session.auto_mode,
             },
             "recursion_limit": 25,
         }
 
         # 从 messages 表构建历史 LangChain messages
+        # 只保留有语义的消息：用户输入 + 助手有意义的回复
+        # 过滤掉 process_note（UI 阶段标记）、edit_diff_card（diff 卡片）等无上下文价值的内容
+        _NO_CONTEXT_TYPES = frozenset({
+            "process_note",
+            "edit_diff_card",
+            "outline_diff_card",
+            "character_diff_card",
+        })
         db_messages = message_service.get_messages_by_session(self.db, session.id)
         langchain_messages = []
         for m in db_messages:
             if m.role == "user":
                 langchain_messages.append(HumanMessage(content=m.content))
             elif m.role == "assistant":
-                langchain_messages.append(AIMessage(content=m.content))
+                meta = m.meta if isinstance(m.meta, dict) else {}
+                if meta.get("type") in _NO_CONTEXT_TYPES:
+                    continue
+                content = (m.content or "").strip()
+                if not content:
+                    continue
+                langchain_messages.append(AIMessage(content=content))
 
         initial_state = {
             "messages": langchain_messages,
@@ -283,18 +369,40 @@ class SupervisorAgent:
 
             # 流式执行
             final_state = None
-            async for event in graph.astream(initial_state, config=config):
-                # event 是 dict: {node_name: node_output}
-                for node_name, node_output in event.items():
-                    self._process_graph_event(node_name, node_output)
+            pending_stop = False  # 标记：tools 节点触发了 waiting，等 agent 再跑一轮后退出
+            try:
+                async for event in graph.astream(initial_state, config=config):
+                    # event 是 dict: {node_name: node_output}
+                    for node_name, node_output in event.items():
+                        self._process_graph_event(node_name, node_output)
 
-                    if node_name == "tools":
-                        tool_msgs = node_output.get("messages", [])
-                        for tm in tool_msgs:
-                            content = tm.content if hasattr(tm, "content") else str(tm)
-                            self.emit("tool_result", {"content": str(content)[:500]})
+                        if node_name == "tools":
+                            tool_msgs = node_output.get("messages", [])
+                            for tm in tool_msgs:
+                                content = tm.content if hasattr(tm, "content") else str(tm)
+                                self.emit("tool_result", {"content": str(content)[:500]})
 
-                final_state = node_output
+                            # tools 执行后检查是否需要等待用户
+                            self.db.flush()
+                            if session.status == "waiting" and session.active_child:
+                                pending_stop = True
+                                logger.info(
+                                    "supervisor._run_graph wait_for_user session_id=%s status=%s stage=%s active_child=%s",
+                                    session.id,
+                                    session.status,
+                                    session.stage,
+                                    bool(session.active_child),
+                                )
+
+                    final_state = node_output
+                    # 只在 agent 节点后退出，确保 Supervisor 生成最终回复
+                    if pending_stop and node_name == "agent":
+                        break
+            except GeneratorExit:
+                logger.info(
+                    "supervisor._run_graph GeneratorExit session_id=%s (client disconnected)",
+                    session.id,
+                )
 
             # 提取最终 AI 回复
             final_messages = final_state.get("messages", []) if final_state else []
@@ -337,7 +445,11 @@ class SupervisorAgent:
             else:
                 session.stage = "done"
                 session.status = "completed"
-            self.db.commit()
+            try:
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
 
             self.emit("supervisor_done", {"message": assistant_content})
 
@@ -345,10 +457,15 @@ class SupervisorAgent:
 
         except Exception as exc:
             logger.exception("supervisor._run_graph failed: %s", exc)
+            self.db.rollback()
             self.emit("error", {"message": str(exc)})
             session.status = "error"
             session.stage = "done"
-            self.db.commit()
+            try:
+                self.db.commit()
+            except Exception:
+                self.db.rollback()
+                raise
             return {"error": str(exc)}
 
     def _save_intermediate_messages(
@@ -419,6 +536,11 @@ class SupervisorAgent:
             messages = node_output.get("messages", [])
             for msg in messages:
                 tool_name = getattr(msg, "name", "unknown")
+                content_preview = str(getattr(msg, "content", ""))[:200]
+                logger.info(
+                    "supervisor.tool_result tool=%s content_preview=%s",
+                    tool_name, content_preview,
+                )
                 self.emit("tool_executed", {"tool": tool_name})
         elif node_name == "agent":
             current_tool = node_output.get("current_tool", "")

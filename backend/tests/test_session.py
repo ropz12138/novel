@@ -55,3 +55,40 @@ class TestSessionServiceFunctions:
         from app.services.session_service import touch_session
         db = MagicMock()
         touch_session(db, "any-id")  # should not raise
+
+    def test_delete_session_if_no_user_messages_deletes_orphan(self):
+        from app.models.agent_model import SupervisorSession
+        from app.models.message_model import Message
+        from app.services.session_service import delete_session_if_no_user_messages
+
+        db = MagicMock()
+        msg_q = MagicMock()
+        msg_q.filter_by.return_value.limit.return_value.first.return_value = None
+
+        sess = MagicMock()
+        sess_q = MagicMock()
+        sess_q.filter_by.return_value.first.return_value = sess
+
+        def query_side_effect(model):
+            if model is Message.id:
+                return msg_q
+            if model is SupervisorSession:
+                return sess_q
+            return MagicMock()
+
+        db.query.side_effect = query_side_effect
+
+        assert delete_session_if_no_user_messages(db, "orphan-id") is True
+        db.delete.assert_called_once_with(sess)
+        db.commit.assert_called()
+
+    def test_delete_session_if_no_user_messages_keeps_when_user_exists(self):
+        from app.services.session_service import delete_session_if_no_user_messages
+
+        db = MagicMock()
+        db.query.return_value.filter_by.return_value.limit.return_value.first.return_value = MagicMock(
+            id="msg-1"
+        )
+
+        assert delete_session_if_no_user_messages(db, "sess-1") is False
+        db.delete.assert_not_called()

@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field, model_validator
 
 
 class OutlineQuickGenerateRequest(BaseModel):
-    idea: str = Field(min_length=1, max_length=500)
+    idea: str = Field(min_length=1)
     tags: list[str] = Field(default_factory=list)
 
 
@@ -56,12 +56,50 @@ class CharacterInfo(BaseModel):
     first_chapter: int = Field(default=1, description="首次出场章节号")
 
 
+class CharacterBrief(BaseModel):
+    name: str = Field(description="角色名")
+    role_type: str = Field(default="配角", description="角色类型：主角/配角/反派/龙套/路人")
+    gender: str = Field(default="", description="性别")
+    age: str = Field(default="", description="年龄")
+    first_chapter: int = Field(default=1, description="首次出场章节号")
+    brief: str = Field(default="", description="一句话角色定位，如'与主角共同成长的挚友'")
+
+
+class CharacterDetail(BaseModel):
+    name: str = Field(description="角色名，需匹配 brief 中的 name")
+    appearance: str = Field(default="", description="外貌描写")
+    personality: str = Field(default="", description="性格特征")
+    background: str = Field(default="", description="背景来历")
+    skills: str = Field(default="", description="能力技能")
+    current_status: str = Field(default="存活", description="当前状态")
+    current_goal: str = Field(default="", description="当前目的/动机")
+
+
+class CharacterDetailBatch(BaseModel):
+    characters: list[CharacterDetail] = Field(description="本批次的角色详情列表")
+
+
+class CharacterLink(BaseModel):
+    character_name: str = Field(description="角色名，需能匹配 characters.name")
+    timeline_id: str = Field(description="关联主线节点ID，如'T1'")
+    branch_id: str = Field(default="", description="可选：关联支线节点ID，如'B2'")
+    link_type: Literal["appear", "lead", "conflict", "ally", "foreshadow_trigger", "foreshadow_payoff"] = Field(
+        default="appear",
+        description="关系类型",
+    )
+    weight: int = Field(default=3, description="关系强度，1-5")
+    summary: str = Field(default="", description="一句话关系说明")
+    chapter_start: int | None = Field(default=None, description="关系生效起始章节")
+    chapter_end: int | None = Field(default=None, description="关系生效结束章节")
+
+
 class OutlineTreeData(BaseModel):
     story: StoryInfo
     timeline: list[TimelineNode]
     branches: list[BranchNode]
     foreshadowing: list[ForeshadowingNode]
     characters: list[CharacterInfo] = Field(default_factory=list)
+    character_links: list[CharacterLink] = Field(default_factory=list)
 
 
 class OutlineGenerateResponse(BaseModel):
@@ -144,6 +182,19 @@ class ChapterOut(BaseModel):
     updated_at: datetime | None = None
 
     model_config = {"from_attributes": True}
+
+
+class ChapterIntelOut(BaseModel):
+    work_id: str
+    chapter_number: int
+    summary: str = ""
+    key_plot_points: list = Field(default_factory=list)
+    outline_links: list = Field(default_factory=list)
+    involved_characters: list = Field(default_factory=list)
+    foreshadows: list = Field(default_factory=list)
+    facts: list = Field(default_factory=list)
+    updated_at: datetime | None = None
+    chapter_updated_at: datetime | None = None
 
 
 class ChapterUpdateRequest(BaseModel):

@@ -24,23 +24,6 @@
 6. 文笔与可读性：表达是否流畅，是否存在冗余和病句
 
 ## 输出要求
-- 只输出 JSON，不要输出任何额外文字。
-- total_score 范围 0-60。
-- strengths/issues/suggestions 各给 2-5 条，务必具体、可执行。
-
-```json
-{{
-  "scores": {{
-    "outline_fidelity": 8,
-    "plot_coherence": 7,
-    "character_consistency": 8,
-    "detail_richness": 7,
-    "structure": 8,
-    "writing_quality": 7
-  }},
-  "total_score": 45,
-  "strengths": ["优点1", "优点2"],
-  "issues": ["问题1", "问题2"],
-  "suggestions": ["建议1", "建议2"]
-}}
-```
+- 完成评估后，**必须调用工具 `submit_editor_evaluation`** 提交结果，不要输出裸 JSON 或自由文本。
+- `total_score` 范围 0-60；各维度 `scores` 每项 1-10 分。
+- `strengths` / `issues` / `suggestions` 各给 2-5 条，务必具体、可执行。

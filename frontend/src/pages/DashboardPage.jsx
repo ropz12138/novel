@@ -1,10 +1,10 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { BookOpen, GitBranch, Trash2, Calendar, Cpu, Bot } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 export function DashboardPage() {
   const navigate = useNavigate();
@@ -110,9 +110,6 @@ export function DashboardPage() {
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="space-y-3">
-                      {work.idea && (
-                        <p className="text-sm text-slate-600 line-clamp-2">{work.idea}</p>
-                      )}
                       <div className="flex items-center gap-3 text-xs text-slate-500">
                         <span className="flex items-center gap-1">
                           <GitBranch className="h-3 w-3" /> {timeline.length} 主线

@@ -9,6 +9,23 @@ RUN_DIR="$ROOT_DIR/.run"
 
 mkdir -p "$DEPLOY_DIR/novel" "$RUN_DIR"
 
+# --- 读取端口配置 ---
+read_port_config() {
+  local cfg="$ROOT_DIR/config.json"
+  if [ ! -f "$cfg" ]; then
+    echo "缺少配置文件: $cfg"
+    return 1
+  fi
+  PROD_PORT="$(python3 -c '
+import json
+from pathlib import Path
+cfg = json.loads(Path("'"$cfg"'").read_text(encoding="utf-8"))
+print(cfg["app"]["prod_port"])
+')"
+}
+
+read_port_config
+
 # --- 清理旧后端进程 ---
 kill_tree() {
   local pid="$1"
@@ -31,7 +48,7 @@ if [ -f "$RUN_DIR/backend-prod.pid" ]; then
 fi
 
 # 清理残留端口
-pids_on_port="$(ss -tlnp "sport = :9001" 2>/dev/null | grep -oP 'pid=\K\d+' || true)"
+pids_on_port="$(ss -tlnp "sport = :$PROD_PORT" 2>/dev/null | grep -oP 'pid=\K\d+' || true)"
 for pid_on_port in $pids_on_port; do
   if [ -n "$pid_on_port" ]; then
     kill "$pid_on_port" 2>/dev/null || true
@@ -55,7 +72,7 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 pip install -r requirements.txt 2>&1 | tail -3
-nohup uvicorn app.main:app --host 0.0.0.0 --port 9001 --workers 2 > "$RUN_DIR/backend-prod.log" 2>&1 &
+nohup uvicorn app.main:app --host 0.0.0.0 --port "$PROD_PORT" --workers 2 > "$RUN_DIR/backend-prod.log" 2>&1 &
 echo $! > "$RUN_DIR/backend-prod.pid"
 deactivate
 

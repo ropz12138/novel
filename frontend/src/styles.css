@@ -11,3 +11,146 @@ body {
   margin: 0;
   font-family: "Noto Sans SC", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
+
+/* Scoped prettier scrollbar for long reading/editing panes */
+.pretty-scrollbar {
+  scrollbar-width: thin;
+  scrollbar-color: #cbd5e1 #f8fafc;
+}
+
+.pretty-scrollbar::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.pretty-scrollbar::-webkit-scrollbar-track {
+  background: #f8fafc;
+  border-radius: 9999px;
+}
+
+.pretty-scrollbar::-webkit-scrollbar-thumb {
+  background: linear-gradient(180deg, #cbd5e1 0%, #94a3b8 100%);
+  border-radius: 9999px;
+  border: 2px solid #f8fafc;
+}
+
+.pretty-scrollbar::-webkit-scrollbar-thumb:hover {
+  background: linear-gradient(180deg, #94a3b8 0%, #64748b 100%);
+}
+
+/* Relation graph loading overlay — lightweight mesh pulse */
+.relation-graph-loading-mesh {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.relation-graph-loading-mesh__node {
+  position: absolute;
+  width: 12px;
+  height: 12px;
+  border-radius: 9999px;
+  background: #ede9fe;
+  border: 2px solid #7c3aed;
+  box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.35);
+  animation: relation-graph-node-pulse 1.6s ease-in-out infinite;
+}
+
+.relation-graph-loading-mesh__node--a {
+  top: 8px;
+  left: 54px;
+  animation-delay: 0s;
+}
+
+.relation-graph-loading-mesh__node--b {
+  top: 34px;
+  left: 12px;
+  animation-delay: 0.2s;
+}
+
+.relation-graph-loading-mesh__node--c {
+  top: 34px;
+  right: 12px;
+  animation-delay: 0.4s;
+}
+
+.relation-graph-loading-mesh__node--d {
+  bottom: 10px;
+  left: 24px;
+  animation-delay: 0.6s;
+}
+
+.relation-graph-loading-mesh__node--e {
+  bottom: 10px;
+  right: 24px;
+  animation-delay: 0.8s;
+}
+
+.relation-graph-loading-mesh__edge {
+  position: absolute;
+  height: 2px;
+  background: linear-gradient(90deg, rgba(124, 58, 237, 0.15), rgba(124, 58, 237, 0.55), rgba(124, 58, 237, 0.15));
+  transform-origin: left center;
+  animation: relation-graph-edge-flow 1.4s ease-in-out infinite;
+}
+
+.relation-graph-loading-mesh__edge--ab {
+  top: 22px;
+  left: 28px;
+  width: 44px;
+  transform: rotate(28deg);
+}
+
+.relation-graph-loading-mesh__edge--ac {
+  top: 22px;
+  right: 28px;
+  width: 44px;
+  transform: rotate(-28deg);
+  transform-origin: right center;
+}
+
+.relation-graph-loading-mesh__edge--bd {
+  top: 52px;
+  left: 20px;
+  width: 52px;
+  transform: rotate(8deg);
+  animation-delay: 0.15s;
+}
+
+.relation-graph-loading-mesh__edge--ce {
+  top: 52px;
+  right: 20px;
+  width: 52px;
+  transform: rotate(-8deg);
+  transform-origin: right center;
+  animation-delay: 0.3s;
+}
+
+.relation-graph-loading-mesh__edge--de {
+  bottom: 28px;
+  left: 38px;
+  width: 44px;
+  animation-delay: 0.45s;
+}
+
+@keyframes relation-graph-node-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+    box-shadow: 0 0 0 0 rgba(124, 58, 237, 0.25);
+  }
+  50% {
+    transform: scale(1.12);
+    box-shadow: 0 0 0 6px rgba(124, 58, 237, 0);
+  }
+}
+
+@keyframes relation-graph-edge-flow {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}

@@ -11,6 +11,7 @@ from app.controllers.work_controller import (
     chapter_chat_edit,
     delete_work,
     generate_chapter,
+    get_chapter_intel,
     generate_outline,
     get_chapter,
     get_work,
@@ -23,6 +24,7 @@ from app.schemas.work_schema import (
     ChapterChatRequest,
     ChapterChatResponse,
     ChapterGenerateResponse,
+    ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
     ChatEditRequest,
@@ -131,6 +133,11 @@ def list_chapters_api(work_id: str, db: Session = Depends(get_db)):
 @router.get("/{work_id}/chapters/{chapter_number}", response_model=ChapterOut)
 def get_chapter_api(work_id: str, chapter_number: int, db: Session = Depends(get_db)):
     return get_chapter(work_id, chapter_number, db)
+
+
+@router.get("/{work_id}/chapters/{chapter_number}/intel", response_model=ChapterIntelOut)
+def get_chapter_intel_api(work_id: str, chapter_number: int, db: Session = Depends(get_db)):
+    return get_chapter_intel(work_id, chapter_number, db)
 
 
 @router.post("/{work_id}/chapters/{chapter_number}/generate", response_model=ChapterGenerateResponse)

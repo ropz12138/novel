@@ -1,9 +1,9 @@
+import { API_BASE } from "../../lib/runtime-config";
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Send, X } from "lucide-react";
 import { Button } from "../ui/button";
 import { Textarea } from "../ui/textarea";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 /**
  * Right-side panel: AI chat to revise chapter body (same API as legacy ChaptersPage).

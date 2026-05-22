@@ -47,7 +47,46 @@ def init_db() -> None:
     import app.models.work_model  # noqa: F401 — register models
     import app.models.agent_model  # noqa: F401 — register agent models
     import app.models.message_model  # noqa: F401 — register message model
+    import app.models.writing_library_model  # noqa: F401 — register writing library models
     Base.metadata.create_all(bind=engine)
+    _ensure_columns(engine)
+
+
+def _ensure_columns(engine) -> None:
+    """确保已有表中存在新增列（create_all 不会添加新列到已有表）。"""
+    import sqlalchemy as sa
+    with engine.connect() as conn:
+        # supervisor_sessions.auto_mode
+        result = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_name='supervisor_sessions' AND column_name='auto_mode'"
+        ))
+        if not result.scalar():
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN auto_mode BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
+        # chapter_metadata（兼容历史库：若 create_all 时机错过，这里兜底创建）
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS chapter_metadata (
+                id VARCHAR(36) PRIMARY KEY,
+                work_id VARCHAR(36) NOT NULL REFERENCES works(id) ON DELETE CASCADE,
+                chapter_number INTEGER NOT NULL,
+                summary TEXT NOT NULL DEFAULT '',
+                key_plot_points JSONB NOT NULL DEFAULT '[]'::jsonb,
+                outline_links JSONB NOT NULL DEFAULT '[]'::jsonb,
+                involved_characters JSONB NOT NULL DEFAULT '[]'::jsonb,
+                foreshadows JSONB NOT NULL DEFAULT '[]'::jsonb,
+                facts JSONB NOT NULL DEFAULT '[]'::jsonb,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                CONSTRAINT uq_work_chapter_metadata UNIQUE(work_id, chapter_number)
+            )
+            """
+        ))
+        conn.commit()
 
 
 def get_db():

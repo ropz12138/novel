@@ -1,3 +1,4 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Sparkles, Lightbulb, Tag, Loader2 } from "lucide-react";
@@ -5,7 +6,6 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 import { Textarea } from "../components/ui/textarea";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 const TAG_CATEGORIES = [
   {

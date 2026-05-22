@@ -24,23 +24,6 @@
 6. 追更意愿：读完后是否想立刻看下一章
 
 ## 输出要求
-- 只输出 JSON，不要输出任何额外文字。
-- total_score 范围 0-60。
-- strengths/issues/suggestions 各给 2-5 条，语言更贴近读者感受。
-
-```json
-{{
-  "scores": {{
-    "hook": 8,
-    "emotional_tension": 7,
-    "character_immersion": 8,
-    "payoff_and_expectation": 7,
-    "reading_pace": 8,
-    "retention_intent": 8
-  }},
-  "total_score": 46,
-  "strengths": ["优点1", "优点2"],
-  "issues": ["问题1", "问题2"],
-  "suggestions": ["建议1", "建议2"]
-}}
-```
+- 完成评估后，**必须调用工具 `submit_reader_evaluation`** 提交结果，不要输出裸 JSON 或自由文本。
+- `total_score` 范围 0-60；各维度 `scores` 每项 1-10 分。
+- `strengths` / `issues` / `suggestions` 各给 2-5 条，语言更贴近读者感受。

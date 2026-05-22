@@ -1,37 +1,42 @@
 import json
 import logging
-import re
 import time
 import asyncio
 from pathlib import Path
 
 from fastapi import HTTPException, status
 from langchain_core.prompts import PromptTemplate
+from langchain_core.tools import StructuredTool
 from langchain_openai import ChatOpenAI
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
-from app.models.work_model import Chapter, Character, User, Work
+from app.models.work_model import Chapter, ChapterMetadata, Character, User, Work
 from app.services.agent_log_service import log_event, new_session_id
 from app.schemas.work_schema import (
+    BranchNode,
     ChapterChatResponse,
     ChapterGenerateResponse,
+    ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
     ChatEditResponse,
+    CharacterBrief,
+    CharacterDetail,
+    ForeshadowingNode,
     OutlineGenerateResponse,
     OutlineQuickGenerateRequest,
     OutlineTreeData,
+    StoryInfo,
+    TimelineNode,
     WorkOut,
 )
 
 PROMPT_DIR = Path(__file__).resolve().parent / "prompt_templates"
 
 logger = logging.getLogger(__name__)
-OUTLINE_STREAM_TIMEOUT_S = 45
-OUTLINE_FALLBACK_TIMEOUT_S = 45
 
 # Hardcoded demo user until auth is implemented
 DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
@@ -48,139 +53,6 @@ def _llm_message_text(ai_msg) -> str:
                 parts.append(str(block.get("text", "")))
         raw = "".join(parts)
     return raw.strip()
-
-
-def _strip_markdown_json_fence(text: str) -> str:
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```\s*$", "", text)
-    return text.strip()
-
-
-def _extract_balanced_json_object(text: str) -> str | None:
-    """Take outermost {...} by brace depth; respects quoted strings and escapes."""
-    start = text.find("{")
-    if start < 0:
-        return None
-    depth = 0
-    in_str = False
-    escape = False
-    for i in range(start, len(text)):
-        c = text[i]
-        if escape:
-            escape = False
-            continue
-        if in_str:
-            if c == "\\":
-                escape = True
-            elif c == '"':
-                in_str = False
-            continue
-        if c == '"':
-            in_str = True
-            continue
-        if c == "{":
-            depth += 1
-        elif c == "}":
-            depth -= 1
-            if depth == 0:
-                return text[start : i + 1]
-    return None
-
-
-def _repair_trailing_commas(blob: str) -> str:
-    s = blob
-    for _ in range(5):
-        prev = s
-        s = re.sub(r",(\s*})", r"\1", s)
-        s = re.sub(r",(\s*\])", r"\1", s)
-        if s == prev:
-            break
-    return s
-
-
-def _repair_unquoted_values(blob: str) -> str:
-    """Fix bare values like `"age": ？（外表约四十）` → `"age": "？（外表约四十）"`.
-
-    Only matches values that don't start with a JSON literal (`"`, digit, `true`,
-    `false`, `null`, `{`, `[`, `-`) or whitespace. The whitespace exclusion prevents
-    the regex from backtracking past the ``\\s*`` after the colon and matching
-    already-quoted values as bare values.
-
-    Repeats until stable (max 5 iterations) so that values in nested objects are
-    also caught, but cannot infinite-loop.
-    """
-    pat = re.compile(
-        r'("[\w]+")\s*:\s*'                         # "key" : with flexible spacing
-        r'(?!(\s|"|\d|true|false|null|\[|\{|-))'    # NOT whitespace or a valid JSON value
-        r'([^,\]\}]+?)'                              # bare value (non-greedy)
-        r'(?=\s*[,}\]\n])'                           # lookahead: comma / close / newline
-    )
-    s = blob
-    for _ in range(5):
-        prev = s
-        s = pat.sub(r'\1: "\3"', s)
-        if s == prev:
-            break
-    return s
-
-
-def _loads_outline_json_candidates(text: str) -> dict:
-    """Try several tolerant parsing strategies; raises JSONDecodeError from last attempt if all fail."""
-    text = _strip_markdown_json_fence(text)
-    blobs: list[str] = [text]
-    sliced = _extract_balanced_json_object(text)
-    if sliced and sliced not in blobs:
-        blobs.append(sliced)
-
-    last_err: json.JSONDecodeError | None = None
-    for blob in blobs:
-        for candidate in (
-            blob,
-            _repair_trailing_commas(blob),
-            _repair_unquoted_values(blob),
-            _repair_trailing_commas(_repair_unquoted_values(blob)),
-        ):
-            try:
-                data = json.loads(candidate)
-                if isinstance(data, dict):
-                    return data
-                raise ValueError("LLM JSON root must be an object")
-            except json.JSONDecodeError as e:
-                last_err = e
-                continue
-    assert last_err is not None
-    raise last_err
-
-
-def _parse_json_from_llm_message(ai_msg) -> dict:
-    """Parse outline JSON from model response (fences, preamble, trailing commas)."""
-    text = _llm_message_text(ai_msg)
-    return _loads_outline_json_candidates(text)
-
-
-def _parse_json_from_llm_message_content(text: str) -> dict:
-    """Parse outline JSON from raw text content (for streaming where ai_msg is unavailable)."""
-    return _loads_outline_json_candidates(text)
-
-
-def _log_json_decode_context(exc: json.JSONDecodeError, text: str) -> None:
-    pos = getattr(exc, "pos", None)
-    if pos is None:
-        logger.error("outline JSON error %s; body_len=%s", exc, len(text))
-        return
-    a = max(0, pos - 120)
-    b = min(len(text), pos + 120)
-    snippet = text[a:b].replace("\n", "\\n")
-    logger.error(
-        "outline JSON error %s at pos=%s (line=%s col=%s); context …%s…",
-        exc,
-        pos,
-        getattr(exc, "lineno", "?"),
-        getattr(exc, "colno", "?"),
-        snippet,
-    )
 
 
 def _ensure_demo_user(db: Session) -> None:
@@ -201,68 +73,232 @@ class _ChatEditOutput(BaseModel):
     operations: list[dict]
 
 
-# DEPRECATED: _normalize_operation_args is no longer needed by chat_edit / chat_edit_async.
-# Tool-Calling mode produces well-structured tool_calls directly from the LLM API.
-def _normalize_operation_args(operations: list[dict]) -> list[dict]:
-    """Ensure each operation has a flat ``args`` dict.
+class _SubmitOutlineInput(OutlineTreeData):
+    """Tool-call payload for initial outline generation."""
 
-    LLMs return tool parameters in various formats:
-    - Flat top-level: ``{"tool": "...", "name": "嬴萧", "fields": {...}}``
-    - Using ``arguments`` instead of ``args``: ``{"tool": "...", "arguments": {...}}``
-    - Extra nesting: ``{"tool": "...", "args": {"parameters": {...}}}``
-    - Correct: ``{"tool": "...", "args": {"name": "嬴萧", "fields": {...}}}``
 
-    This helper normalises all variants to the last form.
-    """
-    _NESTED_KEYS = {"parameters", "params", "args", "arguments"}
-    result = []
-    for op in operations:
-        op = dict(op)  # shallow copy
+def _submit_outline_tool(**kwargs) -> str:
+    """Accept the complete generated outline as structured tool arguments."""
+    return "outline_received"
 
-        # Step 1: If "arguments" exists instead of "args", rename it
-        if "arguments" in op and "args" not in op:
-            op["args"] = op.pop("arguments")
 
-        # Step 2: Collect args
-        args = op.get("args")
+SUBMIT_OUTLINE_TOOL = StructuredTool.from_function(
+    func=_submit_outline_tool,
+    name="submit_outline",
+    description="提交完整小说大纲。必须一次性提供 story、timeline、branches、foreshadowing、characters。",
+    args_schema=_SubmitOutlineInput,
+)
 
-        # Step 3: If args is missing, promote top-level extras into args
-        if not args or not isinstance(args, dict):
-            known = {"tool", "args", "arguments"}
-            extras = {k: v for k, v in op.items() if k not in known}
-            if extras:
-                op["args"] = extras
-                for k in extras:
-                    op.pop(k, None)
-            else:
-                op["args"] = {}
-            args = op["args"]
 
-        # Step 4: Flatten single nested key like {"parameters": {...}}
-        if isinstance(args, dict) and len(args) == 1:
-            inner_key = next(iter(args))
-            if inner_key in _NESTED_KEYS and isinstance(args[inner_key], dict):
-                op["args"] = args[inner_key]
+class _SubmitStoryInput(BaseModel):
+    story: StoryInfo
 
-        result.append(op)
-    return result
+
+class _SubmitTimelineInput(BaseModel):
+    timeline: list[TimelineNode]
+
+
+class _SubmitCharacterBriefsInput(BaseModel):
+    briefs: list[CharacterBrief]
+
+
+class _SubmitCharacterDetailsInput(BaseModel):
+    characters: list[CharacterDetail]
+
+
+class _SubmitBranchesInput(BaseModel):
+    branches: list[BranchNode]
+
+
+class _SubmitForeshadowingInput(BaseModel):
+    foreshadowing: list[ForeshadowingNode]
+
+
+class _SubmitCharacterLinksInput(BaseModel):
+    character_links: list[dict]
+
+
+def _submit_story_tool(**kwargs) -> str:
+    return "story_received"
+
+
+def _submit_timeline_tool(**kwargs) -> str:
+    return "timeline_received"
+
+
+def _submit_character_briefs_tool(**kwargs) -> str:
+    return "character_briefs_received"
+
+
+def _submit_character_details_tool(**kwargs) -> str:
+    return "character_details_received"
+
+
+def _submit_branches_tool(**kwargs) -> str:
+    return "branches_received"
+
+
+def _submit_foreshadowing_tool(**kwargs) -> str:
+    return "foreshadowing_received"
+
+
+def _submit_character_links_tool(**kwargs) -> str:
+    return "character_links_received"
+
+
+SUBMIT_STORY_TOOL = StructuredTool.from_function(
+    func=_submit_story_tool,
+    name="submit_story",
+    description="提交作品基础信息 story。",
+    args_schema=_SubmitStoryInput,
+)
+
+SUBMIT_TIMELINE_TOOL = StructuredTool.from_function(
+    func=_submit_timeline_tool,
+    name="submit_timeline",
+    description="提交主线时间线 timeline。",
+    args_schema=_SubmitTimelineInput,
+)
+
+SUBMIT_CHARACTER_BRIEFS_TOOL = StructuredTool.from_function(
+    func=_submit_character_briefs_tool,
+    name="submit_character_briefs",
+    description="提交角色骨架列表：所有角色的 name/role_type/gender/age/first_chapter/brief。",
+    args_schema=_SubmitCharacterBriefsInput,
+)
+
+SUBMIT_CHARACTER_DETAILS_TOOL = StructuredTool.from_function(
+    func=_submit_character_details_tool,
+    name="submit_character_details",
+    description="提交本批次角色的详细信息。",
+    args_schema=_SubmitCharacterDetailsInput,
+)
+
+SUBMIT_BRANCHES_TOOL = StructuredTool.from_function(
+    func=_submit_branches_tool,
+    name="submit_branches",
+    description="提交支线列表 branches。",
+    args_schema=_SubmitBranchesInput,
+)
+
+SUBMIT_FORESHADOWING_TOOL = StructuredTool.from_function(
+    func=_submit_foreshadowing_tool,
+    name="submit_foreshadowing",
+    description="提交伏笔列表 foreshadowing。",
+    args_schema=_SubmitForeshadowingInput,
+)
+
+SUBMIT_CHARACTER_LINKS_TOOL = StructuredTool.from_function(
+    func=_submit_character_links_tool,
+    name="submit_character_links",
+    description="提交角色-剧情关系表 character_links。",
+    args_schema=_SubmitCharacterLinksInput,
+)
+
+
+def _parse_outline_from_tool_call(ai_msg) -> dict:
+    tool_calls = _extract_tool_calls(ai_msg)
+    for call in tool_calls:
+        if call.get("name") != "submit_outline":
+            continue
+        args = call.get("args") or {}
+        if not isinstance(args, dict):
+            raise ValueError("submit_outline tool args must be an object")
+        return args
+    raise ValueError("LLM did not call submit_outline")
+
+
+def _extract_tool_calls(ai_msg) -> list[dict]:
+    """Return tool calls exposed on AIMessage.tool_calls only."""
+    return list(getattr(ai_msg, "tool_calls", None) or [])
+
+
+def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
+    tool_calls = _extract_tool_calls(ai_msg)
+    for call in tool_calls:
+        if call.get("name") != tool_name:
+            continue
+        args = call.get("args") or {}
+        if not isinstance(args, dict):
+            raise ValueError(f"{tool_name} tool args must be an object")
+        if field_name not in args:
+            raise ValueError(f"{tool_name} missing field: {field_name}")
+        return args[field_name]
+
+    raise ValueError(f"LLM did not call {tool_name}")
 
 
 class WorkService:
     def __init__(self) -> None:
+        model_conf = settings.get_model_config()
         base_model = ChatOpenAI(
-            model=settings.llm_model,
-            api_key=settings.llm_api_key,
-            base_url=settings.llm_base_url,
+            model=settings.default_model,
+            api_key=model_conf["api_key"],
+            base_url=model_conf["base_url"],
             temperature=0.7,
-            request_timeout=(10, 60),
+            request_timeout=(15, 180),
             max_retries=0,
         )
         self.chat_model = base_model
-        # Outline: use JSON mode + normalization — strict tool schemas reject common LLM field aliases (title vs development_node, etc.)
-        self.outline_json_llm = base_model.bind(
-            response_format={"type": "json_object"},
-            max_tokens=4096,
+
+        # 大纲生成使用 pro 模型（强制 tool_choice 场景需要更强的模型）
+        outline_model_name = "deepseek-v4-flash"  # deepseek-v4-pro 模型
+        outline_conf = settings.get_model_config(outline_model_name)
+        outline_model = ChatOpenAI(
+            model=outline_model_name,
+            api_key=outline_conf["api_key"],
+            base_url=outline_conf["base_url"],
+            temperature=0.7,
+            request_timeout=(15, 180),
+            max_retries=0,
+        )
+
+        self.outline_tool_llm = outline_model.bind_tools(
+            [SUBMIT_OUTLINE_TOOL],
+            tool_choice="submit_outline",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_story_llm = outline_model.bind_tools(
+            [SUBMIT_STORY_TOOL],
+            tool_choice="submit_story",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_timeline_llm = outline_model.bind_tools(
+            [SUBMIT_TIMELINE_TOOL],
+            tool_choice="submit_timeline",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_character_briefs_llm = outline_model.bind_tools(
+            [SUBMIT_CHARACTER_BRIEFS_TOOL],
+            tool_choice="submit_character_briefs",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_character_details_llm = outline_model.bind_tools(
+            [SUBMIT_CHARACTER_DETAILS_TOOL],
+            tool_choice="submit_character_details",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_branches_llm = outline_model.bind_tools(
+            [SUBMIT_BRANCHES_TOOL],
+            tool_choice="submit_branches",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_foreshadowing_llm = outline_model.bind_tools(
+            [SUBMIT_FORESHADOWING_TOOL],
+            tool_choice="submit_foreshadowing",
+            max_tokens=393216,
+            extra_body={"enable_thinking": False},
+        )
+        self.outline_character_links_llm = outline_model.bind_tools(
+            [SUBMIT_CHARACTER_LINKS_TOOL],
+            tool_choice="submit_character_links",
+            max_tokens=393216,
             extra_body={"enable_thinking": False},
         )
         # NOTE: chat_edit_model (with_structured_output) removed — chat_edit / chat_edit_async
@@ -274,114 +310,225 @@ class WorkService:
         path = PROMPT_DIR / file_name
         return path.read_text(encoding="utf-8")
 
-    @staticmethod
-    def _normalize_outline_result(result: dict) -> dict:
-        def _s(val: object, default: str = "") -> str:
-            """Coerce any value to str; None → default."""
-            if val is None:
-                return default
-            return str(val)
+    async def _generate_outline_sections(self, idea: str, tags: str, emit=None) -> dict:
+        def _status(phase: str, message: str):
+            if emit:
+                emit("outline_status", {"phase": phase, "message": message})
 
-        story = result.get("story") or {}
-        timeline = result.get("timeline") or []
-        branches = result.get("branches") or []
-        foreshadowing = result.get("foreshadowing") or []
+        def _compact(items: object, limit: int = 8) -> str:
+            if isinstance(items, list):
+                slim = items[:limit]
+                return json.dumps(slim, ensure_ascii=False)
+            if isinstance(items, dict):
+                return json.dumps(items, ensure_ascii=False)
+            return json.dumps(items, ensure_ascii=False)
 
-        normalized_story = {
-            "title": _s(story.get("title"), "未命名作品"),
-            "genre": _s(story.get("genre"), "未分类"),
-            "volume": _s(story.get("volume"), "第一卷"),
-        }
+        async def _ainvoke_section(llm, prompt_text: str, tool_name: str, field_name: str):
+            attempts = 3
+            last_exc: Exception | None = None
+            for i in range(1, attempts + 1):
+                retry_prompt = prompt_text
+                if i > 1:
+                    retry_prompt = (
+                        f"{prompt_text}\n\n"
+                        "【强约束】你上一次输出未被系统识别。"
+                        "这一次只允许输出工具调用，不允许解释性文字。"
+                        f"必须且只调用 {tool_name}，并确保 {field_name} 是合法 JSON。"
+                    )
+                try:
+                    msg = await llm.ainvoke([("human", retry_prompt)])
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    logger.warning(
+                        "outline section llm invoke failed tool=%s attempt=%s/%s err=%s",
+                        tool_name, i, attempts, exc,
+                    )
+                    if emit and i < attempts:
+                        emit(
+                            "outline_status",
+                            {"phase": "retrying", "message": f"{tool_name} 调用失败，正在重试（{i}/{attempts - 1}）..."},
+                        )
+                    continue
+                try:
+                    return _parse_section_from_tool_call(msg, tool_name=tool_name, field_name=field_name)
+                except Exception as exc:  # noqa: BLE001
+                    last_exc = exc
+                    logger.warning(
+                        "outline section tool-call parse failed tool=%s attempt=%s/%s text_preview=%r tool_calls=%r err=%s",
+                        tool_name,
+                        i,
+                        attempts,
+                        _llm_message_text(msg)[:500],
+                        getattr(msg, "tool_calls", None),
+                        exc,
+                    )
+                    if emit and i < attempts:
+                        emit(
+                            "outline_status",
+                            {"phase": "retrying", "message": f"{tool_name} 结构生成异常，正在重试（{i}/{attempts - 1}）..."},
+                        )
+            assert last_exc is not None
+            raise last_exc
 
-        normalized_timeline = []
-        for idx, node in enumerate(timeline, start=1):
-            legacy_mainline = node.get("mainline")
-            legacy_summary = legacy_mainline if isinstance(legacy_mainline, str) else ""
-            normalized_timeline.append(
-                {
-                    "id": _s(node.get("id"), f"N{idx}"),
-                    "order": node.get("order") or idx,
-                    "development_node": _s(
-                        node.get("development_node")
-                        or node.get("title")
-                        or node.get("content"),
-                        "主线推进",
-                    ),
-                    "summary": _s(
-                        node.get("summary")
-                        or node.get("description")
-                        or legacy_summary
-                        or node.get("content"),
-                        "主线阶段推进",
-                    ),
-                    "time_node": _s(
-                        node.get("time_node") or node.get("phase"), f"阶段{idx}"
-                    ),
-                    "chapter_start": int(node.get("chapter_start", idx * 10 - 9)),
-                    "chapter_end": int(node.get("chapter_end", idx * 10)),
-                }
+        requirement_context = (
+            f"原始用户需求（必须严格遵循）：\n"
+            f"- 灵感：{idea}\n"
+            f"- 标签：{tags}\n"
+        )
+
+        _status("generating_story", "正在生成故事设定...")
+        story = await _ainvoke_section(
+            self.outline_story_llm,
+            (
+                "你是网络小说策划编辑。基于以下输入输出 story。\n"
+                f"{requirement_context}"
+                "必须调用 submit_story，不要输出普通文本。返回 story={title, genre, volume}。"
+            ),
+            "submit_story",
+            "story",
+        )
+
+        _status("generating_timeline", "正在生成主线大纲...")
+        timeline = await _ainvoke_section(
+            self.outline_timeline_llm,
+            (
+                "你是网络小说策划编辑。请基于以下输入生成完整 timeline。\n"
+                f"{requirement_context}"
+                f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                "必须调用 submit_timeline，不要输出普通文本。"
+                "timeline 节点数量控制在 6-10。"
+                "每个 summary 控制在 80 字以内。"
+                "节点按 order 递增。"
+            ),
+            "submit_timeline",
+            "timeline",
+        )
+
+        _status("generating_character_briefs", "正在生成角色概览...")
+        briefs = await _ainvoke_section(
+            self.outline_character_briefs_llm,
+            (
+                "你是网络小说策划编辑。请基于 story + timeline 设计所有核心角色。\n"
+                f"{requirement_context}"
+                f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                f"timeline：{_compact(timeline, limit=12)}\n"
+                "必须调用 submit_character_briefs，不要输出普通文本。\n"
+                "为每个角色提供 name、role_type、gender、age、first_chapter、brief。\n"
+                "brief 是一句话角色定位，如'与主角共同成长的挚友'。\n"
+                "角色数量控制在 8-15 个，必须包含主角和主要反派。"
+            ),
+            "submit_character_briefs",
+            "briefs",
+        )
+
+        BATCH_SIZE = 4
+        all_details: list[dict] = []
+
+        for batch_start in range(0, len(briefs), BATCH_SIZE):
+            batch_briefs = briefs[batch_start : batch_start + BATCH_SIZE]
+            batch_num = batch_start // BATCH_SIZE + 1
+            total_batches = (len(briefs) + BATCH_SIZE - 1) // BATCH_SIZE
+
+            _status("generating_character_details", f"正在生成角色详情（{batch_num}/{total_batches}）...")
+
+            details = await _ainvoke_section(
+                self.outline_character_details_llm,
+                (
+                    "你是网络小说策划编辑。请为以下角色填充详细描述。\n"
+                    f"{requirement_context}"
+                    f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                    f"timeline：{_compact(timeline, limit=12)}\n"
+                    f"全部角色概览：{json.dumps(briefs, ensure_ascii=False)}\n"
+                    f"本批次需要填充的角色：{json.dumps(batch_briefs, ensure_ascii=False)}\n"
+                    "必须调用 submit_character_details，不要输出普通文本。\n"
+                    "为每个角色填充 appearance/personality/background/skills/current_status/current_goal。\n"
+                    "角色字段必须是故事开始前状态。"
+                ),
+                "submit_character_details",
+                "characters",
             )
+            all_details.extend(details)
 
-        fallback_attach = normalized_timeline[0]["id"] if normalized_timeline else "N1"
-        normalized_branches = []
-        for idx, node in enumerate(branches, start=1):
-            normalized_branches.append(
-                {
-                    "id": _s(node.get("id"), f"B{idx}"),
-                    "name": _s(
-                        node.get("name") or node.get("title"), f"支线{idx}"
-                    ),
-                    "attach_to": _s(node.get("attach_to"), fallback_attach),
-                    "side": node.get("side")
-                    if node.get("side") in {"left", "right"}
-                    else ("left" if idx % 2 else "right"),
-                    "chapter_start": int(node.get("chapter_start", idx * 10 - 9)),
-                    "chapter_end": int(node.get("chapter_end", idx * 10)),
-                    "summary": _s(
-                        node.get("summary")
-                        or node.get("content")
-                        or node.get("description")
-                        or node.get("name")
-                        or node.get("title"),
-                        "支线推进",
-                    ),
-                }
-            )
-
-        normalized_foreshadowing = []
-        for idx, node in enumerate(foreshadowing, start=1):
-            normalized_foreshadowing.append(
-                {
-                    "id": _s(node.get("id"), f"F{idx}"),
-                    "plant_node": _s(node.get("plant_node"), fallback_attach),
-                    "payoff_node": _s(node.get("payoff_node"), fallback_attach),
-                    "content": _s(node.get("content"), "伏笔待回收"),
-                }
-            )
-
-        characters = result.get("characters") or []
-        normalized_characters = []
-        for idx, char in enumerate(characters, start=1):
-            normalized_characters.append({
-                "name": _s(char.get("name"), f"角色{idx}"),
-                "role_type": _s(char.get("role_type"), "配角"),
-                "gender": _s(char.get("gender")),
-                "age": _s(char.get("age")),
-                "appearance": _s(char.get("appearance")),
-                "personality": _s(char.get("personality")),
-                "background": _s(char.get("background")),
-                "skills": _s(char.get("skills")),
-                "current_status": _s(char.get("current_status"), "存活"),
-                "current_goal": _s(char.get("current_goal")),
-                "first_chapter": int(char.get("first_chapter", 1)),
+        detail_map = {d["name"]: d for d in all_details}
+        characters = []
+        for brief in briefs:
+            detail = detail_map.get(brief["name"], {})
+            characters.append({
+                "name": brief["name"],
+                "role_type": brief.get("role_type", "配角"),
+                "gender": brief.get("gender", ""),
+                "age": brief.get("age", ""),
+                "appearance": detail.get("appearance", ""),
+                "personality": detail.get("personality", ""),
+                "background": detail.get("background", ""),
+                "skills": detail.get("skills", ""),
+                "current_status": detail.get("current_status", "存活"),
+                "current_goal": detail.get("current_goal", ""),
+                "first_chapter": brief.get("first_chapter", 1),
             })
 
+        _status("generating_branches", "正在生成支线...")
+        branches = await _ainvoke_section(
+            self.outline_branches_llm,
+            (
+                "你是网络小说策划编辑。请基于 story + timeline + characters 生成 branches。\n"
+                f"{requirement_context}"
+                f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                f"timeline：{_compact(timeline, limit=14)}\n"
+                f"characters：{_compact(characters, limit=10)}\n"
+                "必须调用 submit_branches，不要输出普通文本。attach_to 必须引用 timeline 已存在的 id，side 只能是 left/right。"
+            ),
+            "submit_branches",
+            "branches",
+        )
+
+        _status("generating_foreshadowing", "正在生成伏笔...")
+        foreshadowing = await _ainvoke_section(
+            self.outline_foreshadowing_llm,
+            (
+                "你是网络小说策划编辑。请基于 story + timeline + branches 生成 foreshadowing。\n"
+                f"{requirement_context}"
+                f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                f"timeline：{_compact(timeline, limit=14)}\n"
+                f"branches：{_compact(branches, limit=12)}\n"
+                "必须调用 submit_foreshadowing，不要输出普通文本。"
+                "foreshadowing 数量控制在 6-16。"
+                "content 控制在 40 字以内。"
+                "每条伏笔需有 plant_node 和 payoff_node。"
+            ),
+            "submit_foreshadowing",
+            "foreshadowing",
+        )
+
+        _status("generating_character_links", "正在生成角色-剧情关系...")
+        character_links = await _ainvoke_section(
+            self.outline_character_links_llm,
+            (
+                "你是网络小说策划编辑。请基于 story/timeline/branches/foreshadowing/characters 生成 character_links。\n"
+                f"{requirement_context}"
+                f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                f"timeline：{_compact(timeline, limit=14)}\n"
+                f"branches：{_compact(branches, limit=12)}\n"
+                f"foreshadowing：{_compact(foreshadowing, limit=20)}\n"
+                f"characters：{_compact(characters, limit=10)}\n"
+                "必须调用 submit_character_links，不要输出普通文本。"
+                "每条记录必须包含 character_name、timeline_id、link_type。"
+                "timeline_id 必须引用已有 timeline.id。"
+                "link_type 只能是: appear, lead, conflict, ally, foreshadow_trigger, foreshadow_payoff。"
+                "character_links 数量控制在 8-24。"
+                "summary 可为空，若填写控制在 30 字以内。"
+            ),
+            "submit_character_links",
+            "character_links",
+        )
+
         return {
-            "story": normalized_story,
-            "timeline": normalized_timeline,
-            "branches": normalized_branches,
-            "foreshadowing": normalized_foreshadowing,
-            "characters": normalized_characters,
+            "story": story,
+            "timeline": timeline,
+            "branches": branches,
+            "foreshadowing": foreshadowing,
+            "characters": characters,
+            "character_links": character_links,
         }
 
     @staticmethod
@@ -456,52 +603,22 @@ class WorkService:
     ) -> OutlineGenerateResponse:
         _ensure_demo_user(db)
 
-        template = self._read_prompt("work_generate_outline.txt")
-        prompt = PromptTemplate.from_template(template)
-
-        chain = prompt | self.outline_json_llm
         try:
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
-            ai_msg = chain.invoke(
-                {
-                    "idea": payload.idea.strip(),
-                    "tags": tags_str,
-                }
+            result_dict = asyncio.run(
+                self._generate_outline_sections(payload.idea.strip(), tags_str)
             )
-            try:
-                result_dict = _parse_json_from_llm_message(ai_msg)
-            except (json.JSONDecodeError, ValueError) as parse_exc:
-                db.rollback()
-                preview = _llm_message_text(ai_msg)
-                if isinstance(parse_exc, json.JSONDecodeError):
-                    _log_json_decode_context(parse_exc, preview)
-                else:
-                    logger.error(
-                        "outline JSON decode failed: %s; content_preview=%r",
-                        parse_exc,
-                        preview[:2500],
-                    )
-                meta = getattr(ai_msg, "response_metadata", None) or {}
-                if meta.get("finish_reason") == "length":
-                    logger.error(
-                        "outline: finish_reason=length — output likely truncated "
-                        "(provider max_tokens or context limit)"
-                    )
-                raise HTTPException(
-                    status_code=status.HTTP_502_BAD_GATEWAY,
-                    detail=f"LLM outline generation failed: invalid JSON — {parse_exc}",
-                ) from parse_exc
-            normalized = self._normalize_outline_result(result_dict)
-            outline_tree = OutlineTreeData.model_validate(normalized)
+            outline_tree = OutlineTreeData.model_validate(result_dict)
+            outline_data = outline_tree.model_dump(mode="json")
 
-            story = normalized["story"]
+            story = outline_data["story"]
             work = Work(
                 user_id=DEMO_USER_ID,
                 title=story["title"],
                 genre=story["genre"],
                 idea=payload.idea.strip(),
                 tags=payload.tags,
-                outline_tree=normalized,
+                outline_tree=outline_data,
                 status="草稿",
             )
             db.add(work)
@@ -509,7 +626,7 @@ class WorkService:
             db.refresh(work)
 
             # Create character records from outline
-            characters_data = normalized.get("characters", [])
+            characters_data = outline_data.get("characters", [])
             for char_data in characters_data:
                 char = Character(
                     work_id=work.id,
@@ -557,99 +674,20 @@ class WorkService:
                 len(payload.idea or ""), len(payload.tags or [])
             )
             _ensure_demo_user(db)
-            emit("outline_status", {"phase": "generating", "message": "AI 正在生成大纲草案..."})
-
-            template = self._read_prompt("work_generate_outline.txt")
-            prompt = PromptTemplate.from_template(template)
-
-            chain = prompt | self.outline_json_llm
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
-
-            raw_output = ""
-            emitted_non_empty_chunk = False
-            chunk_count = 0
-            non_empty_chunk_count = 0
-            t_stream = time.perf_counter()
-            stream_timed_out = False
-            try:
-                async with asyncio.timeout(OUTLINE_STREAM_TIMEOUT_S):
-                    async for chunk in chain.astream({
-                        "idea": payload.idea.strip(),
-                        "tags": tags_str,
-                    }):
-                        chunk_count += 1
-                        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-                        if text:
-                            raw_output += text
-                            emitted_non_empty_chunk = True
-                            non_empty_chunk_count += 1
-            except TimeoutError:
-                stream_timed_out = True
-                emit("outline_status", {"phase": "generating", "message": "生成耗时较长，正在切换稳态模式..."})
-                logger.warning(
-                    "work.generate_outline_stream stream_timeout timeout_s=%s chunks=%s non_empty_chunks=%s",
-                    OUTLINE_STREAM_TIMEOUT_S, chunk_count, non_empty_chunk_count
-                )
-            logger.info(
-                "work.generate_outline_stream stream_done elapsed_ms=%.1f chunks=%s non_empty_chunks=%s raw_len=%s",
-                (time.perf_counter() - t_stream) * 1000,
-                chunk_count,
-                non_empty_chunk_count,
-                len(raw_output),
-            )
-
-            # Some providers stream reasoning-only deltas with empty `content` in OpenAI-compatible mode.
-            # In that case LangChain chunks can be empty throughout; fallback to non-stream call to get final JSON.
-            if stream_timed_out or not emitted_non_empty_chunk or not raw_output.strip():
-                logger.warning(
-                    "work.generate_outline_stream stream_empty_fallback triggered chunks=%s raw_len=%s",
-                    chunk_count, len(raw_output)
-                )
-                t_fallback = time.perf_counter()
-                try:
-                    async with asyncio.timeout(OUTLINE_FALLBACK_TIMEOUT_S):
-                        ai_msg = await chain.ainvoke({
-                            "idea": payload.idea.strip(),
-                            "tags": tags_str,
-                        })
-                except TimeoutError as exc:
-                    emit("error", {"message": f"大纲生成超时（>{OUTLINE_FALLBACK_TIMEOUT_S}s）"})
-                    logger.error(
-                        "work.generate_outline_stream fallback_timeout timeout_s=%s",
-                        OUTLINE_FALLBACK_TIMEOUT_S
-                    )
-                    return
-                raw_output = _llm_message_text(ai_msg)
-                logger.info(
-                    "work.generate_outline_stream fallback_done elapsed_ms=%.1f raw_len=%s",
-                    (time.perf_counter() - t_fallback) * 1000,
-                    len(raw_output),
-                )
+            result_dict = await self._generate_outline_sections(payload.idea.strip(), tags_str, emit=emit)
             emit("outline_status", {"phase": "parsing", "message": "正在解析并构建大纲树..."})
 
-            # Parse the accumulated JSON
-            try:
-                t_parse = time.perf_counter()
-                result_dict = _parse_json_from_llm_message_content(raw_output)
-                logger.info(
-                    "work.generate_outline_stream parse_done elapsed_ms=%.1f keys=%s",
-                    (time.perf_counter() - t_parse) * 1000,
-                    list(result_dict.keys()) if isinstance(result_dict, dict) else "n/a",
-                )
-            except (json.JSONDecodeError, ValueError) as parse_exc:
-                _log_json_decode_context(parse_exc, raw_output) if isinstance(parse_exc, json.JSONDecodeError) else logger.error("outline parse failed: %s", parse_exc)
-                emit("error", {"message": f"大纲解析失败: {parse_exc}"})
-                return
-
-            normalized = self._normalize_outline_result(result_dict)
-            outline_tree = OutlineTreeData.model_validate(normalized)
-            story = normalized["story"]
+            outline_tree = OutlineTreeData.model_validate(result_dict)
+            outline_data = outline_tree.model_dump(mode="json")
+            story = outline_data["story"]
             logger.info(
-                "work.generate_outline_stream normalize_done timeline=%s branches=%s foreshadowing=%s characters=%s",
-                len(normalized.get("timeline", [])),
-                len(normalized.get("branches", [])),
-                len(normalized.get("foreshadowing", [])),
-                len(normalized.get("characters", [])),
+                "work.generate_outline_stream validate_done timeline=%s branches=%s foreshadowing=%s characters=%s character_links=%s",
+                len(outline_data.get("timeline", [])),
+                len(outline_data.get("branches", [])),
+                len(outline_data.get("foreshadowing", [])),
+                len(outline_data.get("characters", [])),
+                len(outline_data.get("character_links", [])),
             )
 
             emit("outline_tree_progress", {
@@ -658,32 +696,32 @@ class WorkService:
                 "total": 1,
                 "node": story,
             })
-            for i, node in enumerate(normalized.get("timeline", []), start=1):
+            for i, node in enumerate(outline_data.get("timeline", []), start=1):
                 emit("outline_tree_progress", {
                     "section": "timeline",
                     "index": i,
-                    "total": len(normalized.get("timeline", [])),
+                    "total": len(outline_data.get("timeline", [])),
                     "node": node,
                 })
-            for i, node in enumerate(normalized.get("branches", []), start=1):
+            for i, node in enumerate(outline_data.get("branches", []), start=1):
                 emit("outline_tree_progress", {
                     "section": "branches",
                     "index": i,
-                    "total": len(normalized.get("branches", [])),
+                    "total": len(outline_data.get("branches", [])),
                     "node": node,
                 })
-            for i, node in enumerate(normalized.get("foreshadowing", []), start=1):
+            for i, node in enumerate(outline_data.get("foreshadowing", []), start=1):
                 emit("outline_tree_progress", {
                     "section": "foreshadowing",
                     "index": i,
-                    "total": len(normalized.get("foreshadowing", [])),
+                    "total": len(outline_data.get("foreshadowing", [])),
                     "node": node,
                 })
-            for i, node in enumerate(normalized.get("characters", []), start=1):
+            for i, node in enumerate(outline_data.get("characters", []), start=1):
                 emit("outline_tree_progress", {
                     "section": "characters",
                     "index": i,
-                    "total": len(normalized.get("characters", [])),
+                    "total": len(outline_data.get("characters", [])),
                     "node": node,
                 })
             work = Work(
@@ -692,7 +730,7 @@ class WorkService:
                 genre=story["genre"],
                 idea=payload.idea.strip(),
                 tags=payload.tags,
-                outline_tree=normalized,
+                outline_tree=outline_data,
                 status="草稿",
             )
             db.add(work)
@@ -701,7 +739,7 @@ class WorkService:
             db.refresh(work)
 
             # Create character records from outline
-            characters_data = normalized.get("characters", [])
+            characters_data = outline_data.get("characters", [])
             for char_data in characters_data:
                 char = Character(
                     work_id=work.id,
@@ -730,7 +768,7 @@ class WorkService:
             emit("outline_done", {
                 "work_id": work.id,
                 "title": story["title"],
-                "outline_tree": normalized,
+                "outline_tree": outline_data,
             })
             logger.info(
                 "work.generate_outline_stream done total_ms=%.1f work_id=%s",
@@ -1284,6 +1322,45 @@ class WorkService:
         db.commit()
         db.refresh(chapter)
         return ChapterOut.model_validate(chapter)
+
+    @staticmethod
+    def get_chapter_intel(work_id: str, chapter_number: int, db: Session) -> ChapterIntelOut:
+        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+        if not chapter:
+            raise HTTPException(status_code=404, detail="章节不存在")
+
+        metadata = (
+            db.query(ChapterMetadata)
+            .filter_by(work_id=work_id, chapter_number=chapter_number)
+            .first()
+        )
+
+        if not metadata:
+            return ChapterIntelOut(
+                work_id=work_id,
+                chapter_number=chapter_number,
+                summary="",
+                key_plot_points=[],
+                outline_links=[],
+                involved_characters=[],
+                foreshadows=[],
+                facts=[],
+                updated_at=None,
+                chapter_updated_at=chapter.updated_at,
+            )
+
+        return ChapterIntelOut(
+            work_id=work_id,
+            chapter_number=chapter_number,
+            summary=metadata.summary or "",
+            key_plot_points=list(metadata.key_plot_points or []),
+            outline_links=list(metadata.outline_links or []),
+            involved_characters=list(metadata.involved_characters or []),
+            foreshadows=list(metadata.foreshadows or []),
+            facts=list(metadata.facts or []),
+            updated_at=metadata.updated_at,
+            chapter_updated_at=chapter.updated_at,
+        )
 
     # DEPRECATED: chapter_chat_edit is no longer actively called by the frontend.
     # The SupervisorAgent's edit_chapter tool uses EditChapterAgent instead.

@@ -117,3 +117,25 @@ class AgentLog(Base):
     # Extra metadata: stage, event type, tool calls, etc.
     meta: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+
+
+class ChapterMetadata(Base):
+    """LLM 生成的章节元数据 — 正文写作/编辑后自动产出"""
+    __tablename__ = "chapter_metadata"
+    __table_args__ = (
+        UniqueConstraint("work_id", "chapter_number", name="uq_work_chapter_metadata"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    work_id: Mapped[str] = mapped_column(String(36), ForeignKey("works.id", ondelete="CASCADE"), nullable=False)
+    chapter_number: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    summary: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    key_plot_points: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    outline_links: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    involved_characters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    foreshadows: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+    facts: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

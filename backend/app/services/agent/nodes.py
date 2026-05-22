@@ -21,10 +21,11 @@ def _read_prompt(file_name: str) -> str:
 
 
 def _get_llm(temperature: float = 0.7) -> ChatOpenAI:
+    model_conf = settings.get_model_config()
     return ChatOpenAI(
-        model=settings.llm_model,
-        api_key=settings.llm_api_key,
-        base_url=settings.llm_base_url,
+        model=settings.default_model,
+        api_key=model_conf["api_key"],
+        base_url=model_conf["base_url"],
         temperature=temperature,
         streaming=True,
     )
@@ -173,42 +174,52 @@ async def thinking_node(state: AgentGraphState, emit, db: Session) -> AgentGraph
     if not json_started:
         pre_json_text = raw_output
 
-    # Parse JSON from the full output to extract metadata
+    # Parse the required JSON metadata from the full output.
     notes = pre_json_text
-    title = f"第{state.chapter_number}章"
-    outline_changes_needed = False
-    outline_change_reason = ""
-    outline_change_operations = []
-    needed_queries = []
+    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
+    if not json_match:
+        json_match = re.search(r"\{[\s\S]*\"title\"[\s\S]*\}", raw_output)
+    if not json_match:
+        raise ValueError("构思阶段输出缺少必需的 JSON 元数据块")
 
-    try:
-        # Try fenced JSON first
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
-        if json_match:
-            result = json.loads(json_match.group(1))
-        else:
-            # Try bare JSON with "title" key
-            json_match = re.search(r"\{[\s\S]*\"title\"[\s\S]*\}", raw_output)
-            if json_match:
-                result = json.loads(json_match.group())
-            else:
-                result = None
+    result = json.loads(json_match.group(1) if json_match.lastindex else json_match.group())
+    if not isinstance(result, dict):
+        raise ValueError("构思阶段 JSON 元数据必须是对象")
 
-        if result:
-            title = result.get("title", title)
-            outline_changes_needed = result.get("outline_changes_needed", False)
-            outline_change_reason = result.get("outline_change_reason", "")
-            outline_change_operations = result.get("outline_change_operations", [])
-            needed_queries = result.get("needed_queries", [])
-    except (json.JSONDecodeError, Exception):
-        pass
+    required_fields = {
+        "title",
+        "outline_changes_needed",
+        "outline_change_reason",
+        "outline_change_operations",
+        "needed_queries",
+    }
+    missing_fields = sorted(required_fields - set(result))
+    if missing_fields:
+        raise ValueError(f"构思阶段 JSON 元数据缺少字段：{', '.join(missing_fields)}")
+
+    title = result["title"]
+    outline_changes_needed = result["outline_changes_needed"]
+    outline_change_reason = result["outline_change_reason"]
+    outline_change_operations = result["outline_change_operations"]
+    needed_queries = result["needed_queries"]
+
+    if not isinstance(title, str):
+        raise ValueError("构思阶段 JSON 字段 title 必须是字符串")
+    if not isinstance(outline_changes_needed, bool):
+        raise ValueError("构思阶段 JSON 字段 outline_changes_needed 必须是布尔值")
+    if not isinstance(outline_change_reason, str):
+        raise ValueError("构思阶段 JSON 字段 outline_change_reason 必须是字符串")
+    if not isinstance(outline_change_operations, list):
+        raise ValueError("构思阶段 JSON 字段 outline_change_operations 必须是数组")
+    if not isinstance(needed_queries, list):
+        raise ValueError("构思阶段 JSON 字段 needed_queries 必须是数组")
 
     state.thinking_notes = notes
     state.chapter_title = title
     state.outline_changes_needed = outline_changes_needed
     state.outline_change_reason = outline_change_reason
     state.outline_change_operations = outline_change_operations
-    state.needed_queries = needed_queries if isinstance(needed_queries, list) else []
+    state.needed_queries = needed_queries
 
     emit("thinking_done", {"notes": notes})
     emit("title_proposed", {"title": title})
@@ -412,7 +423,11 @@ async def outline_edit_node(state: AgentGraphState, emit, db: Session) -> AgentG
     work.outline_tree = updated_outline
     work.title = story.get("title", work.title)
     work.genre = story.get("genre", work.genre)
-    db.commit()
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
 
     # Update state with new outline
     state.outline_tree = json.dumps(updated_outline, ensure_ascii=False, indent=2)
@@ -454,8 +469,14 @@ async def save_node(state: AgentGraphState, emit, db: Session) -> AgentGraphStat
         )
         db.add(chapter)
 
-    db.commit()
-    db.refresh(chapter)
+    try:
+        db.commit()
+        db.refresh(chapter)
+    except Exception as exc:
+        db.rollback()
+        state.error = f"保存章节失败：{exc!r}"
+        emit("error", {"message": state.error})
+        return state
 
     state.saved = True
     emit("saved", {
@@ -471,6 +492,17 @@ async def save_node(state: AgentGraphState, emit, db: Session) -> AgentGraphStat
 
 async def update_characters_node(state: AgentGraphState, emit, db: Session) -> AgentGraphState:
     """Node: After saving, analyze the chapter to update character states."""
+    from pydantic import BaseModel as PydanticBase, Field
+
+    class CharacterUpdateNode(PydanticBase):
+        name: str = Field(description="角色名")
+        current_status: str = Field(default="", description="新状态")
+        current_goal: str = Field(default="", description="新目的")
+        last_location: str = Field(default="", description="新位置")
+
+    class CharacterUpdatesNodeResult(PydanticBase):
+        character_updates: list[CharacterUpdateNode] = Field(default_factory=list)
+
     emit("stage_start", {"stage": "update_characters", "label": "更新角色状态"})
 
     characters = db.query(Character).filter_by(work_id=state.work_id).all()
@@ -488,8 +520,9 @@ async def update_characters_node(state: AgentGraphState, emit, db: Session) -> A
     template = _read_prompt("agent_update_characters.txt")
     prompt = PromptTemplate.from_template(template)
     llm = _get_llm(temperature=0.3)
+    structured_llm = llm.with_structured_output(CharacterUpdatesNodeResult)
 
-    chain = prompt | llm
+    chain = prompt | structured_llm
 
     try:
         result = await chain.ainvoke({
@@ -499,35 +532,28 @@ async def update_characters_node(state: AgentGraphState, emit, db: Session) -> A
             "characters": char_text,
         })
 
-        raw = result.content if hasattr(result, "content") else str(result)
-
-        # Parse JSON
-        json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw, re.DOTALL)
-        if json_match:
-            updates = json.loads(json_match.group(1))
-        else:
-            json_match = re.search(r"\{[\s\S]*\"character_updates\"[\s\S]*\}", raw)
-            if json_match:
-                updates = json.loads(json_match.group())
-            else:
-                updates = {"character_updates": []}
+        updates = result.character_updates if result else []
 
         updated_names = []
-        for upd in updates.get("character_updates", []):
-            char_name = upd.get("name", "")
+        for upd in updates:
+            char_name = upd.name
             char = next((c for c in characters if c.name == char_name), None)
             if not char:
                 continue
-            if "current_status" in upd:
-                char.current_status = upd["current_status"]
-            if "current_goal" in upd:
-                char.current_goal = upd["current_goal"]
-            if "last_location" in upd:
-                char.last_location = upd["last_location"]
+            if upd.current_status:
+                char.current_status = upd.current_status
+            if upd.current_goal:
+                char.current_goal = upd.current_goal
+            if upd.last_location:
+                char.last_location = upd.last_location
             char.last_chapter = state.chapter_number
             updated_names.append(char_name)
 
-        db.commit()
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
         emit("characters_updated", {
             "message": f"已更新 {len(updated_names)} 个角色状态",
             "updated": updated_names,

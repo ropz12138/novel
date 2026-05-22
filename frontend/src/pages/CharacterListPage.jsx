@@ -1,3 +1,4 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -12,7 +13,6 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 const ROLE_TYPES = ["主角", "配角", "反派", "龙套", "路人"];
 const STATUS_OPTIONS = ["存活", "死亡", "失踪", "受伤", "修炼中", "昏迷"];
@@ -42,9 +42,17 @@ function CharacterCard({ char, onEdit, onDelete }) {
         </div>
       </div>
       <div className="mt-2 space-y-1 text-xs text-slate-500">
+        {char.gender && <p>性别：{char.gender}</p>}
+        {char.age && <p>年龄：{char.age}</p>}
         <p>状态：{char.current_status || "—"}</p>
         <p>目的：{char.current_goal || "—"}</p>
+        {char.last_location && <p>位置：{char.last_location}</p>}
         {char.first_chapter && <p>首次出场：第{char.first_chapter}章</p>}
+        {char.appearance && <p>外貌：{char.appearance}</p>}
+        {char.personality && <p>性格：{char.personality}</p>}
+        {char.background && <p>背景：{char.background}</p>}
+        {char.skills && <p>技能：{char.skills}</p>}
+        {char.notes && <p>备注：{char.notes}</p>}
       </div>
     </div>
   );

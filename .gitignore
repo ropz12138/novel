@@ -44,3 +44,5 @@ Thumbs.db
 
 # === Test temp files ===
 test.html
+docs/
+nginx-novel-locations.conf

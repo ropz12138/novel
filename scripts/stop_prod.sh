@@ -5,6 +5,20 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_DIR="$ROOT_DIR/.run"
 PID_FILE="$RUN_DIR/backend-prod.pid"
 
+# --- 读取端口配置 ---
+read_port_config() {
+  local cfg="$ROOT_DIR/config.json"
+  if [ ! -f "$cfg" ]; then
+    return 0
+  fi
+  PROD_PORT="$(python3 -c '
+import json
+from pathlib import Path
+cfg = json.loads(Path("'"$cfg"'").read_text(encoding="utf-8"))
+print(cfg["app"]["prod_port"])
+' 2>/dev/null || true)"
+}
+
 kill_tree() {
   local pid="$1"
   local children
@@ -26,7 +40,8 @@ if [ -f "$PID_FILE" ]; then
 fi
 
 # 清理残留端口
-pids_on_port="$(ss -tlnp "sport = :9001" 2>/dev/null | grep -oP 'pid=\K\d+' || true)"
+read_port_config
+pids_on_port="$(ss -tlnp "sport = :$PROD_PORT" 2>/dev/null | grep -oP 'pid=\K\d+' || true)"
 for pid_on_port in $pids_on_port; do
   if [ -n "$pid_on_port" ]; then
     kill "$pid_on_port" 2>/dev/null || true

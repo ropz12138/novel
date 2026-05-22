@@ -1,3 +1,4 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -19,7 +20,6 @@ import { Textarea } from "../components/ui/textarea";
 import { ConfirmBar } from "../components/agent/ConfirmBar";
 import { ProposalCard } from "../components/agent/ProposalCard";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 function extractChapterNumbers(outlineTree) {
   if (!outlineTree) return [];
@@ -93,7 +93,7 @@ export function AgentPage() {
   const [confirmType, setConfirmType] = useState(null);
   const [outlineProposal, setOutlineProposal] = useState(null);
   const [chatInput, setChatInput] = useState("");
-  const [autoMode, setAutoMode] = useState(false);
+  const [autoMode, setAutoMode] = useState(true);
 
   const chatEndRef = useRef(null);
   const sseRef = useRef(null);

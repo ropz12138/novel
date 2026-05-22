@@ -2,7 +2,7 @@
 
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -49,6 +49,9 @@ class SupervisorSession(Base):
     stage: Mapped[str] = mapped_column(String(20), nullable=False, default="idle")
     # 执行状态: running / waiting / completed / error
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="running")
+
+    # 自动模式：True 时所有编辑操作直接执行，不等待用户确认（默认开启）
+    auto_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
     # 当前执行中的子 Agent 会话信息
     active_child: Mapped[dict | None] = mapped_column(JSONB, nullable=True)

@@ -21,11 +21,11 @@
 - 若标签存在，必须在主线或角色设定中明确体现。
 - 若标签是“无特殊要求”，按最合理方向发挥。
 
-## JSON 要求（严格）
+## 工具调用要求（严格）
 
-1. 只输出一个 JSON 对象，不要输出任何额外文字。
-2. 必须包含键：story、timeline、branches、foreshadowing、characters。
-3. 所有值必须是合法 JSON 值，字符串必须双引号包裹。
+1. 必须调用 `submit_outline` 工具提交完整大纲，不要在普通文本 content 中输出大纲。
+2. 工具参数必须包含键：story、timeline、branches、foreshadowing、characters。
+3. characters 数组只能包含角色对象，禁止把字段名（如 current_goal、first_chapter）作为数组元素。
 4. branches.attach_to 必须引用 timeline 已存在的 id。
 5. side 只能为 left 或 right。
 6. chapter_start/chapter_end 必须是整数且 chapter_start <= chapter_end。
@@ -37,3 +37,12 @@
 - branches[]: {{id, name, attach_to, side, chapter_start, chapter_end, summary}}
 - foreshadowing[]: {{id, plant_node, payoff_node, content}}
 - characters[]: {{name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, first_chapter}}
+
+### 角色初始状态约束（重要）
+
+角色的所有字段都必须描述**故事开始前**的状态，即角色还没有经历任何大纲中列出的剧情事件时的初始面貌。具体要求：
+- appearance: 只描述故事开始前的外貌，禁止包含故事发展后才出现的外貌变化。
+- personality: 描述故事开始前的性格底色，禁止包含经历事件后才形成的性格转变。
+- skills: 只列出故事开始前已具备的能力，禁止列出来自故事后续成长才获得的能力。
+- current_status: 必须描述故事开始前的状态，禁止包含大纲中任何剧情事件发生后才出现的状态。
+- current_goal: 必须描述故事开始前的目的/动机，禁止填入剧情推进后才产生的新目标。

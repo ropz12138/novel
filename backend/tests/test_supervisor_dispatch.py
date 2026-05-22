@@ -1,7 +1,7 @@
 """测试 SupervisorAgent 派发工具重构
 
 验证：
-1. ALL_TOOLS 只有 6 个（3 查询 + 3 派发），旧的操作型工具已移除
+1. ALL_TOOLS 只有 9 个（5 查询 + 4 派发），旧的操作型工具已移除
 2. dispatch_outline / dispatch_chapter 的 schema 定义
 3. dispatch_outline coroutine 能正确派发给 OutlineAgent
 4. dispatch_chapter coroutine 能正确派发给 ChapterAgent / EditChapterAgent
@@ -18,23 +18,26 @@ from unittest.mock import AsyncMock, MagicMock, patch
 class TestDispatchToolRegistration:
     """验证重构后的工具注册"""
 
-    def test_all_tools_count_is_6(self):
-        """应该恰好注册 6 个工具（3 查询 + 3 派发）"""
+    def test_all_tools_count_is_9(self):
+        """应该恰好注册 9 个工具（5 查询 + 4 派发）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 6
+        assert len(ALL_TOOLS) == 9
 
     def test_query_tools_kept(self):
-        """3 个查询工具应保留"""
+        """5 个查询工具应保留"""
         from app.services.supervisor.tools import ALL_TOOLS
         names = {t.name for t in ALL_TOOLS}
         assert "query_characters" in names
         assert "query_chapters" in names
+        assert "query_chapter_meta" in names
+        assert "grep_chapter_meta" in names
         assert "grep" in names
 
     def test_dispatch_tools_exist(self):
-        """3 个派发工具应存在"""
+        """4 个派发工具应存在"""
         from app.services.supervisor.tools import ALL_TOOLS
         names = {t.name for t in ALL_TOOLS}
+        assert "dispatch_requirements_planner" in names
         assert "dispatch_outline" in names
         assert "dispatch_chapter" in names
         assert "dispatch_evaluation" in names
@@ -56,7 +59,13 @@ class TestDispatchToolRegistration:
 
     def test_dispatch_tools_are_async(self):
         """派发工具应有 coroutine（异步）"""
-        from app.services.supervisor.tools import dispatch_outline, dispatch_chapter, dispatch_evaluation
+        from app.services.supervisor.tools import (
+            dispatch_chapter,
+            dispatch_evaluation,
+            dispatch_outline,
+            dispatch_requirements_planner,
+        )
+        assert dispatch_requirements_planner.coroutine is not None
         assert dispatch_outline.coroutine is not None
         assert dispatch_chapter.coroutine is not None
         assert dispatch_evaluation.coroutine is not None
@@ -111,6 +120,16 @@ class TestDispatchToolSchemas:
         assert "chapter_number" in required
         assert "chapter_content" not in required
 
+    def test_dispatch_requirements_planner_schema(self):
+        from app.services.supervisor.tools import DispatchRequirementsPlannerInput
+        schema = DispatchRequirementsPlannerInput.model_json_schema()
+        props = schema["properties"]
+        assert "message" in props
+        assert "work_id" in props
+        required = schema.get("required", [])
+        assert "message" in required
+        assert "work_id" not in required
+
     def test_dispatch_outline_description_mentions_task(self):
         """dispatch_outline 的描述应体现「派发任务」语义"""
         from app.services.supervisor.tools import dispatch_outline
@@ -119,16 +138,23 @@ class TestDispatchToolSchemas:
         assert "大纲" in desc or "outline" in desc.lower()
 
     def test_dispatch_chapter_description_mentions_task(self):
-        """dispatch_chapter 的描述应体现「派发任务」语义"""
+        """dispatch_chapter 的描述应体现执行型语义，并区分元数据查询工具"""
         from app.services.supervisor.tools import dispatch_chapter
         desc = dispatch_chapter.description
         assert "章节" in desc or "chapter" in desc.lower()
+        assert "query_chapter_meta" in desc
+        assert "不是只读" in desc or "执行" in desc
 
     def test_dispatch_evaluation_description_mentions_task(self):
         """dispatch_evaluation 的描述应体现「评估」语义"""
         from app.services.supervisor.tools import dispatch_evaluation
         desc = dispatch_evaluation.description
         assert "评估" in desc or "evaluation" in desc.lower()
+
+    def test_dispatch_requirements_planner_description_mentions_task(self):
+        from app.services.supervisor.tools import dispatch_requirements_planner
+        desc = dispatch_requirements_planner.description
+        assert "需求" in desc or "todolist" in desc.lower()
 
 
 # ────────────────────────── 3. dispatch_outline coroutine 测试 ──────────────────────────
@@ -151,6 +177,7 @@ class TestDispatchOutlineCoroutine:
                 config=config,
             )
         assert "新小说" in result or "w-new" in result
+        assert "supervisor_stop_after_tool" not in config["configurable"]
         mock_create.assert_awaited_once()
 
     @pytest.mark.asyncio
@@ -184,8 +211,9 @@ class TestDispatchOutlineCoroutine:
                 message="写个故事",
                 work_id=None,
                 config=config,
-            )
+        )
         assert "失败" in result or "错误" in result
+        assert "supervisor_stop_after_tool" not in config["configurable"]
 
     @pytest.mark.asyncio
     async def test_dispatch_outline_edit_error(self):
@@ -215,8 +243,11 @@ class TestDispatchChapterCoroutine:
         from app.services.supervisor.tools import dispatch_chapter
 
         mock_db = MagicMock()
-        # mock: 章节不存在 → 走写章节逻辑
-        mock_db.query.return_value.filter_by.return_value.first.return_value = None
+        # mock: 章节不存在，且当前最大章节为 0（下一章应为第1章）
+        chapter_query = MagicMock()
+        chapter_query.filter_by.return_value.first.return_value = None  # existing chapter check
+        chapter_query.filter_by.return_value.order_by.return_value.first.return_value = None  # max chapter check
+        mock_db.query.return_value = chapter_query
 
         config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
 
@@ -256,6 +287,7 @@ class TestDispatchChapterCoroutine:
         # mock SupervisorSession for edit_chapter flow
         mock_sess = MagicMock()
         mock_sess.id = "sess-1"
+        mock_sess.work_id = "w-1"
         sess_q = MagicMock()
         sess_q.filter_by.return_value.first.return_value = mock_sess
 
@@ -266,8 +298,8 @@ class TestDispatchChapterCoroutine:
             return sess_q
         mock_db.query.side_effect = query_side_effect
 
-        with patch("app.services.supervisor.edit_chapter_agent.EditChapterAgent.edit", new_callable=AsyncMock) as mock_edit:
-            mock_edit.return_value = {
+        with patch("app.services.supervisor.edit_chapter_agent.EditChapterAgent.run", new_callable=AsyncMock) as mock_run:
+            mock_run.return_value = {
                 "summary": {"lines_added": 3, "lines_removed": 1},
                 "old_content": "旧内容",
                 "new_content": "新内容",
@@ -283,10 +315,16 @@ class TestDispatchChapterCoroutine:
 
     @pytest.mark.asyncio
     async def test_dispatch_chapter_no_chapter_number(self):
-        """没有 chapter_number 时，由子 Agent 自己决定（走 ChapterAgentGraph）"""
+        """没有 chapter_number 时，应自动写“下一章”（expected_next）"""
         from app.services.supervisor.tools import dispatch_chapter
 
         mock_db = MagicMock()
+        chapter_query = MagicMock()
+        chapter_query.filter_by.return_value.first.return_value = None
+        max_ch = MagicMock()
+        max_ch.chapter_number = 3
+        chapter_query.filter_by.return_value.order_by.return_value.first.return_value = max_ch
+        mock_db.query.return_value = chapter_query
         config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
 
         with patch("app.services.agent.graph.ChapterAgentGraph.start", new_callable=AsyncMock) as mock_start:
@@ -300,30 +338,31 @@ class TestDispatchChapterCoroutine:
                 chapter_number=None,
                 config=config,
             )
-        assert "章" in result or "完成" in result
+        assert "第4章" in result
 
     @pytest.mark.asyncio
     async def test_dispatch_chapter_write_error(self):
-        """写章节失败时返回错误信息"""
+        """请求越界新增章节时，返回顺序限制错误信息"""
         from app.services.supervisor.tools import dispatch_chapter
 
         mock_db = MagicMock()
-        # mock: 章节不存在 → 走写章节逻辑（不触发现有章节的编辑分支）
-        mock_db.query.return_value.filter_by.return_value.first.return_value = None
+        # 当前最大章节为 3，只允许新增第4章
+        chapter_query = MagicMock()
+        chapter_query.filter_by.return_value.first.return_value = None
+        max_ch = MagicMock()
+        max_ch.chapter_number = 3
+        chapter_query.filter_by.return_value.order_by.return_value.first.return_value = max_ch
+        mock_db.query.return_value = chapter_query
         config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
 
-        with patch("app.services.agent.graph.ChapterAgentGraph.start", new_callable=AsyncMock) as mock_start:
-            mock_record = MagicMock()
-            mock_record.status = "error"
-            mock_start.return_value = mock_record
-
-            result = await dispatch_chapter.coroutine(
-                instruction="写一个不存在的章节",
-                work_id="w-1",
-                chapter_number=99,
-                config=config,
-            )
-        assert "失败" in result or "错误" in result
+        result = await dispatch_chapter.coroutine(
+            instruction="写一个不存在的章节",
+            work_id="w-1",
+            chapter_number=99,
+            config=config,
+        )
+        assert "新增章节必须严格顺序" in result
+        assert "只能新增第4章" in result
 
 
 # ────────────────────────── 5. 查询工具不变测试 ──────────────────────────

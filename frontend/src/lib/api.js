@@ -1,5 +1,5 @@
+import { API_BASE } from "./runtime-config";
 /** API helpers for supervisor session management. */
-const API_BASE = "http://127.0.0.1:9001/api";
 
 export const sessionApi = {
   // ── Supervisor sessions ──

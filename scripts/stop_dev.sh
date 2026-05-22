@@ -4,6 +4,20 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 RUN_DIR="$ROOT_DIR/.run"
 
+# --- 读取端口配置 ---
+read_port_config() {
+  local cfg="$ROOT_DIR/config.json"
+  if [ ! -f "$cfg" ]; then
+    return 0
+  fi
+  DEV_PORT="$(python3 -c '
+import json
+from pathlib import Path
+cfg = json.loads(Path("'"$cfg"'").read_text(encoding="utf-8"))
+print(cfg["app"]["dev_port"])
+' 2>/dev/null || true)"
+}
+
 # 杀进程树
 kill_tree() {
   local pid="$1"
@@ -34,8 +48,10 @@ done
 
 sleep 1
 
+read_port_config
+
 # 清理可能残留的端口占用
-for port in 9000 9001; do
+for port in 9000 "$DEV_PORT"; do
   pids_on_port="$(ss -tlnp "sport = :$port" 2>/dev/null | grep -oP 'pid=\K\d+' || true)"
   for pid_on_port in $pids_on_port; do
     if [ -n "$pid_on_port" ]; then

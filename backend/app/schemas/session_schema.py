@@ -11,5 +11,6 @@ class SupervisorSessionOut(BaseModel):
     title: str
     stage: str
     status: str
+    auto_mode: bool = False
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None

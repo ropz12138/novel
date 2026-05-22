@@ -79,7 +79,20 @@ class CharacterService:
         existing = db.query(Character).filter_by(work_id=work_id, name=payload.name).first()
         if existing:
             raise HTTPException(status_code=409, detail=f"角色 '{payload.name}' 已存在")
-        char = Character(work_id=work_id, **payload.model_dump())
+        data = payload.model_dump()
+        first_chapter = data.get("first_chapter") or 1
+        # 创建角色时统一初始化动态状态，避免不同入口状态不一致
+        if not data.get("current_status"):
+            data["current_status"] = "存活"
+        data["current_goal"] = data.get("current_goal", "") or ""
+        data["last_location"] = data.get("last_location", "") or ""
+        data["relationships"] = data.get("relationships", {}) or {}
+        if data.get("last_chapter") is None:
+            data["last_chapter"] = first_chapter
+        if data.get("first_chapter") is None:
+            data["first_chapter"] = first_chapter
+
+        char = Character(work_id=work_id, **data)
         db.add(char)
         db.flush()
         CharacterService.sync_outline_characters(work_id, db)
@@ -195,25 +208,46 @@ class CharacterService:
                 "chapter_number": c.chapter_number,
                 "title": c.title,
                 "status": c.status,
-                "content_preview": c.content[:500] + ("..." if len(c.content) > 500 else "") if c.content else "",
+                "content": c.content or "",
             }
             for c in chapters
         ]
 
     @staticmethod
-    def grep(work_id: str, keyword: str, scope: str = "all", context_chars: int = 200, db: Session = None) -> list[dict]:
-        """Grep-like keyword search across characters and/or chapters."""
+    def grep(
+        work_id: str,
+        keyword: str,
+        scope: str = "all",
+        context_chars: int = 200,
+        db: Session = None,
+        character_name: str | None = None,
+        chapter_number: int | None = None,
+    ) -> list[dict]:
+        """Grep-like keyword search across characters and/or chapters.
+
+        Supports filtering by specific character_name or chapter_number.
+        """
         results = []
         kw = keyword.lower()
 
         if scope in ("all", "characters"):
-            chars = db.query(Character).filter_by(work_id=work_id).all()
-            text_fields = ["appearance", "personality", "background", "skills", "current_goal", "notes"]
+            q = db.query(Character).filter_by(work_id=work_id)
+            if character_name:
+                q = q.filter(Character.name == character_name)
+            chars = q.all()
+            text_fields = [
+                "name", "role_type", "gender", "age", "appearance", "personality",
+                "background", "skills", "current_status", "current_goal",
+                "last_location", "notes",
+            ]
             for c in chars:
                 for field in text_fields:
                     text = getattr(c, field, "") or ""
-                    idx = text.lower().find(kw)
-                    if idx >= 0:
+                    idx = 0
+                    while True:
+                        idx = text.lower().find(kw, idx)
+                        if idx < 0:
+                            break
                         start = max(0, idx - context_chars)
                         end = min(len(text), idx + len(keyword) + context_chars)
                         snippet = text[start:end]
@@ -223,26 +257,46 @@ class CharacterService:
                             "field": field,
                             "snippet": snippet,
                         })
+                        idx += len(keyword)
+                rel_text = str(c.relationships or "")
+                rel_idx = 0
+                while True:
+                    rel_idx = rel_text.lower().find(kw, rel_idx)
+                    if rel_idx < 0:
+                        break
+                    start = max(0, rel_idx - context_chars)
+                    end = min(len(rel_text), rel_idx + len(keyword) + context_chars)
+                    results.append({
+                        "source": "character",
+                        "character_name": c.name,
+                        "field": "relationships",
+                        "snippet": rel_text[start:end],
+                    })
+                    rel_idx += len(keyword)
 
         if scope in ("all", "chapters"):
-            chapters = db.query(Chapter).filter_by(work_id=work_id).filter(Chapter.content != "").all()
+            q = db.query(Chapter).filter_by(work_id=work_id).filter(Chapter.content != "")
+            if chapter_number is not None:
+                q = q.filter(Chapter.chapter_number == int(chapter_number))
+            chapters = q.all()
             for ch in chapters:
-                content = ch.content or ""
-                idx = 0
-                while True:
-                    idx = content.lower().find(kw, idx)
-                    if idx < 0:
-                        break
-                    start = max(0, idx - context_chars)
-                    end = min(len(content), idx + len(keyword) + context_chars)
-                    snippet = content[start:end]
-                    results.append({
-                        "source": "chapter",
-                        "chapter_number": ch.chapter_number,
-                        "chapter_title": ch.title,
-                        "position": idx,
-                        "snippet": snippet,
-                    })
-                    idx += len(keyword)
+                for field_name, content in (("title", ch.title or ""), ("content", ch.content or "")):
+                    idx = 0
+                    while True:
+                        idx = content.lower().find(kw, idx)
+                        if idx < 0:
+                            break
+                        start = max(0, idx - context_chars)
+                        end = min(len(content), idx + len(keyword) + context_chars)
+                        snippet = content[start:end]
+                        results.append({
+                            "source": "chapter",
+                            "chapter_number": ch.chapter_number,
+                            "chapter_title": ch.title,
+                            "field": field_name,
+                            "position": idx,
+                            "snippet": snippet,
+                        })
+                        idx += len(keyword)
 
         return results

@@ -2,7 +2,8 @@
   "app": {
     "name": "novel-backend",
     "host": "0.0.0.0",
-    "port": 9001,
+    "dev_port": 9001,
+    "prod_port": 9002,
     "debug": true
   },
   "database": {
@@ -17,11 +18,21 @@
     "pool_timeout": 30,
     "pool_recycle": 1800
   },
-  "llm": {
-    "base_url": "https://your-llm-api-base-url/v1",
-    "api_key": "your_llm_api_key",
-    "model": "your_model_name"
-  },
+  "llm": [
+    {
+      "your-model-name": {
+        "base_url": "https://your-llm-api-base-url/v1",
+        "api_key": "your_llm_api_key"
+      }
+    },
+    {
+      "your-pro-model-name": {
+        "base_url": "https://your-llm-api-base-url/v1",
+        "api_key": "your_llm_api_key"
+      }
+    }
+  ],
+  "default_model": "your-model-name",
   "observability": {
     "langsmith_api_key": "your_langsmith_api_key",
     "langsmith_project": "Novel",

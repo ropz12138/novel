@@ -1,3 +1,4 @@
+import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useState } from "react";
 import {
   ChevronLeft,
@@ -13,7 +14,6 @@ import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
 
-const API_BASE = "http://127.0.0.1:9001/api";
 
 const ROLE_TYPES = ["主角", "配角", "反派", "龙套", "路人"];
 const STATUS_OPTIONS = ["存活", "死亡", "失踪", "受伤", "修炼中", "昏迷"];

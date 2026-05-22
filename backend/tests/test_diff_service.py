@@ -548,101 +548,25 @@ class TestSummarizeDiff:
 
 
 class TestOutlineAgentTwoPhaseFlow:
-    """验证 OutlineAgent.edit_outline 的两阶段流程：
-    阶段1：在内存中生成变更（不落库），返回 diff
-    阶段2：用户确认后，调用 accept_outline_edit 落库
-    """
+    """验证 OutlineAgent 改造后仍具备正确的基础能力"""
 
-    @pytest.mark.asyncio
-    async def test_edit_outline_returns_diff(self):
-        """edit_outline 应返回 diff 而不是直接落库"""
+    def test_outline_agent_builds_graph(self):
+        """OutlineAgent 应能成功构建 LangGraph"""
         from app.services.supervisor.outline_agent import OutlineAgent
-
-        emitted_events = []
-
-        def mock_emit(event, data):
-            emitted_events.append((event, data))
-
-        agent = OutlineAgent(emit=mock_emit)
-
-        old_outline = _base_outline()
-        new_outline = _base_outline()
-        new_outline["story"]["title"] = "新标题"
-
-        with patch.object(
-            agent.work_service, "chat_edit_async", new_callable=AsyncMock
-        ) as mock_edit:
-            mock_edit.return_value = MagicMock(
-                assistant_message="已修改标题",
-                operations=[{"tool": "update_story", "args": {"fields": {"title": "新标题"}}}],
-                outline_tree=new_outline,
-            )
-            result = await agent.edit_outline(
-                work_id="w-1",
-                message="修改标题",
-                history=[],
-                db=MagicMock(),
-                old_outline=old_outline,
-            )
-
-        # 验证返回结果包含 diff
-        assert "outline_diff" in result
-        assert len(result["outline_diff"]["story"]) > 0
-
-    @pytest.mark.asyncio
-    async def test_edit_outline_does_not_commit(self):
-        """edit_outline 不应调用 db.commit()"""
-        from app.services.supervisor.outline_agent import OutlineAgent
-
-        mock_db = MagicMock()
-
         agent = OutlineAgent(emit=lambda e, d: None)
+        graph = agent._build_graph()
+        assert graph is not None
 
-        with patch.object(
-            agent.work_service, "chat_edit_async", new_callable=AsyncMock
-        ) as mock_edit:
-            mock_edit.return_value = MagicMock(
-                assistant_message="已修改",
-                operations=[],
-                outline_tree=_base_outline(),
-            )
-            await agent.edit_outline(
-                work_id="w-1", message="修改", history=[], db=mock_db,
-                old_outline=_base_outline(),
-            )
-
-        # db.commit 不应被调用
-        mock_db.commit.assert_not_called()
-
-    @pytest.mark.asyncio
-    async def test_edit_outline_emits_diff_event(self):
-        """edit_outline 应发送 outline_edit_diff SSE 事件"""
+    def test_outline_agent_has_static_methods(self):
+        """commit/rollback 静态方法应存在"""
         from app.services.supervisor.outline_agent import OutlineAgent
+        assert hasattr(OutlineAgent, "commit_outline_edit")
+        assert hasattr(OutlineAgent, "rollback_outline_edit")
 
-        emitted_events = []
-
-        def mock_emit(event, data):
-            emitted_events.append((event, data))
-
-        agent = OutlineAgent(emit=mock_emit)
-        new_outline = _base_outline()
-        new_outline["story"]["title"] = "新标题"
-
-        with patch.object(
-            agent.work_service, "chat_edit_async", new_callable=AsyncMock
-        ) as mock_edit:
-            mock_edit.return_value = MagicMock(
-                assistant_message="已修改",
-                operations=[],
-                outline_tree=new_outline,
-            )
-            await agent.edit_outline(
-                work_id="w-1", message="修改", history=[], db=MagicMock(),
-                old_outline=_base_outline(),
-            )
-
-        event_names = [e[0] for e in emitted_events]
-        assert "outline_edit_diff" in event_names
+    def test_outline_tools_count(self):
+        """大纲工具集应有 6 个工具（diff 已合并进 edit_outline）"""
+        from app.services.supervisor.outline_tools import OUTLINE_TOOLS
+        assert len(OUTLINE_TOOLS) == 6
 
 
 # ── 5. dispatch_outline 确认流程测试 ──

@@ -34,11 +34,42 @@ def list_sessions(
     db: Session,
     work_id: str | None = None,
 ) -> list[SupervisorSession]:
-    """List supervisor sessions, optionally filtered by work_id."""
+    """List supervisor sessions, optionally filtered by work_id.
+
+    Only returns sessions that have at least one user message (real conversations).
+    """
+    from app.models.message_model import Message
+    from sqlalchemy import exists
+
     q = db.query(SupervisorSession)
     if work_id:
         q = q.filter_by(work_id=work_id)
-    return q.order_by(SupervisorSession.updated_at.desc()).all()
+    has_user = exists().where(
+        Message.session_id == SupervisorSession.id,
+        Message.role == "user",
+    )
+    return q.filter(has_user).order_by(SupervisorSession.updated_at.desc()).all()
+
+
+def delete_session_if_no_user_messages(db: Session, session_id: str) -> bool:
+    """Remove orphan session rows that never received a user message."""
+    from app.models.message_model import Message
+
+    has_user = (
+        db.query(Message.id)
+        .filter_by(session_id=session_id, role="user")
+        .limit(1)
+        .first()
+    )
+    if has_user:
+        return False
+    session = get_session(db, session_id)
+    if not session:
+        return False
+    db.delete(session)
+    db.commit()
+    logger.info("session_service.delete_orphan id=%s", session_id)
+    return True
 
 
 def get_session(db: Session, session_id: str) -> SupervisorSession | None:
