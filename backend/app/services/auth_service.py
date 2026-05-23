@@ -5,6 +5,7 @@ import secrets
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
+from app.core.auth import create_access_token
 from app.core.database import SessionLocal
 from app.models.work_model import User
 from app.schemas.auth_schema import LoginRequest, RegisterRequest
@@ -42,8 +43,9 @@ class AuthService:
                     detail="邮箱或密码错误",
                 )
 
+            token = create_access_token(user.id)
             return {
-                "token": f"user-{user.id}",
+                "token": token,
                 "user": {
                     "id": user.id,
                     "username": user.username,
@@ -74,8 +76,9 @@ class AuthService:
             db.commit()
             db.refresh(user)
 
+            token = create_access_token(user.id)
             return {
-                "token": f"user-{user.id}",
+                "token": token,
                 "user": {
                     "id": user.id,
                     "username": user.username,

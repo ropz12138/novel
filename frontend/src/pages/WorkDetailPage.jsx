@@ -1,4 +1,5 @@
 import { API_BASE } from "../lib/runtime-config";
+import { authFetch } from "../lib/authFetch";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -1197,7 +1198,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
     timelineIdRef.current = 0;
 
     const ctl = new AbortController();
-    fetch(url, {
+    authFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -1307,7 +1308,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
         finalizeLastRunningStep();
         lastOutlinePhaseRef.current = "";
         if (d.work_id && onOutlineUpdated) {
-          fetch(`${API_BASE}/works/${d.work_id}`)
+          authFetch(`${API_BASE}/works/${d.work_id}`)
             .then((r) => r.json())
             .then((w) => {
               if (w.outline_tree) onOutlineUpdated(w.outline_tree);
@@ -1321,7 +1322,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
         finalizeLastRunningStep();
         addMessage("assistant", d.message || "大纲已编辑。", { type: "outline_edited" });
         if (workId) {
-          fetch(`${API_BASE}/works/${workId}`)
+          authFetch(`${API_BASE}/works/${workId}`)
             .then((r) => r.json())
             .then((w) => {
               if (w.outline_tree) onOutlineUpdated(w.outline_tree);
@@ -1477,7 +1478,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
     try {
       const body = { session_id: sessionId, action: accept ? "accept" : "reject" };
       if (accept && diffTarget.new_content) body.new_content = diffTarget.new_content;
-      const res = await fetch(`${API_BASE}/supervisor/confirm`, {
+      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
@@ -1511,7 +1512,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
     if (!sessionId || (!outlineDiff && !characterDiff) || confirming) return;
     setConfirming(true);
     try {
-      const res = await fetch(`${API_BASE}/supervisor/confirm`, {
+      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ session_id: sessionId, action }),
@@ -1529,7 +1530,7 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
         setRunning(false);
         addMessage("assistant", "大纲和角色修改已保存。", { type: "outline_edited" });
         if (workId) {
-          fetch(`${API_BASE}/works/${workId}`)
+          authFetch(`${API_BASE}/works/${workId}`)
             .then((r) => r.json())
             .then((w) => {
               if (w.outline_tree) onOutlineUpdated(w.outline_tree);
@@ -2063,9 +2064,9 @@ export function WorkDetailPage() {
     const fetchWork = async () => {
       try {
         const [workRes, chaptersRes, charsRes] = await Promise.all([
-          fetch(`${API_BASE}/works/${workId}`),
-          fetch(`${API_BASE}/works/${workId}/chapters`),
-          fetch(`${API_BASE}/works/${workId}/characters`),
+          authFetch(`${API_BASE}/works/${workId}`),
+          authFetch(`${API_BASE}/works/${workId}/chapters`),
+          authFetch(`${API_BASE}/works/${workId}/characters`),
         ]);
         if (!workRes.ok) throw new Error("加载失败");
         if (!chaptersRes.ok) throw new Error("加载章节失败");
@@ -2183,7 +2184,7 @@ export function WorkDetailPage() {
   const saveOutline = async (tree) => {
     setSaving(true);
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/outline`, {
+      const res = await authFetch(`${API_BASE}/works/${workId}/outline`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ outline_tree: tree }),
@@ -2300,7 +2301,7 @@ export function WorkDetailPage() {
 
   const refreshChapters = async () => {
     try {
-      const chaptersRes = await fetch(`${API_BASE}/works/${workId}/chapters`);
+      const chaptersRes = await authFetch(`${API_BASE}/works/${workId}/chapters`);
       if (chaptersRes.ok) {
         const chaptersData = await chaptersRes.json();
         setChapters(chaptersData);
@@ -2319,7 +2320,7 @@ export function WorkDetailPage() {
 
   const refreshCharacters = async () => {
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/characters`);
+      const res = await authFetch(`${API_BASE}/works/${workId}/characters`);
       if (res.ok) {
         const data = await res.json();
         setCharacters(data);
@@ -2330,7 +2331,7 @@ export function WorkDetailPage() {
   const fetchChapterIntel = async (chapterNumber) => {
     if (!chapterNumber) return;
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/chapters/${chapterNumber}/intel`);
+      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/${chapterNumber}/intel`);
       if (!res.ok) return;
       const data = await res.json();
       handleChapterIntelUpdate(chapterNumber, data);
@@ -2343,7 +2344,7 @@ export function WorkDetailPage() {
     if (!effectiveChapterNum || savingChapter) return;
     setSavingChapter(true);
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/chapters/${effectiveChapterNum}`, {
+      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/${effectiveChapterNum}`, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: titleDraft, content: contentDraft }),
@@ -2380,7 +2381,7 @@ export function WorkDetailPage() {
     setEvaluatingChapter(true);
     setEvaluationError("");
     try {
-      const res = await fetch(`${API_BASE}/evaluation/works/${workId}/chapters/${effectiveChapterNum}`, {
+      const res = await authFetch(`${API_BASE}/evaluation/works/${workId}/chapters/${effectiveChapterNum}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ chapter_content: contentDraft }),

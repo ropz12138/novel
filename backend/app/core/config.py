@@ -29,6 +29,10 @@ class Settings:
 
         self._parse_llm_config(config)
 
+        auth = config.get("auth", {})
+        self.jwt_secret = auth.get("jwt_secret", "change-me-in-production")
+        self.jwt_expire_hours = int(auth.get("jwt_expire_hours", 72))
+
         observability = config.get("observability", {})
         self.langsmith_api_key = observability.get("langsmith_api_key", "")
         self.langsmith_project = observability.get("langsmith_project", "")
@@ -56,6 +60,8 @@ class Settings:
         self.langsmith_project = ""
         self.langsmith_endpoint = ""
         self.langsmith_tracing_v2 = False
+        self.jwt_secret = "change-me-in-production"
+        self.jwt_expire_hours = 72
 
     def _parse_llm_config(self, config: dict) -> None:
         """解析多模型配置列表。

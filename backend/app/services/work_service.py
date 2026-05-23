@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.config import settings
-from app.models.work_model import Chapter, ChapterMetadata, Character, User, Work
+from app.models.work_model import Chapter, ChapterMetadata, Character, Work
 from app.services.agent_log_service import log_event, new_session_id
 from app.schemas.work_schema import (
     BranchNode,
@@ -38,9 +38,6 @@ PROMPT_DIR = Path(__file__).resolve().parent / "prompt_templates"
 
 logger = logging.getLogger(__name__)
 
-# Hardcoded demo user until auth is implemented
-DEMO_USER_ID = "00000000-0000-0000-0000-000000000001"
-
 
 def _llm_message_text(ai_msg) -> str:
     raw = getattr(ai_msg, "content", "") or ""
@@ -53,17 +50,6 @@ def _llm_message_text(ai_msg) -> str:
                 parts.append(str(block.get("text", "")))
         raw = "".join(parts)
     return raw.strip()
-
-
-def _ensure_demo_user(db: Session) -> None:
-    if not db.query(User).filter_by(id=DEMO_USER_ID).first():
-        db.add(User(
-            id=DEMO_USER_ID,
-            username="创作者",
-            email="demo@novel.local",
-            password_hash="no-login",
-        ))
-        db.commit()
 
 
 # DEPRECATED: _ChatEditOutput is no longer used by chat_edit / chat_edit_async.
@@ -241,8 +227,8 @@ class WorkService:
         )
         self.chat_model = base_model
 
-        # 大纲生成使用 pro 模型（强制 tool_choice 场景需要更强的模型）
-        outline_model_name = "deepseek-v4-flash"  # deepseek-v4-pro 模型
+        # 大纲生成使用默认模型（由 config.json 的 default_model 控制）
+        outline_model_name = settings.default_model
         outline_conf = settings.get_model_config(outline_model_name)
         outline_model = ChatOpenAI(
             model=outline_model_name,
@@ -599,10 +585,8 @@ class WorkService:
         }
 
     def generate_outline(
-        self, payload: OutlineQuickGenerateRequest, db: Session
+        self, payload: OutlineQuickGenerateRequest, db: Session, *, user_id: str
     ) -> OutlineGenerateResponse:
-        _ensure_demo_user(db)
-
         try:
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
             result_dict = asyncio.run(
@@ -613,7 +597,7 @@ class WorkService:
 
             story = outline_data["story"]
             work = Work(
-                user_id=DEMO_USER_ID,
+                user_id=user_id,
                 title=story["title"],
                 genre=story["genre"],
                 idea=payload.idea.strip(),
@@ -656,7 +640,7 @@ class WorkService:
                 detail=f"LLM outline generation failed: {exc}"
             ) from exc
 
-    async def generate_outline_stream(self, payload: OutlineQuickGenerateRequest, emit):
+    async def generate_outline_stream(self, payload: OutlineQuickGenerateRequest, emit, *, user_id: str):
         """Stream outline generation progress via SSE, then return the final result.
 
         Yields SSE events:
@@ -673,7 +657,7 @@ class WorkService:
                 "work.generate_outline_stream begin idea_len=%s tags_count=%s",
                 len(payload.idea or ""), len(payload.tags or [])
             )
-            _ensure_demo_user(db)
+            emit("outline_status", {"phase": "generating_story", "message": "正在生成故事设定..."})
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
             result_dict = await self._generate_outline_sections(payload.idea.strip(), tags_str, emit=emit)
             emit("outline_status", {"phase": "parsing", "message": "正在解析并构建大纲树..."})
@@ -725,7 +709,7 @@ class WorkService:
                     "node": node,
                 })
             work = Work(
-                user_id=DEMO_USER_ID,
+                user_id=user_id,
                 title=story["title"],
                 genre=story["genre"],
                 idea=payload.idea.strip(),
@@ -781,9 +765,9 @@ class WorkService:
         finally:
             db.close()
 
-    def update_outline(self, work_id: str, outline_tree: dict, db: Session) -> WorkOut:
+    def update_outline(self, work_id: str, outline_tree: dict, db: Session, *, user_id: str) -> WorkOut:
         """Directly save an outline tree (from user inline editing)."""
-        work = db.query(Work).filter_by(id=work_id).first()
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
 
@@ -797,14 +781,14 @@ class WorkService:
 
     def chat_edit(
         self, work_id: str, user_message: str, history: list[dict], db: Session,
-        session_id: str | None = None,
+        session_id: str | None = None, *, user_id: str,
     ) -> ChatEditResponse:
         """Synchronous outline chat edit using Tool-Calling loop."""
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
         from app.services.outline_tools import ALL_OUTLINE_TOOLS
 
-        work = db.query(Work).filter_by(id=work_id).first()
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
 
@@ -950,6 +934,8 @@ class WorkService:
         self, work_id: str, user_message: str, history: list[dict], db: Session,
         session_id: str | None = None,
         dry_run: bool = False,
+        max_iterations: int = 10,
+        *, user_id: str,
     ) -> ChatEditResponse:
         """Async outline chat edit using Tool-Calling loop.
 
@@ -959,12 +945,13 @@ class WorkService:
         Args:
             dry_run: 如果为 True，工具正常执行但最后不 commit。
                      调用方负责在确认后 commit 或 rollback。
+            max_iterations: Tool-Calling 最大轮次。传 1 可强制单次 LLM 交互。
         """
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
         from app.services.outline_tools import ALL_OUTLINE_TOOLS
 
-        work = db.query(Work).filter_by(id=work_id).first()
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
 
@@ -1026,10 +1013,10 @@ class WorkService:
         llm_with_tools = self.chat_model.bind_tools(ALL_OUTLINE_TOOLS)
 
         all_operations = []
-        max_iterations = 10
+        loop_max = max(1, int(max_iterations or 1))
 
         try:
-            for _ in range(max_iterations):
+            for _ in range(loop_max):
                 ai_msg = await llm_with_tools.ainvoke(messages)
                 messages.append(ai_msg)
 
@@ -1205,8 +1192,8 @@ class WorkService:
 
         return "\n".join(relevant) if relevant else "（无匹配纲要，请根据整体大纲自行推进）"
 
-    def generate_chapter(self, work_id: str, chapter_number: int, db: Session) -> ChapterGenerateResponse:
-        work = db.query(Work).filter_by(id=work_id).first()
+    def generate_chapter(self, work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterGenerateResponse:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
 
@@ -1290,8 +1277,8 @@ class WorkService:
             ) from exc
 
     @staticmethod
-    def list_chapters(work_id: str, db: Session) -> list[ChapterOut]:
-        work = db.query(Work).filter_by(id=work_id).first()
+    def list_chapters(work_id: str, db: Session, *, user_id: str) -> list[ChapterOut]:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
         chapters = (
@@ -1303,14 +1290,20 @@ class WorkService:
         return [ChapterOut.model_validate(c) for c in chapters]
 
     @staticmethod
-    def get_chapter(work_id: str, chapter_number: int, db: Session) -> ChapterOut:
+    def get_chapter(work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterOut:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
         chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         if not chapter:
             raise HTTPException(status_code=404, detail="章节不存在")
         return ChapterOut.model_validate(chapter)
 
     @staticmethod
-    def update_chapter(work_id: str, chapter_number: int, payload: ChapterUpdateRequest, db: Session) -> ChapterOut:
+    def update_chapter(work_id: str, chapter_number: int, payload: ChapterUpdateRequest, db: Session, *, user_id: str) -> ChapterOut:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
         chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         if not chapter:
             raise HTTPException(status_code=404, detail="章节不存在")
@@ -1324,7 +1317,10 @@ class WorkService:
         return ChapterOut.model_validate(chapter)
 
     @staticmethod
-    def get_chapter_intel(work_id: str, chapter_number: int, db: Session) -> ChapterIntelOut:
+    def get_chapter_intel(work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterIntelOut:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
         chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         if not chapter:
             raise HTTPException(status_code=404, detail="章节不存在")
@@ -1372,9 +1368,10 @@ class WorkService:
         user_message: str,
         history: list[dict],
         db: Session,
+        *, user_id: str,
     ) -> ChapterChatResponse:
         """Use LLM to edit chapter content via conversation (DEPRECATED — use edit_chapter via SupervisorAgent)."""
-        work = db.query(Work).filter_by(id=work_id).first()
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
 
@@ -1443,19 +1440,18 @@ class WorkService:
             ) from exc
 
     @staticmethod
-    def list_works(db: Session) -> list[WorkOut]:
-        _ensure_demo_user(db)
+    def list_works(user_id: str, db: Session) -> list[WorkOut]:
         works = (
             db.query(Work)
-            .filter_by(user_id=DEMO_USER_ID)
+            .filter_by(user_id=user_id)
             .order_by(Work.created_at.desc())
             .all()
         )
         return [WorkOut.model_validate(w) for w in works]
 
     @staticmethod
-    def get_work(work_id: str, db: Session) -> WorkOut:
-        work = db.query(Work).filter_by(id=work_id).first()
+    def get_work(work_id: str, user_id: str, db: Session) -> WorkOut:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
         # Self-heal historical inconsistency: characters table vs outline_tree.characters
@@ -1491,8 +1487,8 @@ class WorkService:
         return WorkOut.model_validate(work)
 
     @staticmethod
-    def delete_work(work_id: str, db: Session) -> None:
-        work = db.query(Work).filter_by(id=work_id).first()
+    def delete_work(work_id: str, user_id: str, db: Session) -> None:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
         db.delete(work)

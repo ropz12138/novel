@@ -91,7 +91,7 @@ class EvaluationAgent:
         work_id: str,
         chapter_number: int,
         chapter_content_override: str = "",
-    ) -> tuple[str, dict, dict]:
+    ) -> tuple[str, dict, dict, dict]:
         """评估章节 — 通过 Tool-Calling 让 LLM 自主选择工具完成评估。"""
         from app.models.work_model import Chapter
         from app.schemas.evaluation_schema import RoleEvaluation
@@ -100,7 +100,15 @@ class EvaluationAgent:
         emit = lambda e, d: None  # EvaluationAgent 的 emit 通过 config 传递
 
         graph = self._build_graph()
-        config = {"configurable": {"db": db, "emit": emit}, "recursion_limit": 25}
+        config = {
+            "configurable": {
+                "db": db,
+                "emit": emit,
+                "work_id": work_id,
+                "chapter_number": chapter_number,
+            },
+            "recursion_limit": 25,
+        }
 
         user_msg = f"请评估第{chapter_number}章"
         if chapter_content_override:
@@ -126,6 +134,14 @@ class EvaluationAgent:
         # 提取工具结果中的评估数据（需完整 messages，不能用 astream 最后一帧增量）
         editor_result = {"total_score": 0, "issues": [], "suggestions": []}
         reader_result = {"total_score": 0, "issues": [], "suggestions": []}
+        sync_result = {
+            "sync_score": 0,
+            "status": "partial_mismatch",
+            "findings": [],
+            "suggestions": [],
+            "next_chapter_watchlist": [],
+            "action_hint": "fix_chapter",
+        }
 
         if final_state:
             messages = final_state.get("messages", [])
@@ -135,12 +151,14 @@ class EvaluationAgent:
                         editor_result = _parse_eval_result(msg.content)
                     elif msg.name == "evaluate_as_reader":
                         reader_result = _parse_eval_result(msg.content)
+                    elif msg.name == "evaluate_chapter_outline_sync":
+                        sync_result = _parse_sync_result(msg.content)
 
         # 获取标题
         chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         title = chapter.title if chapter else f"第{chapter_number}章"
 
-        return title, editor_result, reader_result
+        return title, editor_result, reader_result, sync_result
 
 
 def _parse_eval_result(content: str) -> dict:
@@ -164,4 +182,51 @@ def _parse_eval_result(content: str) -> dict:
         "total_score": total_score,
         "issues": issues,
         "suggestions": suggestions,
+    }
+
+
+def _parse_sync_result(content: str) -> dict:
+    import re
+
+    text = (content or "").strip()
+    score_match = re.search(r"同步性评分[：:]\s*(\d{1,3})", text)
+    sync_score = int(score_match.group(1)) if score_match else 0
+
+    status = "partial_mismatch"
+    status_match = re.search(r"状态[：:]\s*([a-z_]+)", text)
+    if status_match:
+        status = status_match.group(1)
+    elif "major_mismatch" in text:
+        status = "major_mismatch"
+    elif "aligned" in text:
+        status = "aligned"
+
+    action_hint = "fix_chapter"
+    action_match = re.search(r"建议动作[：:]\s*([a-z_]+)", text)
+    if action_match:
+        action_hint = action_match.group(1)
+    elif "fix_both" in text:
+        action_hint = "fix_both"
+    elif "fix_outline" in text:
+        action_hint = "fix_outline"
+    elif "none" in text and status == "aligned":
+        action_hint = "none"
+
+    suggestions = []
+    suggestion_match = re.search(r"修复建议[：:](.+?)(?:下一章关注[：:]|$)", text, re.S)
+    if suggestion_match:
+        suggestions = [line.strip(" -\n") for line in suggestion_match.group(1).splitlines() if line.strip()]
+
+    watchlist = []
+    watch_match = re.search(r"下一章关注[：:](.+)$", text, re.S)
+    if watch_match:
+        watchlist = [line.strip(" -\n") for line in watch_match.group(1).splitlines() if line.strip()]
+
+    return {
+        "sync_score": max(0, min(sync_score, 100)),
+        "status": status,
+        "findings": [{"reason": text[:1000]}] if text else [],
+        "suggestions": suggestions,
+        "next_chapter_watchlist": watchlist,
+        "action_hint": action_hint,
     }

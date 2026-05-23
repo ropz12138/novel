@@ -1,4 +1,5 @@
 import { API_BASE } from "../lib/runtime-config";
+import { authFetch } from "../lib/authFetch";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import {
@@ -107,8 +108,8 @@ export function AgentPage() {
     (async () => {
       try {
         const [wr, cr] = await Promise.all([
-          fetch(`${API_BASE}/works/${workId}`),
-          fetch(`${API_BASE}/works/${workId}/chapters`),
+          authFetch(`${API_BASE}/works/${workId}`),
+          authFetch(`${API_BASE}/works/${workId}/chapters`),
         ]);
         const wd = await wr.json();
         const cd = await cr.json();
@@ -172,7 +173,7 @@ export function AgentPage() {
   const connectSSE = (url, body) => {
     setAgentRunning(true);
     const ctl = new AbortController();
-    fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal })
+    authFetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: ctl.signal })
       .then(async (res) => {
         if (!res.ok) {
           let msg = `HTTP ${res.status}`;
@@ -244,7 +245,7 @@ export function AgentPage() {
       case "outline_updated": setOutlineProposal(null); break;
       case "saved": case "done":
         setAgentStage("done"); setConfirmType(null); setAgentRunning(false);
-        fetch(`${API_BASE}/works/${workId}/chapters`).then((r) => r.json()).then(setChapters).catch(() => {});
+        authFetch(`${API_BASE}/works/${workId}/chapters`).then((r) => r.json()).then(setChapters).catch(() => {});
         break;
       case "error": setAgentRunning(false); setConfirmType(null); alert(`Agent 错误：${d.message}`); break;
     }

@@ -1,3 +1,4 @@
+import { authFetch } from "../lib/authFetch";
 import { API_BASE } from "../lib/runtime-config";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
@@ -13,7 +14,7 @@ export function DashboardPage() {
 
   const fetchWorks = async () => {
     try {
-      const res = await fetch(`${API_BASE}/works`);
+      const res = await authFetch(`${API_BASE}/works`);
       if (res.ok) {
         const data = await res.json();
         setWorks(data);
@@ -39,7 +40,7 @@ export function DashboardPage() {
     e.preventDefault();
     e.stopPropagation();
     if (!confirm("确定删除这部作品？")) return;
-    await fetch(`${API_BASE}/works/${workId}`, { method: "DELETE" });
+    await authFetch(`${API_BASE}/works/${workId}`, { method: "DELETE" });
     setWorks((prev) => prev.filter((w) => w.id !== workId));
   };
 

@@ -1,4 +1,5 @@
 import { API_BASE } from "../../lib/runtime-config";
+import { authFetch } from "../../lib/authFetch";
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Send, X } from "lucide-react";
 import { Button } from "../ui/button";
@@ -42,7 +43,7 @@ export function ChapterEditChatPanel({
     setChatSending(true);
 
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/chapters/${chapterNum}/chat`, {
+      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/${chapterNum}/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

@@ -13,6 +13,14 @@ from app.schemas.work_schema import (
 )
 
 
+def _verify_work_ownership(work_id: str, user_id: str, db: Session) -> Work:
+    """Verify that a work belongs to the given user. Raises 404 if not found or not owned."""
+    work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+    return work
+
+
 class CharacterService:
     """CRUD + search operations for characters."""
 
@@ -54,10 +62,8 @@ class CharacterService:
             flag_modified(work, "outline_tree")
 
     @staticmethod
-    def list_characters(work_id: str, db: Session, role_type: str | None = None) -> list[CharacterOut]:
-        work = db.query(Work).filter_by(id=work_id).first()
-        if not work:
-            raise HTTPException(status_code=404, detail="作品不存在")
+    def list_characters(work_id: str, db: Session, role_type: str | None = None, *, user_id: str) -> list[CharacterOut]:
+        _verify_work_ownership(work_id, user_id, db)
         q = db.query(Character).filter_by(work_id=work_id)
         if role_type:
             q = q.filter_by(role_type=role_type)
@@ -65,23 +71,21 @@ class CharacterService:
         return [CharacterOut.model_validate(c) for c in chars]
 
     @staticmethod
-    def get_character(work_id: str, character_id: str, db: Session) -> CharacterOut:
+    def get_character(work_id: str, character_id: str, db: Session, *, user_id: str) -> CharacterOut:
+        _verify_work_ownership(work_id, user_id, db)
         char = db.query(Character).filter_by(work_id=work_id, id=character_id).first()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
         return CharacterOut.model_validate(char)
 
     @staticmethod
-    def create_character(work_id: str, payload: CharacterCreateRequest, db: Session) -> CharacterOut:
-        work = db.query(Work).filter_by(id=work_id).first()
-        if not work:
-            raise HTTPException(status_code=404, detail="作品不存在")
+    def create_character(work_id: str, payload: CharacterCreateRequest, db: Session, *, user_id: str) -> CharacterOut:
+        _verify_work_ownership(work_id, user_id, db)
         existing = db.query(Character).filter_by(work_id=work_id, name=payload.name).first()
         if existing:
             raise HTTPException(status_code=409, detail=f"角色 '{payload.name}' 已存在")
         data = payload.model_dump()
         first_chapter = data.get("first_chapter") or 1
-        # 创建角色时统一初始化动态状态，避免不同入口状态不一致
         if not data.get("current_status"):
             data["current_status"] = "存活"
         data["current_goal"] = data.get("current_goal", "") or ""
@@ -101,7 +105,8 @@ class CharacterService:
         return CharacterOut.model_validate(char)
 
     @staticmethod
-    def update_character(work_id: str, character_id: str, payload: CharacterUpdateRequest, db: Session) -> CharacterOut:
+    def update_character(work_id: str, character_id: str, payload: CharacterUpdateRequest, db: Session, *, user_id: str) -> CharacterOut:
+        _verify_work_ownership(work_id, user_id, db)
         char = db.query(Character).filter_by(work_id=work_id, id=character_id).first()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -115,7 +120,8 @@ class CharacterService:
         return CharacterOut.model_validate(char)
 
     @staticmethod
-    def delete_character(work_id: str, character_id: str, db: Session) -> None:
+    def delete_character(work_id: str, character_id: str, db: Session, *, user_id: str) -> None:
+        _verify_work_ownership(work_id, user_id, db)
         char = db.query(Character).filter_by(work_id=work_id, id=character_id).first()
         if not char:
             raise HTTPException(status_code=404, detail="角色不存在")
@@ -127,8 +133,9 @@ class CharacterService:
     # ── Query tools (for Agent) ──
 
     @staticmethod
-    def query_data(work_id: str, target: str, filters: dict, db: Session) -> list[dict]:
+    def query_data(work_id: str, target: str, filters: dict, db: Session, *, user_id: str) -> list[dict]:
         """Structured query tool: search characters or chapters by field filters."""
+        _verify_work_ownership(work_id, user_id, db)
         if target == "characters":
             return CharacterService._query_characters(work_id, filters, db)
         elif target == "chapters":
@@ -222,11 +229,10 @@ class CharacterService:
         db: Session = None,
         character_name: str | None = None,
         chapter_number: int | None = None,
+        *, user_id: str,
     ) -> list[dict]:
-        """Grep-like keyword search across characters and/or chapters.
-
-        Supports filtering by specific character_name or chapter_number.
-        """
+        """Grep-like keyword search across characters and/or chapters."""
+        _verify_work_ownership(work_id, user_id, db)
         results = []
         kw = keyword.lower()
 

@@ -42,6 +42,7 @@ class SupervisorSession(Base):
     __tablename__ = "supervisor_sessions"
 
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=_uuid)
+    user_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
     # 关联作品（可为空，创建大纲后绑定）
     work_id: Mapped[str | None] = mapped_column(String(36), ForeignKey("works.id", ondelete="SET NULL"), nullable=True)
 

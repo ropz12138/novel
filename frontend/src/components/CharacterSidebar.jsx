@@ -1,4 +1,5 @@
 import { API_BASE } from "../lib/runtime-config";
+import { authFetch } from "../lib/authFetch";
 import { useEffect, useState } from "react";
 import {
   ChevronLeft,
@@ -204,7 +205,7 @@ export function CharacterSidebar({ workId, open, onToggle }) {
     if (!workId) return;
     setLoading(true);
     try {
-      const res = await fetch(`${API_BASE}/works/${workId}/characters`);
+      const res = await authFetch(`${API_BASE}/works/${workId}/characters`);
       const data = await res.json();
       setCharacters(data);
     } catch (e) {
@@ -226,7 +227,7 @@ export function CharacterSidebar({ workId, open, onToggle }) {
     const method = isEdit ? "PUT" : "POST";
 
     try {
-      const res = await fetch(url, {
+      const res = await authFetch(url, {
         method,
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(data),
@@ -248,7 +249,7 @@ export function CharacterSidebar({ workId, open, onToggle }) {
   const handleDelete = async (id) => {
     if (!confirm("确定要删除这个角色吗？")) return;
     try {
-      await fetch(`${API_BASE}/works/${workId}/characters/${id}`, { method: "DELETE" });
+      await authFetch(`${API_BASE}/works/${workId}/characters/${id}`, { method: "DELETE" });
       await fetchCharacters();
     } catch (e) {
       console.error(e);

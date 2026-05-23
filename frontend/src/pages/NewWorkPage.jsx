@@ -1,4 +1,5 @@
 import { API_BASE } from "../lib/runtime-config";
+import { authFetch } from "../lib/authFetch";
 import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Sparkles, Lightbulb, Tag, Loader2 } from "lucide-react";
@@ -74,7 +75,7 @@ export function NewWorkPage() {
 
     try {
       const ctl = new AbortController();
-      const res = await fetch(`${API_BASE}/works/generate-outline-stream`, {
+      const res = await authFetch(`${API_BASE}/works/generate-outline-stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

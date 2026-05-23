@@ -127,6 +127,11 @@ def _get_emit(config: RunnableConfig):
     return configurable.get("emit", lambda event, data: None)
 
 
+def _get_user_id(config: RunnableConfig) -> str | None:
+    configurable = config.get("configurable", {})
+    return configurable.get("user_id")
+
+
 def _resolve_bound_work_id(
     config: RunnableConfig,
     db: Session,
@@ -221,7 +226,7 @@ def query_characters(work_id: str, filters: dict, config: RunnableConfig) -> str
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
-    results = CharacterService.query_data(work_id=work_id, target="characters", filters=filters, db=db)
+    results = CharacterService.query_data(work_id=work_id, target="characters", filters=filters, db=db, user_id=_get_user_id(config))
     return _format_characters(results)
 
 
@@ -239,7 +244,7 @@ def query_chapters(work_id: str, filters: dict, content_preview_length: int, con
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
-    results = CharacterService.query_data(work_id=work_id, target="chapters", filters=filters, db=db)
+    results = CharacterService.query_data(work_id=work_id, target="chapters", filters=filters, db=db, user_id=_get_user_id(config))
     return _format_chapters(results, content_preview_length=content_preview_length)
 
 
@@ -272,6 +277,7 @@ def grep(
             context_chars=context_chars, db=db,
             character_name=character_name,
             chapter_number=chapter_number,
+            user_id=_get_user_id(config),
         )
         for r in results:
             snippet_key = (r.get("source"), r.get("character_name") or r.get("chapter_number"), r.get("field"), kw)
@@ -332,7 +338,7 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
             "请使用当前会话绑定的 work_id，或开启新会话后再操作其他作品。"
         )
 
-    agent = OutlineAgent(emit=emit)
+    agent = OutlineAgent(emit=emit, user_id=configurable.get("user_id"))
 
     async def _run_locked(coro):
         """如果有 db_lock（threading.Lock）则直接执行（锁已传给内层 graph）。"""
@@ -729,7 +735,7 @@ async def _dispatch_evaluation_coroutine(
 
     agent = EvaluationAgent()
     try:
-        title, editor, reader = await agent.evaluate_chapter(
+        title, editor, reader, sync = await agent.evaluate_chapter(
             db=db,
             work_id=work_id,
             chapter_number=chapter_number,
@@ -750,12 +756,14 @@ async def _dispatch_evaluation_coroutine(
 
     editor_data = _to_dict(editor)
     reader_data = _to_dict(reader)
+    sync_data = _to_dict(sync)
 
     emit("evaluation_done", {
         "chapter_number": chapter_number,
         "chapter_title": title,
         "editor": editor_data,
         "reader": reader_data,
+        "sync": sync_data,
     })
 
     def _brief(role: str, result) -> str:
@@ -770,7 +778,9 @@ async def _dispatch_evaluation_coroutine(
     return (
         f"第{chapter_number}章「{title}」评估完成。\n"
         f"{_brief('编辑视角', editor)}\n"
-        f"{_brief('读者视角', reader)}"
+        f"{_brief('读者视角', reader)}\n"
+        f"同步性：{sync_data.get('sync_score', 0)}/100（{sync_data.get('status', 'partial_mismatch')}），"
+        f"建议动作：{sync_data.get('action_hint', 'fix_chapter')}"
     )
 
 

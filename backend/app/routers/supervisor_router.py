@@ -10,7 +10,9 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.database import SessionLocal, get_db
+from app.models.work_model import User, Work
 from app.schemas.supervisor_schema import SupervisorStartRequest, SupervisorResumeRequest, SupervisorConfirmRequest
 from app.services.supervisor.supervisor_agent import SupervisorAgent
 from app.services.agent_log_service import log_event, new_session_id
@@ -62,9 +64,11 @@ def persist_event_message(db: Session, session_id: str, event: str, data: dict) 
     if event == "evaluation_done":
         editor = data.get("editor", {}) or {}
         reader = data.get("reader", {}) or {}
+        sync = data.get("sync", {}) or {}
         text = (
             f"章节评估完成：编辑 {editor.get('total_score', '-')} /60，"
-            f"读者 {reader.get('total_score', '-')} /60"
+            f"读者 {reader.get('total_score', '-')} /60，"
+            f"同步 {sync.get('sync_score', '-')} /100（{sync.get('action_hint', '-')})"
         )
         message_service.create_message(
             db,
@@ -192,6 +196,7 @@ def _sse_format(event: str, data: dict) -> str:
 @router.post("/start")
 async def start_supervisor(
     payload: SupervisorStartRequest,
+    current_user: User = Depends(get_current_user),
 ):
     """启动统筹 Agent 新会话。返回 SSE 流。"""
     t0 = time.perf_counter()
@@ -209,6 +214,7 @@ async def start_supervisor(
             work_id=payload.work_id,
             log_label="start",
             t0=t0,
+            user_id=current_user.id,
         )
 
         try:
@@ -236,6 +242,7 @@ async def start_supervisor(
 @router.post("/resume")
 async def resume_supervisor(
     payload: SupervisorResumeRequest,
+    current_user: User = Depends(get_current_user),
 ):
     """恢复已有统筹 Agent 会话。返回 SSE 流。"""
     t0 = time.perf_counter()
@@ -254,6 +261,7 @@ async def resume_supervisor(
             log_label="resume",
             t0=t0,
             session_id=payload.session_id,
+            user_id=current_user.id,
         )
 
         try:
@@ -282,6 +290,7 @@ async def resume_supervisor(
 def get_supervisor_status(
     session_id: str,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """查询统筹 Agent 会话状态。"""
     from app.models.agent_model import SupervisorSession
@@ -302,6 +311,7 @@ def get_supervisor_status(
 def confirm_action(
     payload: SupervisorConfirmRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """确认或拒绝挂起的操作（章节编辑、大纲编辑、角色编辑）。"""
     from app.models.agent_model import SupervisorSession
@@ -465,6 +475,7 @@ def _launch_supervisor_task(
     log_label: str,
     t0: float,
     session_id: str | None = None,
+    user_id: str | None = None,
 ) -> asyncio.Task:
     """启动独立后台任务，避免绑定到当前 HTTP 请求的 db 生命周期。"""
 
@@ -491,7 +502,7 @@ def _launch_supervisor_task(
     async def run():
         nonlocal run_db
         run_db = SessionLocal()
-        agent = SupervisorAgent(emit=emit, db=run_db, work_id=work_id)
+        agent = SupervisorAgent(emit=emit, db=run_db, work_id=work_id, user_id=user_id)
         try:
             logger.info("supervisor_router.run begin agent.%s", log_label)
             await runner(agent)

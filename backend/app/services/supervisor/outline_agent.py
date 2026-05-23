@@ -46,12 +46,13 @@ def _build_outline_system_prompt(work_id: str, user_message: str, *, auto_mode: 
 class OutlineAgent:
     """大纲 Agent — 使用 LangGraph StateGraph 编排"""
 
-    def __init__(self, emit: Callable):
+    def __init__(self, emit: Callable, *, user_id: str | None = None):
         self.emit = emit
+        self.user_id = user_id
 
     def _build_graph(self, *, auto_mode: bool = False):
         tools = build_outline_tools(auto_mode=auto_mode)
-        llm = get_llm(temperature=0.7, model_name="deepseek-v4-flash")  #deepseek-v4-pro 模型
+        llm = get_llm(temperature=0.7)
         llm_with_tools = llm.bind_tools(tools)
 
         async def outline_agent_node(state: OutlineState) -> dict:
@@ -100,7 +101,7 @@ class OutlineAgent:
         """创建新大纲 — 通过 Tool-Calling 让 LLM 自主调用 generate_outline"""
 
         graph = self._build_graph(auto_mode=True)
-        configurable = {"db": db, "emit": self.emit, "auto_mode": True}
+        configurable = {"db": db, "emit": self.emit, "auto_mode": True, "user_id": self.user_id}
         if db_lock is not None:
             configurable["db_lock"] = db_lock
         config = {"configurable": configurable, "recursion_limit": 25}
@@ -163,7 +164,7 @@ class OutlineAgent:
         """
 
         graph = self._build_graph(auto_mode=auto_mode)
-        configurable = {"db": db, "emit": self.emit, "auto_mode": auto_mode}
+        configurable = {"db": db, "emit": self.emit, "auto_mode": auto_mode, "user_id": self.user_id}
         if db_lock is not None:
             configurable["db_lock"] = db_lock
         config = {"configurable": configurable, "recursion_limit": 25}

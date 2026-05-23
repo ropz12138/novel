@@ -42,7 +42,7 @@ export function RegisterPage() {
       if (!res.ok) {
         throw new Error(parseError(data, "注册失败"));
       }
-      localStorage.setItem("novel_token", data.token || "token");
+      localStorage.setItem("novel_token", data.token);
       localStorage.setItem("novel_user", data?.user?.username || form.username || "创作者");
       navigate("/dashboard", { replace: true });
     } catch (err) {

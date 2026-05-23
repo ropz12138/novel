@@ -54,16 +54,26 @@ def init_db() -> None:
 
 def _ensure_columns(engine) -> None:
     """确保已有表中存在新增列（create_all 不会添加新列到已有表）。"""
-    import sqlalchemy as sa
     with engine.connect() as conn:
+        # Helper: check if column exists in a table (public schema)
+        def _column_exists(table_name: str, column_name: str) -> bool:
+            result = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema='public' AND table_name=:table AND column_name=:col"
+            ), {"table": table_name, "col": column_name})
+            return result.scalar() is not None
+
         # supervisor_sessions.auto_mode
-        result = conn.execute(text(
-            "SELECT 1 FROM information_schema.columns "
-            "WHERE table_name='supervisor_sessions' AND column_name='auto_mode'"
-        ))
-        if not result.scalar():
+        if not _column_exists("supervisor_sessions", "auto_mode"):
             conn.execute(text(
                 "ALTER TABLE supervisor_sessions ADD COLUMN auto_mode BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
+        # supervisor_sessions.user_id
+        if not _column_exists("supervisor_sessions", "user_id"):
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN user_id VARCHAR(36) REFERENCES users(id) ON DELETE SET NULL"
             ))
             conn.commit()
 

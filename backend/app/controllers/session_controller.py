@@ -5,20 +5,24 @@ from sqlalchemy.orm import Session
 from app.services import session_service
 
 
-def list_sessions(work_id: str | None, db: Session):
-    sessions = session_service.list_sessions(db, work_id=work_id)
+def list_sessions(work_id: str | None, db: Session, *, user_id: str):
+    sessions = session_service.list_sessions(db, work_id=work_id, user_id=user_id)
     return [_session_to_out(s, db) for s in sessions]
 
 
-def get_session_messages(session_id: str, db: Session):
-    s = session_service.get_session(db, session_id)
-    if not s:
-        raise HTTPException(status_code=404, detail="Session not found")
-    return session_service.get_session_messages(db, session_id)
+def get_session_messages(session_id: str, db: Session, *, user_id: str):
+    messages = session_service.get_session_messages(db, session_id, user_id=user_id)
+    if not messages:
+        s = session_service.get_session(db, session_id)
+        if not s:
+            raise HTTPException(status_code=404, detail="Session not found")
+        if s.user_id != user_id:
+            raise HTTPException(status_code=404, detail="Session not found")
+    return messages
 
 
-def delete_session(session_id: str, db: Session):
-    if not session_service.delete_session(db, session_id):
+def delete_session(session_id: str, db: Session, *, user_id: str):
+    if not session_service.delete_session(db, session_id, user_id=user_id):
         raise HTTPException(status_code=404, detail="Session not found")
 
 

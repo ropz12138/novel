@@ -7,9 +7,10 @@ from fastapi import APIRouter, Depends
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
+from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.models.agent_model import AgentState
-from app.models.work_model import Chapter
+from app.models.work_model import Chapter, User, Work
 from app.schemas.agent_schema import AgentResumeRequest, AgentStartRequest
 from app.services.agent.graph import ChapterAgentGraph
 from app.services.agent_log_service import log_event, new_session_id
@@ -125,8 +126,18 @@ async def start_agent(
     chapter_number: int,
     payload: AgentStartRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Start a new agent session for a chapter. Returns SSE stream."""
+    work = db.query(Work).filter_by(id=work_id, user_id=current_user.id).first()
+    if not work:
+        return StreamingResponse(
+            iter([_sse_format("error", {
+                "message": "作品不存在"
+            })]),
+            media_type="text/event-stream",
+        )
+
     # Validate: can only write the next sequential chapter, or modify an existing one
     existing = db.query(Chapter).filter_by(
         work_id=work_id, chapter_number=chapter_number
@@ -203,8 +214,15 @@ async def resume_agent(
     chapter_number: int,
     payload: AgentResumeRequest,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Resume a paused agent session. Returns SSE stream."""
+    work = db.query(Work).filter_by(id=work_id, user_id=current_user.id).first()
+    if not work:
+        return StreamingResponse(
+            iter([_sse_format("error", {"message": "作品不存在"})]),
+            media_type="text/event-stream",
+        )
     session_id = new_session_id()
 
     # Log user action
@@ -259,8 +277,12 @@ def get_agent_status(
     work_id: str,
     chapter_number: int,
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     """Get current agent state for a chapter."""
+    work = db.query(Work).filter_by(id=work_id, user_id=current_user.id).first()
+    if not work:
+        return {"status": "idle", "stage": "idle"}
     agent = db.query(AgentState).filter_by(
         work_id=work_id, chapter_number=chapter_number
     ).first()

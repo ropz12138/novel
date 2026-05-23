@@ -53,6 +53,10 @@ class EvaluateAsReaderInput(BaseModel):
     previous_chapters: str = Field(default="", description="前文回顾")
 
 
+class EvaluateChapterOutlineSyncInput(BaseModel):
+    trigger: str = Field(default="run", description="触发参数，保持默认即可")
+
+
 class EditorScoresInput(BaseModel):
     outline_fidelity: int = Field(default=0, ge=0, le=10, description="大纲忠实度 1-10")
     plot_coherence: int = Field(default=0, ge=0, le=10, description="情节连贯性 1-10")
@@ -101,6 +105,15 @@ def _get_db(config: RunnableConfig) -> Session:
 def _get_emit(config: RunnableConfig):
     configurable = config.get("configurable", {})
     return configurable.get("emit", lambda event, data: None)
+
+
+def _get_work_chapter_from_config(config: RunnableConfig) -> tuple[str, int]:
+    configurable = config.get("configurable", {})
+    work_id = str(configurable.get("work_id", "") or "")
+    chapter_number = int(configurable.get("chapter_number", 0) or 0)
+    if not work_id or chapter_number <= 0:
+        raise ValueError("缺少 work_id/chapter_number 上下文")
+    return work_id, chapter_number
 
 
 # ── 工具实现 ──
@@ -165,6 +178,149 @@ def read_previous_chapters_for_eval(work_id: str, chapter_number: int, limit: in
         parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
 
     return "\n\n".join(parts)
+
+
+def _outline_to_natural_text(outline: dict) -> str:
+    story = outline.get("story", {}) if isinstance(outline, dict) else {}
+    timeline = outline.get("timeline", []) if isinstance(outline, dict) else []
+    branches = outline.get("branches", []) if isinstance(outline, dict) else []
+    foreshadowing = outline.get("foreshadowing", []) if isinstance(outline, dict) else []
+
+    lines: list[str] = []
+    lines.append("【作品信息】")
+    lines.append(f"标题：{story.get('title', '')}")
+    lines.append(f"类型：{story.get('genre', '')}")
+    lines.append(f"卷：{story.get('volume', '')}")
+    lines.append(f"简介：{story.get('synopsis', '')}")
+
+    lines.append("\n【主线时间线】")
+    for n in timeline:
+        lines.append(
+            f"- {n.get('id', '')} | 章节 {n.get('chapter_start', '')}-{n.get('chapter_end', '')} | "
+            f"{n.get('development_node', '')} | 摘要：{n.get('summary', '')}"
+        )
+
+    lines.append("\n【分支剧情】")
+    for b in branches:
+        lines.append(
+            f"- {b.get('id', '')} | 章节 {b.get('chapter_start', '')}-{b.get('chapter_end', '')} | "
+            f"{b.get('name', '')} | 摘要：{b.get('summary', '') or b.get('description', '')}"
+        )
+
+    lines.append("\n【伏笔】")
+    for f in foreshadowing:
+        lines.append(
+            f"- {f.get('id', '')} | 埋设：{f.get('plant_node', '')} | 回收：{f.get('payoff_node', '')} | "
+            f"内容：{f.get('content', '')}"
+        )
+    return "\n".join(lines)
+
+
+def _characters_to_natural_text(characters: list[Any]) -> str:
+    if not characters:
+        return "【角色表】暂无角色。"
+    lines = ["【角色表】"]
+    for c in characters:
+        lines.append(
+            f"- {c.name}（{c.role_type}）：性格={c.personality or ''}；背景={c.background or ''}；"
+            f"状态={c.current_status or ''}；目标={c.current_goal or ''}；首次出场={c.first_chapter or ''}"
+        )
+    return "\n".join(lines)
+
+
+def _metadata_to_natural_text(md: Any) -> str:
+    if not md:
+        return "【最新章节元数据】暂无。"
+    lines = ["【最新章节元数据】"]
+    lines.append(f"摘要：{md.summary or ''}")
+    lines.append(f"关键情节点：{'; '.join(md.key_plot_points or [])}")
+    lines.append(f"大纲关联：{'; '.join(str(x) for x in (md.outline_links or []))}")
+    lines.append(f"涉及角色：{'; '.join(str(x) for x in (md.involved_characters or []))}")
+    lines.append(f"伏笔：{'; '.join(str(x) for x in (md.foreshadows or []))}")
+    lines.append(f"事实：{'; '.join(str(x) for x in (md.facts or []))}")
+    return "\n".join(lines)
+
+
+def _history_summaries_to_natural_text(rows: list[Any]) -> str:
+    if not rows:
+        return "【历史章节梗概】无。"
+    lines = ["【历史章节梗概（完整，不截断）】"]
+    for r in rows:
+        lines.append(f"- 第{r.chapter_number}章：{r.summary or ''}")
+    return "\n".join(lines)
+
+
+async def _evaluate_chapter_outline_sync_coroutine(
+    trigger: str = "run",
+    config: RunnableConfig = None,
+) -> str:
+    """评估最新章节与大纲的同步性（工具内部一次 LLM 交互完成）。"""
+    from langchain_core.messages import HumanMessage
+
+    from app.models.work_model import Chapter, ChapterMetadata, Character, Work
+    from app.services.supervisor.sub_agent_base import get_llm
+
+    del trigger  # 保持接口稳定，避免外层传入业务参数
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    work_id, chapter_number = _get_work_chapter_from_config(config)
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"同步性评估失败：作品 {work_id} 不存在。"
+
+    chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+    if not chapter or not chapter.content:
+        return f"同步性评估失败：第{chapter_number}章正文不存在。"
+
+    latest_md = db.query(ChapterMetadata).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+    history_md = (
+        db.query(ChapterMetadata)
+        .filter(ChapterMetadata.work_id == work_id, ChapterMetadata.chapter_number < chapter_number)
+        .order_by(ChapterMetadata.chapter_number.asc())
+        .all()
+    )
+    characters = (
+        db.query(Character)
+        .filter_by(work_id=work_id)
+        .order_by(Character.first_chapter.asc(), Character.created_at.asc())
+        .all()
+    )
+
+    outline_text = _outline_to_natural_text(work.outline_tree or {})
+    chars_text = _characters_to_natural_text(characters)
+    latest_chapter_text = f"【最新章节正文】\n第{chapter_number}章《{chapter.title or ''}》\n{chapter.content}"
+    latest_md_text = _metadata_to_natural_text(latest_md)
+    history_text = _history_summaries_to_natural_text(history_md)
+
+    prompt = (
+        "你是一名长篇网文总编审，请评估“最新章节”与“大纲”的同步关系。\n"
+        "要求：\n"
+        "1) 允许“节奏放缓导致事件延后”，但要判断是否有铺垫且因果不断裂。\n"
+        "2) 直接输出自然语言评估，不要输出 JSON、代码块或键值对象。\n"
+        "3) 请按以下自然语言格式输出：\n"
+        "同步性评分：0-100分。\n"
+        "状态：aligned / partial_mismatch / major_mismatch 三选一，并用中文解释。\n"
+        "建议动作：none / fix_chapter / fix_outline / fix_both 四选一，并解释为什么。\n"
+        "主要不同步点：逐条说明大纲要求、正文实际情况、差异类型、严重程度。\n"
+        "修复建议：说明应该改正文、改大纲、改元数据，或组合处理。\n"
+        "下一章关注：列出下一章必须对齐的检查点。\n\n"
+        f"{outline_text}\n\n{chars_text}\n\n{latest_chapter_text}\n\n{latest_md_text}\n\n{history_text}"
+    )
+
+    llm = get_llm(temperature=0.1, streaming=False)
+    response = await llm.ainvoke([HumanMessage(content=prompt)])
+    content = getattr(response, "content", "") or ""
+    if isinstance(content, list):
+        content = "".join(
+            block.get("text", "") if isinstance(block, dict) else str(block)
+            for block in content
+        )
+    content = str(content).strip()
+
+    emit("evaluation_sync_done", {"chapter_number": chapter_number, "raw": content[:2000]})
+    return content
 
 
 def _format_role_eval_summary(role_label: str, payload: dict) -> str:
@@ -402,6 +558,17 @@ evaluate_as_reader = StructuredTool.from_function(
     args_schema=EvaluateAsReaderInput,
 )
 
+evaluate_chapter_outline_sync = StructuredTool.from_function(
+    func=None,
+    coroutine=_evaluate_chapter_outline_sync_coroutine,
+    name="evaluate_chapter_outline_sync",
+    description=(
+        "评估最新章节与大纲的同步性。"
+        "无需传业务内容，工具会内部读取大纲、角色、最新章节全文和元数据、历史章节梗概后一次性评估。"
+    ),
+    args_schema=EvaluateChapterOutlineSyncInput,
+)
+
 
 # ── 导出工具列表 ──
 
@@ -411,4 +578,5 @@ EVALUATION_TOOLS = [
     read_previous_chapters_for_eval,
     evaluate_as_editor,
     evaluate_as_reader,
+    evaluate_chapter_outline_sync,
 ]

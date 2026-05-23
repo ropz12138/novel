@@ -17,24 +17,28 @@ def create_session(
     *,
     work_id: str | None = None,
     session_id: str | None = None,
+    user_id: str | None = None,
 ) -> SupervisorSession:
     """Create a new supervisor session (SupervisorSession row only)."""
     session = SupervisorSession(
         id=session_id or _uuid(),
         work_id=work_id,
+        user_id=user_id,
     )
     db.add(session)
     db.commit()
     db.refresh(session)
-    logger.info("session_service.create id=%s work_id=%s", session.id, work_id)
+    logger.info("session_service.create id=%s work_id=%s user_id=%s", session.id, work_id, user_id)
     return session
 
 
 def list_sessions(
     db: Session,
     work_id: str | None = None,
+    *,
+    user_id: str | None = None,
 ) -> list[SupervisorSession]:
-    """List supervisor sessions, optionally filtered by work_id.
+    """List supervisor sessions, optionally filtered by work_id and user_id.
 
     Only returns sessions that have at least one user message (real conversations).
     """
@@ -42,6 +46,8 @@ def list_sessions(
     from sqlalchemy import exists
 
     q = db.query(SupervisorSession)
+    if user_id:
+        q = q.filter_by(user_id=user_id)
     if work_id:
         q = q.filter_by(work_id=work_id)
     has_user = exists().where(
@@ -76,11 +82,12 @@ def get_session(db: Session, session_id: str) -> SupervisorSession | None:
     return db.query(SupervisorSession).filter_by(id=session_id).first()
 
 
-def delete_session(db: Session, session_id: str) -> bool:
+def delete_session(db: Session, session_id: str, *, user_id: str | None = None) -> bool:
     session = get_session(db, session_id)
     if not session:
         return False
-    # 级联删除关联的 messages（由 FK ON DELETE CASCADE 保证）
+    if user_id and session.user_id != user_id:
+        return False
     db.delete(session)
     db.commit()
     logger.info("session_service.delete id=%s", session_id)
@@ -92,8 +99,13 @@ def get_session_title(db: Session, session_id: str) -> str:
     return message_service.get_session_title(db, session_id)
 
 
-def get_session_messages(db: Session, session_id: str) -> list[dict]:
+def get_session_messages(db: Session, session_id: str, *, user_id: str | None = None) -> list[dict]:
     """Retrieve messages for a session from the messages table."""
+    session = get_session(db, session_id)
+    if not session:
+        return []
+    if user_id and session.user_id != user_id:
+        return []
     msgs = message_service.get_messages_by_session(db, session_id)
     return [
         {

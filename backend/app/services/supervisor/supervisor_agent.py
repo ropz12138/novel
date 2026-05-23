@@ -128,10 +128,11 @@ def _should_continue(state: SupervisorState) -> str:
 class SupervisorAgent:
     """统筹 Agent — 使用 LangGraph StateGraph 编排 LLM 和工具调用"""
 
-    def __init__(self, emit: Callable, db: Session, work_id: str | None = None):
+    def __init__(self, emit: Callable, db: Session, work_id: str | None = None, user_id: str | None = None):
         self.emit = emit
         self.db = db
         self.work_id = work_id
+        self.user_id = user_id
         self._graph = None
 
     def _build_graph(self) -> StateGraph:
@@ -249,6 +250,7 @@ class SupervisorAgent:
         # 会话和首条 user 消息必须原子落库，避免出现“空 session”残留。
         session = SupervisorSession(
             work_id=self.work_id,
+            user_id=self.user_id,
             stage="running",
             status="running",
             auto_mode=auto_mode,
@@ -329,6 +331,7 @@ class SupervisorAgent:
                 "emit": self.emit,
                 "supervisor_session_id": session.id,
                 "auto_mode": session.auto_mode,
+                "user_id": session.user_id or self.user_id,
             },
             "recursion_limit": 25,
         }

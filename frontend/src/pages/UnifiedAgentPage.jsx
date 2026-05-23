@@ -1,4 +1,5 @@
 import { API_BASE } from "../lib/runtime-config";
+import { authFetch } from "../lib/authFetch";
 import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
@@ -330,7 +331,7 @@ export function UnifiedAgentPage() {
     timelineIdRef.current = 0;
 
     const ctl = new AbortController();
-    fetch(url, {
+    authFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -669,7 +670,7 @@ export function UnifiedAgentPage() {
     if (!sessionId || !diffTarget || confirming) return;
     setConfirming(true);
     try {
-      const res = await fetch(`${API_BASE}/supervisor/confirm`, {
+      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -697,7 +698,7 @@ export function UnifiedAgentPage() {
     if (!sessionId || (!outlineDiff && !characterDiff) || confirming) return;
     setConfirming(true);
     try {
-      const res = await fetch(`${API_BASE}/supervisor/confirm`, {
+      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
