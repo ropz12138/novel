@@ -3,6 +3,8 @@ import {
   handleOutlineEditDiff,
   handleCharacterEditDiff,
   handleTodolistGenerated,
+  handleTaskStatusUpdated,
+  handleTodolistReadinessUpdated,
   createTimelineActions,
 } from "./sseEventHandlers.js";
 
@@ -24,6 +26,7 @@ describe("handleOutlineEditDiff", () => {
         summary: data.summary,
         message: data.message,
         operations: data.operations,
+        readonly: false,
       },
       addMessage: {
         role: "assistant",
@@ -35,6 +38,7 @@ describe("handleOutlineEditDiff", () => {
             summary: data.summary,
             message: data.message,
             operations: data.operations,
+            readonly: false,
           },
         },
       },
@@ -69,6 +73,7 @@ describe("handleCharacterEditDiff", () => {
           characterDiffCard: {
             diff: data.diff,
             summary: data.summary,
+            readonly: false,
           },
         },
       },
@@ -89,8 +94,8 @@ describe("handleTodolistGenerated", () => {
     const data = {
       intent_summary: "修改大纲和角色卡",
       todolist: [
-        { id: "T1", task: "编辑大纲", owner: "supervisor", status: "pending" },
-        { id: "T2", task: "编辑角色", owner: "supervisor", status: "pending" },
+        { db_id: "ti-1", task_id: "T1", task: "编辑大纲", owner: "supervisor", status: "pending" },
+        { db_id: "ti-2", task_id: "T2", task: "编辑角色", owner: "supervisor", status: "pending" },
       ],
       ready_to_execute: true,
     };
@@ -106,7 +111,26 @@ describe("handleTodolistGenerated", () => {
           type: "requirements_todolist",
           todoCard: {
             intent_summary: "修改大纲和角色卡",
-            todolist: data.todolist,
+            todolist: [
+              {
+                db_id: "ti-1",
+                task_id: "T1",
+                task: "编辑大纲",
+                owner: "supervisor",
+                status: "pending",
+                depends_on: [],
+                done_criteria: "",
+              },
+              {
+                db_id: "ti-2",
+                task_id: "T2",
+                task: "编辑角色",
+                owner: "supervisor",
+                status: "pending",
+                depends_on: [],
+                done_criteria: "",
+              },
+            ],
             ready_to_execute: true,
           },
         },
@@ -129,6 +153,80 @@ describe("handleTodolistGenerated", () => {
 
     expect(result.addMessage.meta.todoCard.ready_to_execute).toBe(false);
   });
+
+  it("normalizes legacy todolist items without db_id", () => {
+    const data = {
+      todolist: [
+        { id: "T1", task: "旧格式任务", owner: "outline_agent" },
+      ],
+    };
+
+    const result = handleTodolistGenerated(data);
+    const item = result.addMessage.meta.todoCard.todolist[0];
+
+    expect(item.db_id).toBe("");
+    expect(item.task_id).toBe("T1");
+    expect(item.task).toBe("旧格式任务");
+    expect(item.status).toBe("pending");
+  });
+});
+
+describe("handleTaskStatusUpdated", () => {
+  it("returns a task_status_update action", () => {
+    const result = handleTaskStatusUpdated({
+      task_item_id: "ti-1",
+      task_id: "T1",
+      old_status: "pending",
+      new_status: "completed",
+      result_summary: "大纲已创建",
+    });
+
+    expect(result).toEqual({
+      type: "task_status_update",
+      task_item_id: "ti-1",
+      task_id: "T1",
+      old_status: "pending",
+      new_status: "completed",
+      result_summary: "大纲已创建",
+    });
+  });
+
+  it("handles empty data gracefully", () => {
+    const result = handleTaskStatusUpdated({});
+
+    expect(result.type).toBe("task_status_update");
+    expect(result.task_item_id).toBe("");
+    expect(result.new_status).toBe("");
+  });
+});
+
+describe("handleTodolistReadinessUpdated", () => {
+  it("returns a todolist_readiness_update action", () => {
+    const result = handleTodolistReadinessUpdated({
+      session_id: "sess-1",
+      ready_to_execute: true,
+    });
+
+    expect(result).toEqual({
+      type: "todolist_readiness_update",
+      session_id: "sess-1",
+      ready_to_execute: true,
+    });
+  });
+
+  it("defaults ready_to_execute to false when missing", () => {
+    const result = handleTodolistReadinessUpdated({ session_id: "sess-1" });
+
+    expect(result.ready_to_execute).toBe(false);
+  });
+
+  it("handles empty data gracefully", () => {
+    const result = handleTodolistReadinessUpdated({});
+
+    expect(result.type).toBe("todolist_readiness_update");
+    expect(result.session_id).toBe("");
+    expect(result.ready_to_execute).toBe(false);
+  });
 });
 
 describe("createTimelineActions", () => {
@@ -137,5 +235,7 @@ describe("createTimelineActions", () => {
     expect(typeof actions.handleOutlineEditDiff).toBe("function");
     expect(typeof actions.handleCharacterEditDiff).toBe("function");
     expect(typeof actions.handleTodolistGenerated).toBe("function");
+    expect(typeof actions.handleTaskStatusUpdated).toBe("function");
+    expect(typeof actions.handleTodolistReadinessUpdated).toBe("function");
   });
 });

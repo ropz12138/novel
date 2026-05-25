@@ -19,9 +19,9 @@ class TestDispatchToolRegistration:
     """验证重构后的工具注册"""
 
     def test_all_tools_count_is_9(self):
-        """应该恰好注册 9 个工具（5 查询 + 4 派发）"""
+        """应该恰好注册 20 个工具（15 查询 + 2 分析/状态机 + 3 派发）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 9
+        assert len(ALL_TOOLS) == 21
 
     def test_query_tools_kept(self):
         """5 个查询工具应保留"""
@@ -34,13 +34,13 @@ class TestDispatchToolRegistration:
         assert "grep" in names
 
     def test_dispatch_tools_exist(self):
-        """4 个派发工具应存在"""
+        """3 个派发工具应存在"""
         from app.services.supervisor.tools import ALL_TOOLS
         names = {t.name for t in ALL_TOOLS}
-        assert "dispatch_requirements_planner" in names
         assert "dispatch_outline" in names
         assert "dispatch_chapter" in names
         assert "dispatch_evaluation" in names
+        assert "dispatch_requirements_planner" not in names
 
     def test_old_operation_tools_removed(self):
         """旧的操作型工具应全部移除"""
@@ -63,9 +63,9 @@ class TestDispatchToolRegistration:
             dispatch_chapter,
             dispatch_evaluation,
             dispatch_outline,
-            dispatch_requirements_planner,
+            analyze_requirements,
         )
-        assert dispatch_requirements_planner.coroutine is not None
+        assert analyze_requirements.coroutine is not None
         assert dispatch_outline.coroutine is not None
         assert dispatch_chapter.coroutine is not None
         assert dispatch_evaluation.coroutine is not None
@@ -120,16 +120,6 @@ class TestDispatchToolSchemas:
         assert "chapter_number" in required
         assert "chapter_content" not in required
 
-    def test_dispatch_requirements_planner_schema(self):
-        from app.services.supervisor.tools import DispatchRequirementsPlannerInput
-        schema = DispatchRequirementsPlannerInput.model_json_schema()
-        props = schema["properties"]
-        assert "message" in props
-        assert "work_id" in props
-        required = schema.get("required", [])
-        assert "message" in required
-        assert "work_id" not in required
-
     def test_dispatch_outline_description_mentions_task(self):
         """dispatch_outline 的描述应体现「派发任务」语义"""
         from app.services.supervisor.tools import dispatch_outline
@@ -150,11 +140,6 @@ class TestDispatchToolSchemas:
         from app.services.supervisor.tools import dispatch_evaluation
         desc = dispatch_evaluation.description
         assert "评估" in desc or "evaluation" in desc.lower()
-
-    def test_dispatch_requirements_planner_description_mentions_task(self):
-        from app.services.supervisor.tools import dispatch_requirements_planner
-        desc = dispatch_requirements_planner.description
-        assert "需求" in desc or "todolist" in desc.lower()
 
 
 # ────────────────────────── 3. dispatch_outline coroutine 测试 ──────────────────────────

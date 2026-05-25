@@ -11,6 +11,7 @@ from app.controllers.work_controller import (
     chat_edit,
     chapter_chat_edit,
     delete_work,
+    delete_last_chapter,
     generate_chapter,
     get_chapter_intel,
     generate_outline,
@@ -26,6 +27,7 @@ from app.schemas.work_schema import (
     ChapterChatRequest,
     ChapterChatResponse,
     ChapterGenerateResponse,
+    ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
@@ -169,6 +171,15 @@ def get_chapter_intel_api(
     current_user: User = Depends(get_current_user),
 ):
     return get_chapter_intel(work_id, chapter_number, db, user_id=current_user.id)
+
+
+@router.delete("/{work_id}/chapters/last", response_model=ChapterDeleteLastResponse)
+def delete_last_chapter_api(
+    work_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return delete_last_chapter(work_id, db, user_id=current_user.id)
 
 
 @router.post("/{work_id}/chapters/{chapter_number}/generate", response_model=ChapterGenerateResponse)

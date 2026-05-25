@@ -1,4 +1,7 @@
-"""评估打分环节使用 tool-calling 提交结构化结果。"""
+"""评估工具纯文本输出测试
+
+评估工具已从 tool-calling（submit_* 工具）改为纯文本 LLM 输出。
+"""
 
 import sys
 from pathlib import Path
@@ -12,18 +15,6 @@ sys.path.insert(0, "/root/Novel/backend")
 GET_LLM_PATCH = "app.services.supervisor.sub_agent_base.get_llm"
 
 
-def _make_tool_call_llm(tool_name: str, args: dict):
-    mock_llm = MagicMock()
-    mock_llm.bind_tools.return_value = mock_llm
-    mock_llm.ainvoke = AsyncMock(
-        return_value=AIMessage(
-            content="",
-            tool_calls=[{"name": tool_name, "args": args, "id": "call_test_1"}],
-        )
-    )
-    return mock_llm
-
-
 class _FakePrompt:
     def format(self, **kwargs):
         return "formatted prompt"
@@ -33,21 +24,17 @@ class _FakePrompt:
         return cls()
 
 
-class TestEditorEvaluationToolCalling:
+class TestEditorEvaluationFreeText:
 
     @pytest.mark.asyncio
-    async def test_editor_eval_uses_bind_tools_not_structured_output(self):
+    async def test_editor_eval_returns_free_text(self):
         from app.services.supervisor.evaluation_tools import _evaluate_as_editor_coroutine
 
-        args = {
-            "total_score": 45,
-            "scores": {"outline_fidelity": 8},
-            "strengths": ["结构完整"],
-            "issues": ["对话生硬"],
-            "suggestions": ["增加内心独白"],
-        }
         config = {"configurable": {"db": MagicMock(), "emit": lambda e, d: None}}
-        mock_llm = _make_tool_call_llm("submit_editor_evaluation", args)
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(content="本章结构完整，节奏流畅。建议加强对话描写。")
+        )
 
         with patch(GET_LLM_PATCH, return_value=mock_llm), \
              patch("app.services.supervisor.evaluation_tools.PromptTemplate") as mock_pt, \
@@ -58,22 +45,16 @@ class TestEditorEvaluationToolCalling:
                 config=config,
             )
 
-        mock_llm.bind_tools.assert_called_once()
-        bind_call_args = mock_llm.bind_tools.call_args
-        assert bind_call_args[1].get("tool_choice") is None, (
-            "tool_choice 不应传入，thinking mode 模型不支持"
-        )
-        mock_llm.with_structured_output.assert_not_called()
-        assert "45" in result
-        assert "对话生硬" in result
+        assert isinstance(result, str)
+        assert "结构完整" in result
+        mock_llm.bind_tools.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_editor_eval_fails_without_tool_call(self):
+    async def test_editor_eval_no_tool_call_needed(self):
         from app.services.supervisor.evaluation_tools import _evaluate_as_editor_coroutine
 
         mock_llm = MagicMock()
-        mock_llm.bind_tools.return_value = mock_llm
-        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="未调用工具"))
+        mock_llm.ainvoke = AsyncMock(return_value=AIMessage(content="纯文本评估结果"))
 
         config = {"configurable": {"db": MagicMock(), "emit": lambda e, d: None}}
 
@@ -86,24 +67,20 @@ class TestEditorEvaluationToolCalling:
                 config=config,
             )
 
-        assert "未正确调用 submit_editor_evaluation" in result
+        assert result == "纯文本评估结果"
 
 
-class TestReaderEvaluationToolCalling:
+class TestReaderEvaluationFreeText:
 
     @pytest.mark.asyncio
-    async def test_reader_eval_uses_bind_tools(self):
+    async def test_reader_eval_returns_free_text(self):
         from app.services.supervisor.evaluation_tools import _evaluate_as_reader_coroutine
 
-        args = {
-            "total_score": 38,
-            "scores": {"hook": 7},
-            "strengths": ["代入感强"],
-            "issues": ["悬念不足"],
-            "suggestions": ["增加章末钩子"],
-        }
         config = {"configurable": {"db": MagicMock(), "emit": lambda e, d: None}}
-        mock_llm = _make_tool_call_llm("submit_reader_evaluation", args)
+        mock_llm = MagicMock()
+        mock_llm.ainvoke = AsyncMock(
+            return_value=AIMessage(content="代入感强，悬念设置合理，追更意愿高。")
+        )
 
         with patch(GET_LLM_PATCH, return_value=mock_llm), \
              patch("app.services.supervisor.evaluation_tools.PromptTemplate") as mock_pt, \
@@ -114,29 +91,35 @@ class TestReaderEvaluationToolCalling:
                 config=config,
             )
 
-        mock_llm.bind_tools.assert_called_once()
-        assert "38" in result
+        assert isinstance(result, str)
+        assert "代入感" in result
+        mock_llm.bind_tools.assert_not_called()
 
 
-class TestEvaluationAgentCollectsToolMessages:
+class TestEvaluationAgentCollectsTextResults:
 
     @pytest.mark.asyncio
-    async def test_evaluate_chapter_reads_full_message_history(self):
+    async def test_evaluate_chapter_returns_text_tuple(self):
         from app.services.evaluation_agent import EvaluationAgent
 
         editor_msg = ToolMessage(
-            content="编辑视角评分：42/60。问题：节奏偏慢。建议：收紧中段。",
+            content="编辑视角：结构完整，节奏流畅。",
             name="evaluate_as_editor",
             tool_call_id="e1",
         )
         reader_msg = ToolMessage(
-            content="读者视角评分：50/60。问题：悬念不足。建议：加强章末钩子。",
+            content="读者视角：代入感强，可读性好。",
             name="evaluate_as_reader",
             tool_call_id="r1",
         )
+        sync_msg = ToolMessage(
+            content="同步性：大纲与正文基本一致。",
+            name="evaluate_chapter_outline_sync",
+            tool_call_id="s1",
+        )
         mock_graph = MagicMock()
         mock_graph.ainvoke = AsyncMock(
-            return_value={"messages": [editor_msg, reader_msg]}
+            return_value={"messages": [editor_msg, reader_msg, sync_msg]}
         )
 
         db = MagicMock()
@@ -146,16 +129,19 @@ class TestEvaluationAgentCollectsToolMessages:
 
         agent = EvaluationAgent()
         with patch.object(agent, "_build_graph", return_value=mock_graph):
-            title, editor, reader = await agent.evaluate_chapter(
+            title, editor_text, reader_text, sync_text = await agent.evaluate_chapter(
                 db=db,
                 work_id="work-1",
                 chapter_number=1,
             )
 
         assert title == "第一章"
-        assert editor["total_score"] == 42
-        assert "节奏偏慢" in editor["issues"]
-        assert reader["total_score"] == 50
+        assert isinstance(editor_text, str)
+        assert "结构完整" in editor_text
+        assert isinstance(reader_text, str)
+        assert "代入感" in reader_text
+        assert isinstance(sync_text, str)
+        assert "同步性" in sync_text
 
 
 class TestWorkIdInjectedIntoPrompt:

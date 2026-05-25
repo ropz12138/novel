@@ -104,7 +104,7 @@ class OutlineAgent:
         configurable = {"db": db, "emit": self.emit, "auto_mode": True, "user_id": self.user_id}
         if db_lock is not None:
             configurable["db_lock"] = db_lock
-        config = {"configurable": configurable, "recursion_limit": 25}
+        config = {"configurable": configurable, "recursion_limit": 100}
 
         system_prompt = _build_outline_system_prompt(work_id="", user_message=idea, auto_mode=True)
 
@@ -167,7 +167,7 @@ class OutlineAgent:
         configurable = {"db": db, "emit": self.emit, "auto_mode": auto_mode, "user_id": self.user_id}
         if db_lock is not None:
             configurable["db_lock"] = db_lock
-        config = {"configurable": configurable, "recursion_limit": 25}
+        config = {"configurable": configurable, "recursion_limit": 100}
 
         system_prompt = _build_outline_system_prompt(
             work_id=work_id, user_message=message, auto_mode=auto_mode,

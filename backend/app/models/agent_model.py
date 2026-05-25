@@ -54,6 +54,9 @@ class SupervisorSession(Base):
     # 自动模式：True 时所有编辑操作直接执行，不等待用户确认（默认开启）
     auto_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # 需求分析结论：信息是否充分可执行
+    ready_to_execute: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # 当前执行中的子 Agent 会话信息
     active_child: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 

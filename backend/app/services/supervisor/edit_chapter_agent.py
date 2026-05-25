@@ -153,7 +153,7 @@ class EditChapterAgent:
                 "emit": self.emit,
                 "db_lock": db_lock,
             },
-            "recursion_limit": 25,
+            "recursion_limit": 100,
         }
 
         system_prompt = _build_edit_chapter_system_prompt(

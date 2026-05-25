@@ -21,9 +21,9 @@ class TestToolRegistration:
     """验证所有工具正确注册"""
 
     def test_all_tools_count(self):
-        """应该恰好注册 9 个工具（5 查询 + 4 派发）"""
+        """应该恰好注册 20 个工具（5 查询 + 4 派发）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 9
+        assert len(ALL_TOOLS) == 21
 
     def test_query_characters_registered(self):
         from app.services.supervisor.tools import query_characters
@@ -44,11 +44,6 @@ class TestToolRegistration:
         from app.services.supervisor.tools import dispatch_outline
         assert dispatch_outline.name == "dispatch_outline"
         assert dispatch_outline.coroutine is not None
-
-    def test_dispatch_requirements_planner_registered(self):
-        from app.services.supervisor.tools import dispatch_requirements_planner
-        assert dispatch_requirements_planner.name == "dispatch_requirements_planner"
-        assert dispatch_requirements_planner.coroutine is not None
 
     def test_dispatch_chapter_registered(self):
         from app.services.supervisor.tools import dispatch_chapter
@@ -84,10 +79,10 @@ class TestToolRegistration:
             dispatch_chapter,
             dispatch_evaluation,
             dispatch_outline,
-            dispatch_requirements_planner,
+            analyze_requirements,
             dispatch_writing_expert,
         )
-        assert dispatch_requirements_planner.coroutine is not None
+        assert analyze_requirements.coroutine is not None
         assert dispatch_outline.coroutine is not None
         assert dispatch_chapter.coroutine is not None
         assert dispatch_evaluation.coroutine is not None
@@ -116,7 +111,7 @@ class TestToolSchemas:
         from app.services.supervisor.tools import GrepInput
         schema = GrepInput.model_json_schema()
         assert "work_id" in schema["properties"]
-        assert "keyword" in schema["properties"]
+        assert "keywords" in schema["properties"]
         assert "scope" in schema["properties"]
 
     def test_dispatch_outline_schema(self):
@@ -248,7 +243,7 @@ class TestQueryToolsUnit:
         config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
         with patch("app.services.character_service.CharacterService.grep", return_value=[]):
             result = grep.invoke(
-                {"work_id": "w1", "keyword": "不存在的内容", "scope": "all", "context_chars": 200},
+                {"work_id": "w1", "keywords": ["不存在的内容"], "scope": "all", "context_chars": 200},
                 config=config,
             )
         assert "未找到" in result
@@ -262,7 +257,7 @@ class TestQueryToolsUnit:
         ]
         with patch("app.services.character_service.CharacterService.grep", return_value=fake_results):
             result = grep.invoke(
-                {"work_id": "w1", "keyword": "复仇", "scope": "characters", "context_chars": 200},
+                {"work_id": "w1", "keywords": ["复仇"], "scope": "characters", "context_chars": 200},
                 config=config,
             )
         assert "张三" in result

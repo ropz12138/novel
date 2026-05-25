@@ -30,7 +30,10 @@ class QueryOutlineCharactersInput(BaseModel):
 
 class QueryOutlineRelatedChaptersInput(BaseModel):
     work_id: str = Field(description="作品ID")
-    outline_query: str = Field(description="大纲片段查询词：可传节点ID（如 T1）或关键词（如 末日爆发/苏慕雪）")
+    outline_queries: list[str] = Field(default_factory=list, description="大纲片段查询词列表：可传多个节点ID或关键词")
+    outline_query: str | None = Field(default=None, description="兼容字段：单个查询词")
+    chapter_start: int | None = Field(default=None, description="可选：起始章节号")
+    chapter_end: int | None = Field(default=None, description="可选：结束章节号")
     chapter_limit: int = Field(default=10, ge=1, le=100, description="返回章节上限")
 
 
@@ -336,9 +339,12 @@ def query_outline_characters(work_id: str, config: RunnableConfig) -> str:
 @tool(args_schema=QueryOutlineRelatedChaptersInput)
 def query_outline_related_chapters(
     work_id: str,
-    outline_query: str,
+    outline_queries: list[str],
     chapter_limit: int,
-    config: RunnableConfig,
+    outline_query: str | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
+    config: RunnableConfig = None,
 ) -> str:
     """级联查询：先匹配大纲片段，再回查关联章节（基于 chapter_metadata）。"""
     from app.models.work_model import Chapter, ChapterMetadata, Work
@@ -351,9 +357,12 @@ def query_outline_related_chapters(
     if not work:
         return f"作品 {work_id} 不存在。"
 
-    q = (outline_query or "").strip().lower()
-    if not q:
-        return "查询失败：outline_query 不能为空。"
+    normalized = [str(x).strip().lower() for x in (outline_queries or []) if str(x).strip()]
+    if outline_query and str(outline_query).strip():
+        normalized.append(str(outline_query).strip().lower())
+    queries = list(dict.fromkeys(normalized))
+    if not queries:
+        return "查询失败：outline_queries 不能为空。"
 
     outline = work.outline_tree or {}
     timeline = outline.get("timeline", []) if isinstance(outline, dict) else []
@@ -364,40 +373,41 @@ def query_outline_related_chapters(
     matched_node_ids: set[str] = set()
     outline_hits: list[str] = []
 
-    def _text_hit(parts: list[object]) -> bool:
+    def _text_hit(parts: list[object], q: str) -> bool:
         merged = " ".join(str(p or "") for p in parts).lower()
         return q in merged
 
-    for node in timeline:
-        node_id = str(node.get("id") or "")
-        if not node_id:
-            continue
-        if q == node_id.lower() or _text_hit([
-            node.get("id"),
-            node.get("development_node"),
-            node.get("summary"),
-            node.get("time_node"),
-        ]):
-            matched_node_ids.add(node_id)
-            outline_hits.append(f"timeline:{node_id} {node.get('development_node', '')}".strip())
-
     extra_keywords: set[str] = set()
-    for item in branches:
-        if _text_hit([item.get("id"), item.get("name"), item.get("summary"), item.get("description")]):
-            label = item.get("name") or item.get("id") or "未命名分支"
-            outline_hits.append(f"branch:{label}")
-            extra_keywords.add(str(item.get("name") or "").strip())
-    for item in characters:
-        if _text_hit([item.get("name"), item.get("role_type"), item.get("background"), item.get("personality")]):
-            name = str(item.get("name") or "").strip()
-            if name:
-                outline_hits.append(f"character:{name}")
-                extra_keywords.add(name)
-    for item in foreshadowing:
-        if _text_hit([item.get("id"), item.get("content"), item.get("plant_node"), item.get("payoff_node")]):
-            fid = str(item.get("id") or "unknown")
-            outline_hits.append(f"foreshadow:{fid}")
-            extra_keywords.add(str(item.get("content") or "").strip())
+    for q in queries:
+        for node in timeline:
+            node_id = str(node.get("id") or "")
+            if not node_id:
+                continue
+            if q == node_id.lower() or _text_hit([
+                node.get("id"),
+                node.get("development_node"),
+                node.get("summary"),
+                node.get("time_node"),
+            ], q):
+                matched_node_ids.add(node_id)
+                outline_hits.append(f"[{q}] timeline:{node_id} {node.get('development_node', '')}".strip())
+
+        for item in branches:
+            if _text_hit([item.get("id"), item.get("name"), item.get("summary"), item.get("description")], q):
+                label = item.get("name") or item.get("id") or "未命名分支"
+                outline_hits.append(f"[{q}] branch:{label}")
+                extra_keywords.add(str(item.get("name") or "").strip())
+        for item in characters:
+            if _text_hit([item.get("name"), item.get("role_type"), item.get("background"), item.get("personality")], q):
+                name = str(item.get("name") or "").strip()
+                if name:
+                    outline_hits.append(f"[{q}] character:{name}")
+                    extra_keywords.add(name)
+        for item in foreshadowing:
+            if _text_hit([item.get("id"), item.get("content"), item.get("plant_node"), item.get("payoff_node")], q):
+                fid = str(item.get("id") or "unknown")
+                outline_hits.append(f"[{q}] foreshadow:{fid}")
+                extra_keywords.add(str(item.get("content") or "").strip())
 
     with _with_lock(config):
         metadata_rows = db.query(ChapterMetadata).filter_by(work_id=work_id).all()
@@ -405,8 +415,12 @@ def query_outline_related_chapters(
         return "暂无章节元数据（chapter_metadata），暂时无法做级联查询。"
 
     matched: dict[int, dict] = {}
-    keywords = [q] + [k.lower() for k in extra_keywords if k]
+    keywords = queries + [k.lower() for k in extra_keywords if k]
     for b in metadata_rows:
+        if chapter_start is not None and b.chapter_number < chapter_start:
+            continue
+        if chapter_end is not None and b.chapter_number > chapter_end:
+            continue
         score = 0
         reasons: list[str] = []
 
@@ -436,7 +450,7 @@ def query_outline_related_chapters(
 
     if not matched:
         return (
-            f"未找到与「{outline_query}」相关的章节。"
+            f"未找到与「{', '.join(queries)}」相关的章节。"
             "可尝试传入更精确的 timeline 节点ID（如 T1/T2）或更具体的关键词。"
         )
 
@@ -450,7 +464,7 @@ def query_outline_related_chapters(
     chapter_map = {c.chapter_number: c for c in chapters}
 
     ranked = sorted(matched.items(), key=lambda x: (-x[1]["score"], x[0]))[:chapter_limit]
-    lines = [f"查询词：{outline_query}", f"命中大纲线索：{'; '.join(outline_hits[:8]) or '无'}", "关联章节："]
+    lines = [f"查询词：{', '.join(queries)}", f"命中大纲线索：{'; '.join(outline_hits[:8]) or '无'}", "关联章节："]
     for ch_no, meta in ranked:
         ch = chapter_map.get(ch_no)
         title = ch.title if ch else f"第{ch_no}章"

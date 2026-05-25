@@ -11,12 +11,13 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from app.core.deepseek_llm import DeepSeekChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
 from sqlalchemy.orm import Session
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.models.agent_model import SupervisorSession
 from app.services import message_service
+from app.services.message_langchain import db_messages_to_langchain
 from app.services.supervisor.state import SupervisorState
 from app.services.supervisor.tools import ALL_TOOLS
 
@@ -67,7 +69,29 @@ def _chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
     """将累计的 AIMessageChunk 转为 AIMessage，供 LangGraph 状态与 tool 路由使用。"""
     if isinstance(full, AIMessage):
         return full
-    tc = list(full.tool_calls) if getattr(full, "tool_calls", None) else []
+    raw_tc = list(full.tool_calls) if getattr(full, "tool_calls", None) else []
+    tc: list[dict[str, Any]] = []
+    for idx, call in enumerate(raw_tc):
+        call_id = call.get("id")
+        if not call_id:
+            call_id = f"call_auto_{uuid.uuid4().hex[:12]}"
+            logger.warning(
+                "supervisor chunk missing tool_call id; generated id=%s name=%s idx=%s",
+                call_id,
+                call.get("name"),
+                idx,
+            )
+        args = call.get("args")
+        if not isinstance(args, dict):
+            args = {}
+        tc.append(
+            {
+                "name": call.get("name", ""),
+                "args": args,
+                "id": call_id,
+                "type": call.get("type", "tool_call"),
+            }
+        )
     kwargs: dict[str, Any] = {"content": full.content or "", "tool_calls": tc}
     _id = getattr(full, "id", None)
     if _id:
@@ -138,7 +162,7 @@ class SupervisorAgent:
     def _build_graph(self) -> StateGraph:
         """构建 LangGraph StateGraph"""
         model_conf = settings.get_model_config()
-        llm = ChatOpenAI(
+        llm = DeepSeekChatOpenAI(
             model=settings.default_model,
             api_key=model_conf["api_key"],
             base_url=model_conf["base_url"],
@@ -332,32 +356,13 @@ class SupervisorAgent:
                 "supervisor_session_id": session.id,
                 "auto_mode": session.auto_mode,
                 "user_id": session.user_id or self.user_id,
+                "sub_agent_memories": {},
             },
-            "recursion_limit": 25,
+            "recursion_limit": 100,
         }
 
-        # 从 messages 表构建历史 LangChain messages
-        # 只保留有语义的消息：用户输入 + 助手有意义的回复
-        # 过滤掉 process_note（UI 阶段标记）、edit_diff_card（diff 卡片）等无上下文价值的内容
-        _NO_CONTEXT_TYPES = frozenset({
-            "process_note",
-            "edit_diff_card",
-            "outline_diff_card",
-            "character_diff_card",
-        })
         db_messages = message_service.get_messages_by_session(self.db, session.id)
-        langchain_messages = []
-        for m in db_messages:
-            if m.role == "user":
-                langchain_messages.append(HumanMessage(content=m.content))
-            elif m.role == "assistant":
-                meta = m.meta if isinstance(m.meta, dict) else {}
-                if meta.get("type") in _NO_CONTEXT_TYPES:
-                    continue
-                content = (m.content or "").strip()
-                if not content:
-                    continue
-                langchain_messages.append(AIMessage(content=content))
+        langchain_messages = db_messages_to_langchain(db_messages)
 
         initial_state = {
             "messages": langchain_messages,
@@ -410,9 +415,13 @@ class SupervisorAgent:
             # 提取最终 AI 回复
             final_messages = final_state.get("messages", []) if final_state else []
             assistant_content = ""
+            assistant_reasoning = ""
             for msg in reversed(final_messages):
                 if isinstance(msg, AIMessage) and msg.content and not getattr(msg, "tool_calls", None):
                     assistant_content = msg.content
+                    assistant_reasoning = (
+                        getattr(msg, "additional_kwargs", {}).get("reasoning_content") or ""
+                    )
                     break
 
             if not assistant_content and final_messages:
@@ -432,6 +441,9 @@ class SupervisorAgent:
             # 最终回复写入 messages 表
             next_order = message_service.get_next_sort_order(self.db, session.id)
             tool_history = self._extract_tool_history(final_messages)
+            final_meta: dict[str, Any] = {"tool_calls": tool_history}
+            if assistant_reasoning:
+                final_meta["reasoning_content"] = assistant_reasoning
             message_service.create_message(
                 self.db,
                 session_id=session.id,
@@ -439,7 +451,7 @@ class SupervisorAgent:
                 content=assistant_content,
                 work_id=self.work_id,
                 sort_order=next_order,
-                meta={"tool_calls": tool_history},
+                meta=final_meta,
             )
 
             # edit_chapter 工具内已将 status 置为 waiting 并写入 active_child，此处不得覆盖为 completed
@@ -494,6 +506,10 @@ class SupervisorAgent:
                     and content == (final_assistant_content or "").strip()
                 )
                 if content and not is_final_assistant:
+                    save_meta: dict[str, Any] = {"phase": "intermediate"}
+                    rc = getattr(msg, "additional_kwargs", {}).get("reasoning_content")
+                    if rc:
+                        save_meta["reasoning_content"] = rc
                     message_service.create_message(
                         db,
                         session_id=session.id,
@@ -501,13 +517,19 @@ class SupervisorAgent:
                         content=content,
                         work_id=self.work_id,
                         sort_order=next_order,
-                        meta={"phase": "intermediate"},
+                        meta=save_meta,
                     )
                     next_order += 1
 
             if isinstance(msg, AIMessage) and hasattr(msg, "tool_calls") and msg.tool_calls:
-                # tool_call
-                for tc in msg.tool_calls:
+                rc = getattr(msg, "additional_kwargs", {}).get("reasoning_content")
+                for i, tc in enumerate(msg.tool_calls):
+                    tc_meta: dict[str, Any] = {"args": tc.get("args", {})}
+                    tc_id = tc.get("id")
+                    if tc_id:
+                        tc_meta["tool_call_id"] = tc_id
+                    if i == 0 and rc:
+                        tc_meta["reasoning_content"] = rc
                     message_service.create_message(
                         db,
                         session_id=session.id,
@@ -515,7 +537,7 @@ class SupervisorAgent:
                         content=tc.get("name", ""),
                         work_id=self.work_id,
                         sort_order=next_order,
-                        meta={"args": tc.get("args", {})},
+                        meta=tc_meta,
                     )
                     next_order += 1
             # ToolMessage (tool_result)
@@ -529,7 +551,10 @@ class SupervisorAgent:
                     content=str(content)[:500],
                     work_id=self.work_id,
                     sort_order=next_order,
-                    meta={"tool_name": getattr(msg, "name", "unknown")},
+                    meta={
+                        "tool_name": getattr(msg, "name", "unknown"),
+                        "tool_call_id": getattr(msg, "tool_call_id", "") or "",
+                    },
                 )
                 next_order += 1
 

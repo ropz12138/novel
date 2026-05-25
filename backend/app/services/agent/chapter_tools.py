@@ -31,13 +31,17 @@ class QueryOutlineInput(BaseModel):
 
 class QueryChapterOutlineInput(BaseModel):
     work_id: str = Field(description="作品ID")
-    chapter_number: int = Field(description="章节号")
+    chapter_start: int = Field(default=1, description="起始章节号")
+    chapter_end: int | None = Field(default=None, description="结束章节号")
+    chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
 
 
 class QueryPreviousChaptersInput(BaseModel):
     work_id: str = Field(description="作品ID")
-    chapter_number: int = Field(description="当前章节号，会查询此之前的章节")
-    limit: int = Field(default=3, description="最多查询几章前文")
+    chapter_start: int = Field(default=1, description="起始章节号，会查询每章之前的章节")
+    chapter_end: int | None = Field(default=None, description="结束章节号")
+    chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
+    limit: int = Field(default=3, description="每个目标章节最多查询几章前文")
 
 
 class QueryCharactersInput(BaseModel):
@@ -104,6 +108,37 @@ def _word_count(text: str) -> int:
     return len(re.sub(r"\s", "", text))
 
 
+def _extract_body_and_title(text: str, chapter_number: int) -> tuple[str, str]:
+    lines = text.splitlines()
+    idx = len(lines) - 1
+    while idx >= 0 and not lines[idx].strip():
+        idx -= 1
+
+    if idx >= 0:
+        m = re.match(r"^\s*标题[：:]\s*(.+?)\s*$", lines[idx])
+        if m:
+            title = m.group(1).strip()
+            if title:
+                body = "\n".join(lines[:idx]).rstrip()
+                logger.info(
+                    "chapter_title_parse chapter=%s mode=tail_line parsed_title=%r tail_line=%r",
+                    chapter_number,
+                    title,
+                    lines[idx][:200],
+                )
+                return body, title
+
+    if idx >= 0:
+        logger.info(
+            "chapter_title_parse chapter=%s mode=fallback tail_line=%r",
+            chapter_number,
+            lines[idx][:200],
+        )
+    else:
+        logger.info("chapter_title_parse chapter=%s mode=fallback tail_line=<empty>", chapter_number)
+    return text.rstrip(), f"第{chapter_number}章"
+
+
 # ── 工具实现 ──
 
 
@@ -136,8 +171,14 @@ def query_outline(work_id: str, config: RunnableConfig) -> str:
 
 
 @tool(args_schema=QueryChapterOutlineInput)
-def query_chapter_outline(work_id: str, chapter_number: int, config: RunnableConfig) -> str:
-    """读取指定章节的大纲节点信息。"""
+def query_chapter_outline(
+    work_id: str,
+    chapter_start: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """读取章节范围的大纲节点信息。"""
     from app.models.work_model import Work
     from app.services.work_service import WorkService
 
@@ -149,41 +190,71 @@ def query_chapter_outline(work_id: str, chapter_number: int, config: RunnableCon
     if not work:
         return f"作品 {work_id} 不存在。"
 
-    chapter_outline = WorkService._find_chapter_outline(work.outline_tree, chapter_number)
-    emit("query_result", {"source": f"第{chapter_number}章大纲", "summary": chapter_outline or "未找到"})
-    return chapter_outline or f"第{chapter_number}章未找到对应的大纲节点。"
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
+
+    parts = []
+    for ch_no in range(chapter_start, chapter_end + 1):
+        chapter_outline = WorkService._find_chapter_outline(work.outline_tree, ch_no)
+        emit("query_result", {"source": f"第{ch_no}章大纲", "summary": chapter_outline or "未找到"})
+        parts.append(chapter_outline or f"第{ch_no}章未找到对应的大纲节点。")
+    return "\n\n".join(parts)
 
 
 @tool(args_schema=QueryPreviousChaptersInput)
-def query_previous_chapters(work_id: str, chapter_number: int, limit: int, config: RunnableConfig) -> str:
-    """查询当前章节之前的已写章节正文摘要，用于保持前后文连贯。"""
+def query_previous_chapters(
+    work_id: str,
+    chapter_start: int,
+    limit: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """查询章节范围内每个目标章节之前的正文摘要。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
     emit = _get_emit(config)
 
-    with _with_lock(config):
-        prev_chapters = (
-            db.query(Chapter)
-            .filter_by(work_id=work_id)
-            .filter(Chapter.chapter_number < chapter_number)
-            .filter(Chapter.content != "")
-            .order_by(Chapter.chapter_number.desc())
-            .limit(limit)
-            .all()
-        )
-    prev_chapters.reverse()
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
 
-    if not prev_chapters:
-        return "这是第一章，暂无前文。"
+    blocks = []
+    for target_ch in range(chapter_start, chapter_end + 1):
+        with _with_lock(config):
+            prev_chapters = (
+                db.query(Chapter)
+                .filter_by(work_id=work_id)
+                .filter(Chapter.chapter_number < target_ch)
+                .filter(Chapter.content != "")
+                .order_by(Chapter.chapter_number.desc())
+                .limit(limit)
+                .all()
+            )
+        prev_chapters.reverse()
 
-    parts = []
-    for ch in prev_chapters:
-        summary = ch.content[:800] + ("..." if len(ch.content) > 800 else "")
-        parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
-        emit("query_result", {"source": f"第{ch.chapter_number}章", "summary": summary[:200]})
+        if not prev_chapters:
+            blocks.append(f"第{target_ch}章：这是第一章，暂无前文。")
+            continue
 
-    return "\n\n".join(parts)
+        parts = [f"第{target_ch}章前文："]
+        for ch in prev_chapters:
+            summary = ch.content[:800] + ("..." if len(ch.content) > 800 else "")
+            parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
+            emit("query_result", {"source": f"第{ch.chapter_number}章", "summary": summary[:200]})
+        blocks.append("\n\n".join(parts))
+
+    return "\n\n".join(blocks)
 
 
 @tool(args_schema=QueryCharactersInput)
@@ -361,7 +432,6 @@ async def _generate_chapter_content_coroutine(
             "story_info": story_info or "（未提供）",
             "outline_tree": outline_tree or "（未提供）",
             "chapter_outline": chapter_outline or "（未提供）",
-            "chapter_title": f"第{chapter_number}章",
             "thinking_notes": thinking_notes or "（无构思笔记）",
             "context_pack": context_pack or "（无额外上下文）",
             "previous_chapters": previous_chapters or "（这是第一章，暂无前文）",
@@ -370,8 +440,18 @@ async def _generate_chapter_content_coroutine(
             raw_output += text
             emit("write_stream", {"chunk": text})
 
+        chapter_body, parsed_title = _extract_body_and_title(raw_output, chapter_number)
+
+        logger.info(
+            "chapter_write_done chapter=%s parsed_title=%r body_wc=%s raw_wc=%s",
+            chapter_number,
+            parsed_title,
+            _word_count(chapter_body),
+            _word_count(raw_output),
+        )
         emit("write_done", {
-            "word_count": _word_count(raw_output),
+            "title": parsed_title,
+            "word_count": _word_count(chapter_body),
         })
 
         # 生成即保存：避免子 Agent 在“生成-检查-再生成”循环中因未落库导致反复调用生成工具。
@@ -381,16 +461,16 @@ async def _generate_chapter_content_coroutine(
             ).first()
 
             if chapter:
-                chapter.title = chapter.title or f"第{chapter_number}章"
-                chapter.content = raw_output
-                chapter.status = "草稿"
+                chapter.title = parsed_title or chapter.title or f"第{chapter_number}章"
+                chapter.content = chapter_body
+                chapter.status = "已保存"
             else:
                 chapter = Chapter(
                     work_id=work_id,
                     chapter_number=chapter_number,
-                    title=f"第{chapter_number}章",
-                    content=raw_output,
-                    status="草稿",
+                    title=parsed_title or f"第{chapter_number}章",
+                    content=chapter_body,
+                    status="已保存",
                 )
                 db.add(chapter)
                 # 立即 flush，尽早暴露唯一键问题，避免同一 Session 内重复堆积 pending 插入。
@@ -414,9 +494,14 @@ async def _generate_chapter_content_coroutine(
         emit("saved", {
             "chapter_number": chapter_number,
             "title": chapter.title,
-            "word_count": _word_count(raw_output),
+            "word_count": _word_count(chapter_body),
             "source": "generate_chapter_content",
         })
+        logger.info(
+            "chapter_saved chapter=%s db_title=%r source=generate_chapter_content",
+            chapter_number,
+            chapter.title,
+        )
         emit("chapter_metadata_generated", {
             "chapter_number": chapter_number,
             "summary": metadata_row.summary,
@@ -429,7 +514,7 @@ async def _generate_chapter_content_coroutine(
         })
 
         return (
-            f"{raw_output}\n\n"
+            f"{chapter_body}\n\n"
             "【系统说明】本章已创建并保存，且已自动同步章节元数据。后续优化请调用编辑工具。"
         )
     except Exception as exc:
@@ -446,7 +531,7 @@ generate_chapter_content = StructuredTool.from_function(
     coroutine=_generate_chapter_content_coroutine,
     name="generate_chapter_content",
     description=(
-        "调用 LLM 生成章节正文，并自动保存到数据库（草稿状态）。"
+        "调用 LLM 生成章节正文，并自动保存到数据库（已保存状态）。"
         "在调用前，应先用其他工具查询大纲、前文、角色等上下文信息。"
         "传入所有收集到的上下文和用户要求，返回完整的章节正文。"
     ),
@@ -471,14 +556,14 @@ def save_chapter(work_id: str, chapter_number: int, title: str, content: str, co
             if chapter:
                 chapter.title = title or chapter.title
                 chapter.content = content
-                chapter.status = "草稿"
+                chapter.status = "已保存"
             else:
                 chapter = Chapter(
                     work_id=work_id,
                     chapter_number=chapter_number,
                     title=title or f"第{chapter_number}章",
                     content=content,
-                    status="草稿",
+                    status="已保存",
                 )
                 db.add(chapter)
 

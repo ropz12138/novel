@@ -229,6 +229,8 @@ class CharacterService:
         db: Session = None,
         character_name: str | None = None,
         chapter_number: int | None = None,
+        chapter_start: int | None = None,
+        chapter_end: int | None = None,
         *, user_id: str,
     ) -> list[dict]:
         """Grep-like keyword search across characters and/or chapters."""
@@ -284,6 +286,11 @@ class CharacterService:
             q = db.query(Chapter).filter_by(work_id=work_id).filter(Chapter.content != "")
             if chapter_number is not None:
                 q = q.filter(Chapter.chapter_number == int(chapter_number))
+            else:
+                if chapter_start is not None:
+                    q = q.filter(Chapter.chapter_number >= int(chapter_start))
+                if chapter_end is not None:
+                    q = q.filter(Chapter.chapter_number <= int(chapter_end))
             chapters = q.all()
             for ch in chapters:
                 for field_name, content in (("title", ch.title or ""), ("content", ch.content or "")):

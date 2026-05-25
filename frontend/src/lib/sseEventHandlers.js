@@ -76,11 +76,44 @@ export function handleTodolistGenerated(data) {
         type: "requirements_todolist",
         todoCard: {
           intent_summary: data.intent_summary || "",
-          todolist: data.todolist || [],
+          todolist: (data.todolist || []).map((t) => ({
+            db_id: t.db_id || "",
+            task_id: t.task_id || t.id || "",
+            task: t.task || "",
+            owner: t.owner || "supervisor",
+            status: t.status || "pending",
+            depends_on: t.depends_on || [],
+            done_criteria: t.done_criteria || "",
+          })),
           ready_to_execute: !!data.ready_to_execute,
         },
       },
     },
+  };
+}
+
+/**
+ * 处理 task_status_updated SSE 事件
+ */
+export function handleTaskStatusUpdated(data) {
+  return {
+    type: "task_status_update",
+    task_item_id: data.task_item_id || "",
+    task_id: data.task_id || "",
+    old_status: data.old_status || "",
+    new_status: data.new_status || "",
+    result_summary: data.result_summary || "",
+  };
+}
+
+/**
+ * 处理 todolist_readiness_updated SSE 事件
+ */
+export function handleTodolistReadinessUpdated(data) {
+  return {
+    type: "todolist_readiness_update",
+    session_id: data.session_id || "",
+    ready_to_execute: !!data.ready_to_execute,
   };
 }
 
@@ -92,5 +125,7 @@ export function createTimelineActions() {
     handleOutlineEditDiff,
     handleCharacterEditDiff,
     handleTodolistGenerated,
+    handleTaskStatusUpdated,
+    handleTodolistReadinessUpdated,
   };
 }

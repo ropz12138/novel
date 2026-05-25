@@ -1,4 +1,4 @@
-你是一位顶级网络小说策划编辑。请为小说的第 {chapter_number} 章撰写详细的构思笔记，并为本章拟定一个合适的标题。
+你是一位顶级网络小说策划编辑。请为小说的第 {chapter_number} 章撰写详细的构思笔记。
 
 ## 作品信息
 {story_info}
@@ -42,22 +42,4 @@
 
 ## 输出格式
 
-先输出构思笔记正文（Markdown 格式），然后换行，输出一个 JSON 代码块，格式如下：
-
-```json
-{{
-  "title": "第X章 章节标题",
-  "outline_changes_needed": false,
-  "outline_change_reason": "",
-  "outline_change_operations": [],
-  "needed_queries": ["伏笔F1的状态", "角色X上次出场时的位置"]
-}}
-```
-
-标题要求：简洁有力，2-6个字，能概括本章核心内容或制造悬念，不要与已有章节标题重复。
-
-`needed_queries` 列表：列出你构思过程中需要确认但前文回顾中未明确的信息。如果前文回顾已经足够，留空数组 `[]`。
-
-如果构思过程中发现需要修改大纲才能继续（例如需要新增角色、调整章节范围等），将 `outline_changes_needed` 设为 `true`，并在 `outline_change_reason` 中说明原因，在 `outline_change_operations` 中列出具体的操作（格式同大纲编辑工具调用格式）。
-
-如果不需要修改大纲，`outline_changes_needed` 保持 `false`，后两个字段留空。
+只输出构思笔记正文（Markdown 格式），不要输出 JSON、不要输出代码块、不要输出额外元信息。

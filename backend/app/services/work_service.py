@@ -2,12 +2,14 @@ import json
 import logging
 import time
 import asyncio
+from contextvars import ContextVar
 from pathlib import Path
+from typing import Any
 
 from fastapi import HTTPException, status
 from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import StructuredTool
-from langchain_openai import ChatOpenAI
+from app.core.deepseek_llm import DeepSeekChatOpenAI
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
@@ -19,6 +21,7 @@ from app.schemas.work_schema import (
     BranchNode,
     ChapterChatResponse,
     ChapterGenerateResponse,
+    ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
@@ -37,6 +40,17 @@ from app.schemas.work_schema import (
 PROMPT_DIR = Path(__file__).resolve().parent / "prompt_templates"
 
 logger = logging.getLogger(__name__)
+
+
+_OUTLINE_GENERATION_CTX: ContextVar[dict[str, Any] | None] = ContextVar(
+    "outline_generation_ctx",
+    default=None,
+)
+
+_QUOTE_CONSTRAINT = (
+    "【JSON 约束】所有字符串值中禁止使用英文双引号（\"），"
+    "如需引用请使用中文双引号（\u201c\u201d）或单引号。\n"
+)
 
 
 def _llm_message_text(ai_msg) -> str:
@@ -63,9 +77,110 @@ class _SubmitOutlineInput(OutlineTreeData):
     """Tool-call payload for initial outline generation."""
 
 
+def _empty_outline(story: dict | None = None) -> dict:
+    return {
+        "story": story or {},
+        "timeline": [],
+        "branches": [],
+        "foreshadowing": [],
+        "characters": [],
+        "character_links": [],
+    }
+
+
+def _outline_ctx() -> dict[str, Any] | None:
+    return _OUTLINE_GENERATION_CTX.get()
+
+
+def _coerce_character_age(items: list[dict]) -> list[dict]:
+    normalized = []
+    for item in items or []:
+        if isinstance(item, dict):
+            copied = dict(item)
+            if "age" in copied and copied["age"] is not None:
+                copied["age"] = str(copied["age"])
+            normalized.append(copied)
+        else:
+            normalized.append(item)
+    return normalized
+
+
+def _ctx_work(ctx: dict[str, Any]) -> Work:
+    db: Session = ctx["db"]
+    work_id = ctx.get("work_id")
+    work = db.query(Work).filter_by(id=work_id).first() if work_id else None
+    if not work:
+        raise ValueError("大纲生成工具缺少已创建的作品上下文，请先调用 submit_story。")
+    return work
+
+
+def _commit_outline_section(ctx: dict[str, Any], section: str, value: Any) -> Work:
+    db: Session = ctx["db"]
+    work = _ctx_work(ctx)
+    outline = dict(work.outline_tree or _empty_outline())
+    outline[section] = value
+    work.outline_tree = outline
+    flag_modified(work, "outline_tree")
+    db.commit()
+    db.refresh(work)
+    return work
+
+
+def _upsert_outline_characters(ctx: dict[str, Any], characters: list[dict]) -> None:
+    db: Session = ctx["db"]
+    work = _ctx_work(ctx)
+    existing = {
+        c.name: c
+        for c in db.query(Character).filter_by(work_id=work.id).all()
+    }
+    for char_data in characters:
+        name = char_data.get("name", "")
+        if not name:
+            continue
+        char = existing.get(name)
+        payload = {
+            "role_type": char_data.get("role_type", "配角"),
+            "gender": char_data.get("gender", ""),
+            "age": char_data.get("age", ""),
+            "appearance": char_data.get("appearance", ""),
+            "personality": char_data.get("personality", ""),
+            "background": char_data.get("background", ""),
+            "skills": char_data.get("skills", ""),
+            "current_status": char_data.get("current_status", "存活"),
+            "current_goal": char_data.get("current_goal", ""),
+            "first_chapter": char_data.get("first_chapter", 1),
+            "last_chapter": char_data.get("first_chapter"),
+        }
+        if char:
+            for key, value in payload.items():
+                setattr(char, key, value)
+        else:
+            db.add(Character(work_id=work.id, name=name, **payload))
+
+
 def _submit_outline_tool(**kwargs) -> str:
     """Accept the complete generated outline as structured tool arguments."""
-    return "outline_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "outline_received"
+    db: Session = ctx["db"]
+    outline = OutlineTreeData.model_validate(kwargs).model_dump(mode="json")
+    story = outline["story"]
+    work = Work(
+        user_id=ctx["user_id"],
+        title=story["title"],
+        genre=story["genre"],
+        idea=ctx["idea"],
+        tags=ctx["tags_list"],
+        outline_tree=outline,
+        status="草稿",
+    )
+    db.add(work)
+    db.flush()
+    ctx["work_id"] = work.id
+    _upsert_outline_characters(ctx, outline.get("characters", []))
+    db.commit()
+    return "outline_persisted"
 
 
 SUBMIT_OUTLINE_TOOL = StructuredTool.from_function(
@@ -105,31 +220,120 @@ class _SubmitCharacterLinksInput(BaseModel):
 
 
 def _submit_story_tool(**kwargs) -> str:
-    return "story_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "story_received"
+    db: Session = ctx["db"]
+    story = _SubmitStoryInput.model_validate(kwargs).story.model_dump(mode="json")
+    work_id = ctx.get("work_id")
+    work = db.query(Work).filter_by(id=work_id).first() if work_id else None
+    if not work:
+        work = Work(
+            user_id=ctx["user_id"],
+            title=story["title"],
+            genre=story["genre"],
+            idea=ctx["idea"],
+            tags=ctx["tags_list"],
+            outline_tree=_empty_outline(story),
+            status="草稿",
+        )
+        db.add(work)
+        db.flush()
+        ctx["work_id"] = work.id
+    else:
+        outline = dict(work.outline_tree or _empty_outline())
+        outline["story"] = story
+        work.outline_tree = outline
+        work.title = story["title"]
+        work.genre = story["genre"]
+        flag_modified(work, "outline_tree")
+    db.commit()
+    return "story_persisted"
 
 
 def _submit_timeline_tool(**kwargs) -> str:
-    return "timeline_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "timeline_received"
+    timeline = _SubmitTimelineInput.model_validate(kwargs).model_dump(mode="json")["timeline"]
+    _commit_outline_section(ctx, "timeline", timeline)
+    return "timeline_persisted"
 
 
 def _submit_character_briefs_tool(**kwargs) -> str:
-    return "character_briefs_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "character_briefs_received"
+    if isinstance(kwargs.get("briefs"), list):
+        kwargs = dict(kwargs)
+        kwargs["briefs"] = _coerce_character_age(kwargs["briefs"])
+    briefs = _SubmitCharacterBriefsInput.model_validate(kwargs).model_dump(mode="json")["briefs"]
+    ctx["briefs"] = briefs
+    _commit_outline_section(ctx, "character_briefs", briefs)
+    return "character_briefs_persisted"
 
 
 def _submit_character_details_tool(**kwargs) -> str:
-    return "character_details_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "character_details_received"
+    if isinstance(kwargs.get("characters"), list):
+        kwargs = dict(kwargs)
+        kwargs["characters"] = _coerce_character_age(kwargs["characters"])
+    details = _SubmitCharacterDetailsInput.model_validate(kwargs).model_dump(mode="json")["characters"]
+    detail_map = {d["name"]: d for d in details}
+    all_details = {d["name"]: d for d in ctx.get("character_details", [])}
+    all_details.update(detail_map)
+    ctx["character_details"] = list(all_details.values())
+
+    characters = []
+    for brief in ctx.get("briefs", []):
+        detail = all_details.get(brief["name"], {})
+        characters.append({
+            "name": brief["name"],
+            "role_type": brief.get("role_type", "配角"),
+            "gender": brief.get("gender", ""),
+            "age": brief.get("age", ""),
+            "appearance": detail.get("appearance", ""),
+            "personality": detail.get("personality", ""),
+            "background": detail.get("background", ""),
+            "skills": detail.get("skills", ""),
+            "current_status": detail.get("current_status", "存活"),
+            "current_goal": detail.get("current_goal", ""),
+            "first_chapter": brief.get("first_chapter", 1),
+        })
+    _commit_outline_section(ctx, "characters", characters)
+    _upsert_outline_characters(ctx, characters)
+    ctx["characters"] = characters
+    ctx["db"].commit()
+    return "character_details_persisted"
 
 
 def _submit_branches_tool(**kwargs) -> str:
-    return "branches_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "branches_received"
+    branches = _SubmitBranchesInput.model_validate(kwargs).model_dump(mode="json")["branches"]
+    _commit_outline_section(ctx, "branches", branches)
+    return "branches_persisted"
 
 
 def _submit_foreshadowing_tool(**kwargs) -> str:
-    return "foreshadowing_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "foreshadowing_received"
+    foreshadowing = _SubmitForeshadowingInput.model_validate(kwargs).model_dump(mode="json")["foreshadowing"]
+    _commit_outline_section(ctx, "foreshadowing", foreshadowing)
+    return "foreshadowing_persisted"
 
 
 def _submit_character_links_tool(**kwargs) -> str:
-    return "character_links_received"
+    ctx = _outline_ctx()
+    if not ctx:
+        return "character_links_received"
+    character_links = _SubmitCharacterLinksInput.model_validate(kwargs).model_dump(mode="json")["character_links"]
+    _commit_outline_section(ctx, "character_links", character_links)
+    return "character_links_persisted"
 
 
 SUBMIT_STORY_TOOL = StructuredTool.from_function(
@@ -190,6 +394,7 @@ def _parse_outline_from_tool_call(ai_msg) -> dict:
         args = call.get("args") or {}
         if not isinstance(args, dict):
             raise ValueError("submit_outline tool args must be an object")
+        _submit_outline_tool(**args)
         return args
     raise ValueError("LLM did not call submit_outline")
 
@@ -200,6 +405,15 @@ def _extract_tool_calls(ai_msg) -> list[dict]:
 
 
 def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
+    submit_handlers = {
+        "submit_story": _submit_story_tool,
+        "submit_timeline": _submit_timeline_tool,
+        "submit_character_briefs": _submit_character_briefs_tool,
+        "submit_character_details": _submit_character_details_tool,
+        "submit_branches": _submit_branches_tool,
+        "submit_foreshadowing": _submit_foreshadowing_tool,
+        "submit_character_links": _submit_character_links_tool,
+    }
     tool_calls = _extract_tool_calls(ai_msg)
     for call in tool_calls:
         if call.get("name") != tool_name:
@@ -207,8 +421,17 @@ def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
         args = call.get("args") or {}
         if not isinstance(args, dict):
             raise ValueError(f"{tool_name} tool args must be an object")
+        if tool_name == "submit_character_briefs" and isinstance(args.get(field_name), list):
+            args = dict(args)
+            args[field_name] = _coerce_character_age(args[field_name])
+        if tool_name == "submit_character_details" and isinstance(args.get(field_name), list):
+            args = dict(args)
+            args[field_name] = _coerce_character_age(args[field_name])
         if field_name not in args:
             raise ValueError(f"{tool_name} missing field: {field_name}")
+        handler = submit_handlers.get(tool_name)
+        if handler:
+            handler(**args)
         return args[field_name]
 
     raise ValueError(f"LLM did not call {tool_name}")
@@ -217,7 +440,7 @@ def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
 class WorkService:
     def __init__(self) -> None:
         model_conf = settings.get_model_config()
-        base_model = ChatOpenAI(
+        base_model = DeepSeekChatOpenAI(
             model=settings.default_model,
             api_key=model_conf["api_key"],
             base_url=model_conf["base_url"],
@@ -230,7 +453,7 @@ class WorkService:
         # 大纲生成使用默认模型（由 config.json 的 default_model 控制）
         outline_model_name = settings.default_model
         outline_conf = settings.get_model_config(outline_model_name)
-        outline_model = ChatOpenAI(
+        outline_model = DeepSeekChatOpenAI(
             model=outline_model_name,
             api_key=outline_conf["api_key"],
             base_url=outline_conf["base_url"],
@@ -241,51 +464,35 @@ class WorkService:
 
         self.outline_tool_llm = outline_model.bind_tools(
             [SUBMIT_OUTLINE_TOOL],
-            tool_choice="submit_outline",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_story_llm = outline_model.bind_tools(
             [SUBMIT_STORY_TOOL],
-            tool_choice="submit_story",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_timeline_llm = outline_model.bind_tools(
             [SUBMIT_TIMELINE_TOOL],
-            tool_choice="submit_timeline",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_character_briefs_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_BRIEFS_TOOL],
-            tool_choice="submit_character_briefs",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_character_details_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_DETAILS_TOOL],
-            tool_choice="submit_character_details",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_branches_llm = outline_model.bind_tools(
             [SUBMIT_BRANCHES_TOOL],
-            tool_choice="submit_branches",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_foreshadowing_llm = outline_model.bind_tools(
             [SUBMIT_FORESHADOWING_TOOL],
-            tool_choice="submit_foreshadowing",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         self.outline_character_links_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_LINKS_TOOL],
-            tool_choice="submit_character_links",
             max_tokens=393216,
-            extra_body={"enable_thinking": False},
         )
         # NOTE: chat_edit_model (with_structured_output) removed — chat_edit / chat_edit_async
         # now use native Tool-Calling via self.chat_model.bind_tools(ALL_OUTLINE_TOOLS).
@@ -296,7 +503,24 @@ class WorkService:
         path = PROMPT_DIR / file_name
         return path.read_text(encoding="utf-8")
 
-    async def _generate_outline_sections(self, idea: str, tags: str, emit=None) -> dict:
+    async def _generate_outline_sections(
+        self,
+        idea: str,
+        tags: str,
+        emit=None,
+        db: Session | None = None,
+        user_id: str | None = None,
+        tags_list: list[str] | None = None,
+    ) -> dict:
+        token = None
+        if db is not None and user_id is not None:
+            token = _OUTLINE_GENERATION_CTX.set({
+                "db": db,
+                "user_id": user_id,
+                "idea": idea,
+                "tags_list": tags_list or [],
+            })
+
         def _status(phase: str, message: str):
             if emit:
                 emit("outline_status", {"phase": phase, "message": message})
@@ -356,166 +580,184 @@ class WorkService:
             assert last_exc is not None
             raise last_exc
 
-        requirement_context = (
-            f"原始用户需求（必须严格遵循）：\n"
-            f"- 灵感：{idea}\n"
-            f"- 标签：{tags}\n"
-        )
+        try:
+            requirement_context = (
+                f"原始用户需求（必须严格遵循）：\n"
+                f"- 灵感：{idea}\n"
+                f"- 标签：{tags}\n"
+            )
 
-        _status("generating_story", "正在生成故事设定...")
-        story = await _ainvoke_section(
-            self.outline_story_llm,
-            (
-                "你是网络小说策划编辑。基于以下输入输出 story。\n"
-                f"{requirement_context}"
-                "必须调用 submit_story，不要输出普通文本。返回 story={title, genre, volume}。"
-            ),
-            "submit_story",
-            "story",
-        )
-
-        _status("generating_timeline", "正在生成主线大纲...")
-        timeline = await _ainvoke_section(
-            self.outline_timeline_llm,
-            (
-                "你是网络小说策划编辑。请基于以下输入生成完整 timeline。\n"
-                f"{requirement_context}"
-                f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                "必须调用 submit_timeline，不要输出普通文本。"
-                "timeline 节点数量控制在 6-10。"
-                "每个 summary 控制在 80 字以内。"
-                "节点按 order 递增。"
-            ),
-            "submit_timeline",
-            "timeline",
-        )
-
-        _status("generating_character_briefs", "正在生成角色概览...")
-        briefs = await _ainvoke_section(
-            self.outline_character_briefs_llm,
-            (
-                "你是网络小说策划编辑。请基于 story + timeline 设计所有核心角色。\n"
-                f"{requirement_context}"
-                f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                f"timeline：{_compact(timeline, limit=12)}\n"
-                "必须调用 submit_character_briefs，不要输出普通文本。\n"
-                "为每个角色提供 name、role_type、gender、age、first_chapter、brief。\n"
-                "brief 是一句话角色定位，如'与主角共同成长的挚友'。\n"
-                "角色数量控制在 8-15 个，必须包含主角和主要反派。"
-            ),
-            "submit_character_briefs",
-            "briefs",
-        )
-
-        BATCH_SIZE = 4
-        all_details: list[dict] = []
-
-        for batch_start in range(0, len(briefs), BATCH_SIZE):
-            batch_briefs = briefs[batch_start : batch_start + BATCH_SIZE]
-            batch_num = batch_start // BATCH_SIZE + 1
-            total_batches = (len(briefs) + BATCH_SIZE - 1) // BATCH_SIZE
-
-            _status("generating_character_details", f"正在生成角色详情（{batch_num}/{total_batches}）...")
-
-            details = await _ainvoke_section(
-                self.outline_character_details_llm,
+            _status("generating_story", "正在生成故事设定...")
+            story = await _ainvoke_section(
+                self.outline_story_llm,
                 (
-                    "你是网络小说策划编辑。请为以下角色填充详细描述。\n"
+                    "你是网络小说策划编辑。基于以下输入输出 story。\n"
+                    f"{requirement_context}"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_story，不要输出普通文本。返回 story={title, genre, volume}。"
+                ),
+                "submit_story",
+                "story",
+            )
+
+            _status("generating_timeline", "正在生成主线大纲...")
+            timeline = await _ainvoke_section(
+                self.outline_timeline_llm,
+                (
+                    "你是网络小说策划编辑。请基于以下输入生成完整 timeline。\n"
+                    f"{requirement_context}"
+                    f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_timeline，不要输出普通文本。"
+                    "timeline 节点数量控制在 6-10。"
+                    "每个 summary 控制在 80 字以内。"
+                    "节点按 order 递增。"
+                ),
+                "submit_timeline",
+                "timeline",
+            )
+
+            _status("generating_character_briefs", "正在生成角色概览...")
+            briefs = await _ainvoke_section(
+                self.outline_character_briefs_llm,
+                (
+                    "你是网络小说策划编辑。请基于 story + timeline 设计所有核心角色。\n"
                     f"{requirement_context}"
                     f"story：{json.dumps(story, ensure_ascii=False)}\n"
                     f"timeline：{_compact(timeline, limit=12)}\n"
-                    f"全部角色概览：{json.dumps(briefs, ensure_ascii=False)}\n"
-                    f"本批次需要填充的角色：{json.dumps(batch_briefs, ensure_ascii=False)}\n"
-                    "必须调用 submit_character_details，不要输出普通文本。\n"
-                    "为每个角色填充 appearance/personality/background/skills/current_status/current_goal。\n"
-                    "角色字段必须是故事开始前状态。"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_character_briefs，不要输出普通文本。\n"
+                    "为每个角色提供 name、role_type、gender、age、first_chapter、brief。\n"
+                    "brief 是一句话角色定位，如'与主角共同成长的挚友'。\n"
+                    "角色数量控制在 8-15 个，必须包含主角和主要反派。"
                 ),
-                "submit_character_details",
-                "characters",
+                "submit_character_briefs",
+                "briefs",
             )
-            all_details.extend(details)
 
-        detail_map = {d["name"]: d for d in all_details}
-        characters = []
-        for brief in briefs:
-            detail = detail_map.get(brief["name"], {})
-            characters.append({
-                "name": brief["name"],
-                "role_type": brief.get("role_type", "配角"),
-                "gender": brief.get("gender", ""),
-                "age": brief.get("age", ""),
-                "appearance": detail.get("appearance", ""),
-                "personality": detail.get("personality", ""),
-                "background": detail.get("background", ""),
-                "skills": detail.get("skills", ""),
-                "current_status": detail.get("current_status", "存活"),
-                "current_goal": detail.get("current_goal", ""),
-                "first_chapter": brief.get("first_chapter", 1),
-            })
+            BATCH_SIZE = 4
+            all_details: list[dict] = []
 
-        _status("generating_branches", "正在生成支线...")
-        branches = await _ainvoke_section(
-            self.outline_branches_llm,
-            (
-                "你是网络小说策划编辑。请基于 story + timeline + characters 生成 branches。\n"
-                f"{requirement_context}"
-                f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                f"timeline：{_compact(timeline, limit=14)}\n"
-                f"characters：{_compact(characters, limit=10)}\n"
-                "必须调用 submit_branches，不要输出普通文本。attach_to 必须引用 timeline 已存在的 id，side 只能是 left/right。"
-            ),
-            "submit_branches",
-            "branches",
-        )
+            for batch_start in range(0, len(briefs), BATCH_SIZE):
+                batch_briefs = briefs[batch_start : batch_start + BATCH_SIZE]
+                batch_num = batch_start // BATCH_SIZE + 1
+                total_batches = (len(briefs) + BATCH_SIZE - 1) // BATCH_SIZE
 
-        _status("generating_foreshadowing", "正在生成伏笔...")
-        foreshadowing = await _ainvoke_section(
-            self.outline_foreshadowing_llm,
-            (
-                "你是网络小说策划编辑。请基于 story + timeline + branches 生成 foreshadowing。\n"
-                f"{requirement_context}"
-                f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                f"timeline：{_compact(timeline, limit=14)}\n"
-                f"branches：{_compact(branches, limit=12)}\n"
-                "必须调用 submit_foreshadowing，不要输出普通文本。"
-                "foreshadowing 数量控制在 6-16。"
-                "content 控制在 40 字以内。"
-                "每条伏笔需有 plant_node 和 payoff_node。"
-            ),
-            "submit_foreshadowing",
-            "foreshadowing",
-        )
+                _status("generating_character_details", f"正在生成角色详情（{batch_num}/{total_batches}）...")
 
-        _status("generating_character_links", "正在生成角色-剧情关系...")
-        character_links = await _ainvoke_section(
-            self.outline_character_links_llm,
-            (
-                "你是网络小说策划编辑。请基于 story/timeline/branches/foreshadowing/characters 生成 character_links。\n"
-                f"{requirement_context}"
-                f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                f"timeline：{_compact(timeline, limit=14)}\n"
-                f"branches：{_compact(branches, limit=12)}\n"
-                f"foreshadowing：{_compact(foreshadowing, limit=20)}\n"
-                f"characters：{_compact(characters, limit=10)}\n"
-                "必须调用 submit_character_links，不要输出普通文本。"
-                "每条记录必须包含 character_name、timeline_id、link_type。"
-                "timeline_id 必须引用已有 timeline.id。"
-                "link_type 只能是: appear, lead, conflict, ally, foreshadow_trigger, foreshadow_payoff。"
-                "character_links 数量控制在 8-24。"
-                "summary 可为空，若填写控制在 30 字以内。"
-            ),
-            "submit_character_links",
-            "character_links",
-        )
+                details = await _ainvoke_section(
+                    self.outline_character_details_llm,
+                    (
+                        "你是网络小说策划编辑。请为以下角色填充详细描述。\n"
+                        f"{requirement_context}"
+                        f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                        f"timeline：{_compact(timeline, limit=12)}\n"
+                        f"全部角色概览：{json.dumps(briefs, ensure_ascii=False)}\n"
+                        f"本批次需要填充的角色：{json.dumps(batch_briefs, ensure_ascii=False)}\n"
+                        f"{_QUOTE_CONSTRAINT}"
+                        "必须调用 submit_character_details，不要输出普通文本。\n"
+                        "为每个角色填充 appearance/personality/background/skills/current_status/current_goal。\n"
+                        "角色字段必须是故事开始前状态。"
+                    ),
+                    "submit_character_details",
+                    "characters",
+                )
+                all_details.extend(details)
 
-        return {
-            "story": story,
-            "timeline": timeline,
-            "branches": branches,
-            "foreshadowing": foreshadowing,
-            "characters": characters,
-            "character_links": character_links,
-        }
+            detail_map = {d["name"]: d for d in all_details}
+            characters = []
+            for brief in briefs:
+                detail = detail_map.get(brief["name"], {})
+                characters.append({
+                    "name": brief["name"],
+                    "role_type": brief.get("role_type", "配角"),
+                    "gender": brief.get("gender", ""),
+                    "age": brief.get("age", ""),
+                    "appearance": detail.get("appearance", ""),
+                    "personality": detail.get("personality", ""),
+                    "background": detail.get("background", ""),
+                    "skills": detail.get("skills", ""),
+                    "current_status": detail.get("current_status", "存活"),
+                    "current_goal": detail.get("current_goal", ""),
+                    "first_chapter": brief.get("first_chapter", 1),
+                })
+
+            _status("generating_branches", "正在生成支线...")
+            branches = await _ainvoke_section(
+                self.outline_branches_llm,
+                (
+                    "你是网络小说策划编辑。请基于 story + timeline + characters 生成 branches。\n"
+                    f"{requirement_context}"
+                    f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                    f"timeline：{_compact(timeline, limit=14)}\n"
+                    f"characters：{_compact(characters, limit=10)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_branches，不要输出普通文本。attach_to 必须引用 timeline 已存在的 id，side 只能是 left/right。"
+                ),
+                "submit_branches",
+                "branches",
+            )
+
+            _status("generating_foreshadowing", "正在生成伏笔...")
+            foreshadowing = await _ainvoke_section(
+                self.outline_foreshadowing_llm,
+                (
+                    "你是网络小说策划编辑。请基于 story + timeline + branches 生成 foreshadowing。\n"
+                    f"{requirement_context}"
+                    f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                    f"timeline：{_compact(timeline, limit=14)}\n"
+                    f"branches：{_compact(branches, limit=12)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_foreshadowing，不要输出普通文本。"
+                    "foreshadowing 数量控制在 6-16。"
+                    "content 控制在 40 字以内。"
+                    "每条伏笔需有 plant_node 和 payoff_node。"
+                ),
+                "submit_foreshadowing",
+                "foreshadowing",
+            )
+
+            _status("generating_character_links", "正在生成角色-剧情关系...")
+            character_links = await _ainvoke_section(
+                self.outline_character_links_llm,
+                (
+                    "你是网络小说策划编辑。请基于 story/timeline/branches/foreshadowing/characters 生成 character_links。\n"
+                    f"{requirement_context}"
+                    f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                    f"timeline：{_compact(timeline, limit=14)}\n"
+                    f"branches：{_compact(branches, limit=12)}\n"
+                    f"foreshadowing：{_compact(foreshadowing, limit=20)}\n"
+                    f"characters：{_compact(characters, limit=10)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "必须调用 submit_character_links，不要输出普通文本。"
+                    "每条记录必须包含 character_name、timeline_id、link_type。"
+                    "timeline_id 必须引用已有 timeline.id。"
+                    "link_type 只能是: appear, lead, conflict, ally, foreshadow_trigger, foreshadow_payoff。"
+                    "character_links 数量控制在 8-24。"
+                    "summary 可为空，若填写控制在 30 字以内。"
+                ),
+                "submit_character_links",
+                "character_links",
+            )
+
+            result = {
+                "story": story,
+                "timeline": timeline,
+                "branches": branches,
+                "foreshadowing": foreshadowing,
+                "characters": characters,
+                "character_links": character_links,
+            }
+            ctx = _outline_ctx()
+            if ctx and ctx.get("work_id") and ctx.get("db"):
+                work = ctx["db"].query(Work).filter_by(id=ctx["work_id"]).first()
+                if work:
+                    result = dict(work.outline_tree or result)
+                    result["_work_id"] = work.id
+            return result
+        finally:
+            if token is not None:
+                _OUTLINE_GENERATION_CTX.reset(token)
 
     @staticmethod
     def _apply_operations(outline: dict, operations: list[dict]) -> dict:
@@ -590,47 +832,20 @@ class WorkService:
         try:
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
             result_dict = asyncio.run(
-                self._generate_outline_sections(payload.idea.strip(), tags_str)
-            )
-            outline_tree = OutlineTreeData.model_validate(result_dict)
-            outline_data = outline_tree.model_dump(mode="json")
-
-            story = outline_data["story"]
-            work = Work(
-                user_id=user_id,
-                title=story["title"],
-                genre=story["genre"],
-                idea=payload.idea.strip(),
-                tags=payload.tags,
-                outline_tree=outline_data,
-                status="草稿",
-            )
-            db.add(work)
-            db.commit()
-            db.refresh(work)
-
-            # Create character records from outline
-            characters_data = outline_data.get("characters", [])
-            for char_data in characters_data:
-                char = Character(
-                    work_id=work.id,
-                    name=char_data.get("name", ""),
-                    role_type=char_data.get("role_type", "配角"),
-                    gender=char_data.get("gender", ""),
-                    age=char_data.get("age", ""),
-                    appearance=char_data.get("appearance", ""),
-                    personality=char_data.get("personality", ""),
-                    background=char_data.get("background", ""),
-                    skills=char_data.get("skills", ""),
-                    current_status=char_data.get("current_status", "存活"),
-                    current_goal=char_data.get("current_goal", ""),
-                    first_chapter=char_data.get("first_chapter", 1),
-                    last_chapter=char_data.get("first_chapter"),
+                self._generate_outline_sections(
+                    payload.idea.strip(),
+                    tags_str,
+                    db=db,
+                    user_id=user_id,
+                    tags_list=payload.tags,
                 )
-                db.add(char)
-            db.commit()
+            )
+            work_id = result_dict.pop("_work_id", None)
+            outline_tree = OutlineTreeData.model_validate(result_dict)
+            if not work_id:
+                raise ValueError("大纲生成工具执行完成后未返回 work_id")
 
-            return OutlineGenerateResponse(outline_tree=outline_tree, work_id=work.id)
+            return OutlineGenerateResponse(outline_tree=outline_tree, work_id=work_id)
         except HTTPException:
             raise
         except Exception as exc:  # noqa: BLE001
@@ -659,9 +874,19 @@ class WorkService:
             )
             emit("outline_status", {"phase": "generating_story", "message": "正在生成故事设定..."})
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
-            result_dict = await self._generate_outline_sections(payload.idea.strip(), tags_str, emit=emit)
+            result_dict = await self._generate_outline_sections(
+                payload.idea.strip(),
+                tags_str,
+                emit=emit,
+                db=db,
+                user_id=user_id,
+                tags_list=payload.tags,
+            )
             emit("outline_status", {"phase": "parsing", "message": "正在解析并构建大纲树..."})
 
+            work_id = result_dict.pop("_work_id", None)
+            if not work_id:
+                raise ValueError("大纲生成工具执行完成后未返回 work_id")
             outline_tree = OutlineTreeData.model_validate(result_dict)
             outline_data = outline_tree.model_dump(mode="json")
             story = outline_data["story"]
@@ -708,56 +933,24 @@ class WorkService:
                     "total": len(outline_data.get("characters", [])),
                     "node": node,
                 })
-            work = Work(
-                user_id=user_id,
-                title=story["title"],
-                genre=story["genre"],
-                idea=payload.idea.strip(),
-                tags=payload.tags,
-                outline_tree=outline_data,
-                status="草稿",
-            )
-            db.add(work)
             t_db = time.perf_counter()
-            db.commit()
-            db.refresh(work)
-
-            # Create character records from outline
             characters_data = outline_data.get("characters", [])
-            for char_data in characters_data:
-                char = Character(
-                    work_id=work.id,
-                    name=char_data.get("name", ""),
-                    role_type=char_data.get("role_type", "配角"),
-                    gender=char_data.get("gender", ""),
-                    age=char_data.get("age", ""),
-                    appearance=char_data.get("appearance", ""),
-                    personality=char_data.get("personality", ""),
-                    background=char_data.get("background", ""),
-                    skills=char_data.get("skills", ""),
-                    current_status=char_data.get("current_status", "存活"),
-                    current_goal=char_data.get("current_goal", ""),
-                    first_chapter=char_data.get("first_chapter", 1),
-                    last_chapter=char_data.get("first_chapter"),
-                )
-                db.add(char)
-            db.commit()
             logger.info(
                 "work.generate_outline_stream db_done elapsed_ms=%.1f work_id=%s chars=%s",
                 (time.perf_counter() - t_db) * 1000,
-                work.id,
+                work_id,
                 len(characters_data),
             )
 
             emit("outline_done", {
-                "work_id": work.id,
+                "work_id": work_id,
                 "title": story["title"],
                 "outline_tree": outline_data,
             })
             logger.info(
                 "work.generate_outline_stream done total_ms=%.1f work_id=%s",
                 (time.perf_counter() - t_total) * 1000,
-                work.id,
+                work_id,
             )
         except Exception as exc:
             logger.exception("outline streaming failed")
@@ -1253,14 +1446,14 @@ class WorkService:
             if chapter:
                 chapter.title = title or chapter.title
                 chapter.content = body
-                chapter.status = "草稿"
+                chapter.status = "已保存"
             else:
                 chapter = Chapter(
                     work_id=work_id,
                     chapter_number=chapter_number,
                     title=title or f"第{chapter_number}章",
                     content=body,
-                    status="草稿",
+                    status="已保存",
                 )
                 db.add(chapter)
 
@@ -1307,6 +1500,7 @@ class WorkService:
         chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         if not chapter:
             raise HTTPException(status_code=404, detail="章节不存在")
+        old_title = chapter.title
         if payload.title is not None:
             chapter.title = payload.title
         if payload.content is not None:
@@ -1314,7 +1508,57 @@ class WorkService:
             chapter.status = "已保存"
         db.commit()
         db.refresh(chapter)
+        logger.info(
+            "chapter_update_saved work_id=%s chapter=%s old_title=%r new_title=%r title_in_payload=%s",
+            work_id,
+            chapter_number,
+            old_title,
+            chapter.title,
+            payload.title is not None,
+        )
         return ChapterOut.model_validate(chapter)
+
+    @staticmethod
+    def delete_last_chapter(work_id: str, db: Session, *, user_id: str) -> ChapterDeleteLastResponse:
+        from app.models.agent_model import AgentState
+        from app.models.work_model import AgentLog
+
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
+
+        last_chapter = (
+            db.query(Chapter)
+            .filter_by(work_id=work_id)
+            .order_by(Chapter.chapter_number.desc())
+            .first()
+        )
+        if not last_chapter:
+            raise HTTPException(status_code=400, detail="当前没有可删除的章节")
+
+        deleted_number = int(last_chapter.chapter_number)
+
+        # 清理与该章节号绑定的衍生数据，避免残留脏数据影响后续展示/编辑。
+        db.query(ChapterMetadata).filter_by(
+            work_id=work_id,
+            chapter_number=deleted_number,
+        ).delete(synchronize_session=False)
+        db.query(AgentState).filter_by(
+            work_id=work_id,
+            chapter_number=deleted_number,
+        ).delete(synchronize_session=False)
+        db.query(AgentLog).filter_by(
+            work_id=work_id,
+            chapter_number=deleted_number,
+        ).delete(synchronize_session=False)
+
+        db.delete(last_chapter)
+        db.commit()
+
+        return ChapterDeleteLastResponse(
+            deleted_chapter_number=deleted_number,
+            next_chapter_number=deleted_number,
+        )
 
     @staticmethod
     def get_chapter_intel(work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterIntelOut:

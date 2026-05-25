@@ -207,6 +207,12 @@ class ChapterGenerateResponse(BaseModel):
     message: str = "正文生成成功"
 
 
+class ChapterDeleteLastResponse(BaseModel):
+    deleted_chapter_number: int
+    next_chapter_number: int
+    message: str = "末章删除成功"
+
+
 class ChapterChatRequest(BaseModel):
     message: str = Field(min_length=1, max_length=2000)
     history: list[dict] = Field(default_factory=list)

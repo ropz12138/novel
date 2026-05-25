@@ -5,7 +5,7 @@ import re
 from pathlib import Path
 
 from langchain_core.prompts import PromptTemplate
-from langchain_openai import ChatOpenAI
+from app.core.deepseek_llm import DeepSeekChatOpenAI
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -20,9 +20,9 @@ def _read_prompt(file_name: str) -> str:
     return (PROMPT_DIR / file_name).read_text(encoding="utf-8")
 
 
-def _get_llm(temperature: float = 0.7) -> ChatOpenAI:
+def _get_llm(temperature: float = 0.7) -> DeepSeekChatOpenAI:
     model_conf = settings.get_model_config()
-    return ChatOpenAI(
+    return DeepSeekChatOpenAI(
         model=settings.default_model,
         api_key=model_conf["api_key"],
         base_url=model_conf["base_url"],
@@ -106,8 +106,7 @@ async def plan_node(state: AgentGraphState, emit, db: Session) -> AgentGraphStat
 # ──────────────────────────── thinking node ────────────────────────────
 
 async def thinking_node(state: AgentGraphState, emit, db: Session) -> AgentGraphState:
-    """Node 1: Generate thinking notes and chapter title for the chapter.
-    Includes self-review mechanism and selective query markers."""
+    """Node 1: Generate thinking notes for the chapter."""
     emit("stage_start", {"stage": "thinking", "label": "构思阶段"})
 
     _prepare_context(state, db)
@@ -123,10 +122,8 @@ async def thinking_node(state: AgentGraphState, emit, db: Session) -> AgentGraph
 
     chain = prompt | llm
 
-    # Stream the thinking process — filter out JSON metadata in real-time
+    # Stream the thinking process as plain markdown notes.
     raw_output = ""
-    json_started = False  # True once we detect the start of the JSON metadata block
-    pre_json_text = ""    # text accumulated before JSON starts
 
     async for chunk in chain.astream({
         "chapter_number": str(state.chapter_number),
@@ -139,101 +136,17 @@ async def thinking_node(state: AgentGraphState, emit, db: Session) -> AgentGraph
     }):
         text = chunk.content if hasattr(chunk, "content") else str(chunk)
         raw_output += text
+        emit("thinking_stream", {"chunk": text})
 
-        if not json_started:
-            # Check if the accumulated output now contains the start of the JSON block.
-            # Two patterns: fenced (```json {) or bare ({ on a new line after markdown).
-            fence_start = re.search(r"```(?:json)?\s*\n?\s*\{", raw_output)
-            bare_start = re.search(r"(?<!\w)\{\s*\n\s*\"title\"", raw_output)
-
-            if fence_start:
-                json_started = True
-                pre_json_text = raw_output[:fence_start.start()].strip()
-                # Don't emit any more chunks — JSON is being generated
-            elif bare_start:
-                json_started = True
-                pre_json_text = raw_output[:bare_start.start()].strip()
-            else:
-                # Still in thinking text — emit the chunk
-                # But buffer: don't emit text that might be the start of JSON
-                # Use a lookback window: hold back the last 20 chars in case they're
-                # the start of ```json or {"title"
-                safe_end = len(raw_output)
-                if len(raw_output) > 20:
-                    # Check if there's a potential incomplete fence/JSON start in the tail
-                    tail = raw_output[-30:]
-                    if re.search(r"```[a-z]*$", tail) or re.search(r"\{\s*$", tail):
-                        safe_end = len(raw_output) - 10
-                if safe_end > len(pre_json_text):
-                    emit_text = raw_output[len(pre_json_text):safe_end]
-                    if emit_text:
-                        pre_json_text = raw_output[:safe_end]
-                        emit("thinking_stream", {"chunk": emit_text})
-
-    # If JSON was never detected, the entire output is thinking text
-    if not json_started:
-        pre_json_text = raw_output
-
-    # Parse the required JSON metadata from the full output.
-    notes = pre_json_text
-    json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", raw_output, re.DOTALL)
-    if not json_match:
-        json_match = re.search(r"\{[\s\S]*\"title\"[\s\S]*\}", raw_output)
-    if not json_match:
-        raise ValueError("构思阶段输出缺少必需的 JSON 元数据块")
-
-    result = json.loads(json_match.group(1) if json_match.lastindex else json_match.group())
-    if not isinstance(result, dict):
-        raise ValueError("构思阶段 JSON 元数据必须是对象")
-
-    required_fields = {
-        "title",
-        "outline_changes_needed",
-        "outline_change_reason",
-        "outline_change_operations",
-        "needed_queries",
-    }
-    missing_fields = sorted(required_fields - set(result))
-    if missing_fields:
-        raise ValueError(f"构思阶段 JSON 元数据缺少字段：{', '.join(missing_fields)}")
-
-    title = result["title"]
-    outline_changes_needed = result["outline_changes_needed"]
-    outline_change_reason = result["outline_change_reason"]
-    outline_change_operations = result["outline_change_operations"]
-    needed_queries = result["needed_queries"]
-
-    if not isinstance(title, str):
-        raise ValueError("构思阶段 JSON 字段 title 必须是字符串")
-    if not isinstance(outline_changes_needed, bool):
-        raise ValueError("构思阶段 JSON 字段 outline_changes_needed 必须是布尔值")
-    if not isinstance(outline_change_reason, str):
-        raise ValueError("构思阶段 JSON 字段 outline_change_reason 必须是字符串")
-    if not isinstance(outline_change_operations, list):
-        raise ValueError("构思阶段 JSON 字段 outline_change_operations 必须是数组")
-    if not isinstance(needed_queries, list):
-        raise ValueError("构思阶段 JSON 字段 needed_queries 必须是数组")
-
+    notes = raw_output.strip()
     state.thinking_notes = notes
-    state.chapter_title = title
-    state.outline_changes_needed = outline_changes_needed
-    state.outline_change_reason = outline_change_reason
-    state.outline_change_operations = outline_change_operations
-    state.needed_queries = needed_queries
+    state.chapter_title = state.chapter_title or f"第{state.chapter_number}章"
+    state.outline_changes_needed = False
+    state.outline_change_reason = ""
+    state.outline_change_operations = []
+    state.needed_queries = []
 
     emit("thinking_done", {"notes": notes})
-    emit("title_proposed", {"title": title})
-
-    if state.needed_queries:
-        emit("queries_needed", {"queries": state.needed_queries})
-
-    # If outline changes are proposed, queue for confirmation
-    if outline_changes_needed and outline_change_operations:
-        state.pending_confirm = "outline"
-        emit("outline_proposal", {
-            "reason": outline_change_reason,
-            "operations": outline_change_operations,
-        })
 
     return state
 
@@ -458,14 +371,14 @@ async def save_node(state: AgentGraphState, emit, db: Session) -> AgentGraphStat
     if chapter:
         chapter.title = state.chapter_title or chapter.title
         chapter.content = state.chapter_content
-        chapter.status = "草稿"
+        chapter.status = "已保存"
     else:
         chapter = Chapter(
             work_id=state.work_id,
             chapter_number=state.chapter_number,
             title=state.chapter_title or f"第{state.chapter_number}章",
             content=state.chapter_content,
-            status="草稿",
+            status="已保存",
         )
         db.add(chapter)
 

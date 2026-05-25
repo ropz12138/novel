@@ -94,6 +94,7 @@ class WritingExpertAgent:
         chapter_goal: str = "",
         chapter_number: int | None = None,
         count: int = 8,
+        history: list[str] | None = None,
     ) -> dict:
         self.emit("stage_start", {"stage": "writing_expert", "label": "写作专家微咨询"})
 
@@ -104,11 +105,13 @@ class WritingExpertAgent:
         if chapter_goal:
             user_msg += f"，章节目标是：{chapter_goal}"
 
+        messages = [SystemMessage(content=SYSTEM_PROMPT), HumanMessage(content=user_msg)]
+        if history:
+            for h in history:
+                messages.append(HumanMessage(content=f"之前的咨询上下文：\n{h}"))
+
         initial_state = {
-            "messages": [
-                SystemMessage(content=SYSTEM_PROMPT),
-                HumanMessage(content=user_msg),
-            ],
+            "messages": messages,
             "problem_type": problem_type,
             "genre_tags": genre_tags,
             "constraints": constraints or [],

@@ -514,11 +514,44 @@ export function UnifiedAgentPage() {
           type: "requirements_todolist",
           todoCard: {
             intent_summary: d.intent_summary,
-            todolist: d.todolist || [],
+            todolist: (d.todolist || []).map((t) => ({
+              db_id: t.db_id || "",
+              task_id: t.task_id || t.id || "",
+              task: t.task || "",
+              owner: t.owner || "supervisor",
+              status: t.status || "pending",
+              depends_on: t.depends_on || [],
+              done_criteria: t.done_criteria || "",
+            })),
             ready_to_execute: d.ready_to_execute,
           },
         });
         break;
+      case "task_status_updated": {
+        const { task_item_id, new_status, result_summary } = d || {};
+        if (!task_item_id) break;
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.meta?.type !== "requirements_todolist" || !msg.meta?.todoCard?.todolist) return msg;
+            const updatedTodolist = msg.meta.todoCard.todolist.map((t) =>
+              t.db_id === task_item_id ? { ...t, status: new_status, result_summary: result_summary || t.result_summary } : t
+            );
+            return { ...msg, meta: { ...msg.meta, todoCard: { ...msg.meta.todoCard, todolist: updatedTodolist } } };
+          })
+        );
+        break;
+      }
+
+      case "todolist_readiness_updated": {
+        const { ready_to_execute } = d || {};
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.meta?.type !== "requirements_todolist" || !msg.meta?.todoCard) return msg;
+            return { ...msg, meta: { ...msg.meta, todoCard: { ...msg.meta.todoCard, ready_to_execute: !!ready_to_execute } } };
+          })
+        );
+        break;
+      }
 
       case "edit_chapter_hunk_diff":
         {
@@ -974,11 +1007,32 @@ export function UnifiedAgentPage() {
                           )}
                           {(msg.todoCard?.todolist || []).length > 0 ? (
                             <div className="space-y-2">
-                              {(msg.todoCard.todolist || []).map((t, idx) => (
-                                <div key={`${t.id || "T"}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                              {(msg.todoCard.todolist || []).map((t, idx) => {
+                                const statusIcon = {
+                                  pending: "○",
+                                  in_progress: "◑",
+                                  completed: "✓",
+                                  skipped: "⊘",
+                                  failed: "✗",
+                                }[t.status || "pending"] || "○";
+                                const statusColor = {
+                                  pending: "text-slate-400",
+                                  in_progress: "text-blue-500",
+                                  completed: "text-emerald-500",
+                                  skipped: "text-slate-300",
+                                  failed: "text-red-500",
+                                }[t.status || "pending"] || "text-slate-400";
+                                const borderColor = {
+                                  completed: "border-emerald-200 bg-emerald-50/50",
+                                  failed: "border-red-200 bg-red-50/50",
+                                  in_progress: "border-blue-200 bg-blue-50/50",
+                                }[t.status || "pending"] || "border-slate-200 bg-white";
+                                return (
+                                <div key={`${t.db_id || t.task_id || "T"}-${idx}`} className={`rounded-lg border p-2.5 ${borderColor}`}>
                                   <div className="flex items-center gap-2 text-xs">
-                                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.id || `T${idx + 1}`}</span>
-                                    <span className="font-medium text-slate-700">{t.task || "未命名任务"}</span>
+                                    <span className={`text-sm ${statusColor}`}>{statusIcon}</span>
+                                    <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.task_id || `T${idx + 1}`}</span>
+                                    <span className={`font-medium ${t.status === "completed" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.task || "未命名任务"}</span>
                                   </div>
                                   <div className="mt-1 space-y-1 text-[11px] text-slate-500">
                                     <p>负责人：{t.owner || "supervisor"}</p>
@@ -987,9 +1041,11 @@ export function UnifiedAgentPage() {
                                       <p>依赖：{t.depends_on.join(", ")}</p>
                                     )}
                                     {t.done_criteria && <p>验收：{t.done_criteria}</p>}
+                                    {t.result_summary && <p className="text-emerald-600">结果：{t.result_summary}</p>}
                                   </div>
                                 </div>
-                              ))}
+                                );
+                              })}
                             </div>
                           ) : (
                             <p className="text-xs text-slate-500">暂无任务项。</p>

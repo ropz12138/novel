@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import re
+from contextvars import ContextVar
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -58,9 +59,58 @@ class _SubmitChapterMetadataInput(ChapterMetadataOutput):
     """Tool-call payload for chapter metadata extraction."""
 
 
+_METADATA_PERSIST_CTX: ContextVar[dict[str, Any] | None] = ContextVar(
+    "chapter_metadata_persist_ctx",
+    default=None,
+)
+
+
+def _upsert_metadata_row(
+    db: Session,
+    *,
+    work_id: str,
+    chapter_number: int,
+    metadata: ChapterMetadataOutput,
+) -> ChapterMetadata:
+    row = (
+        db.query(ChapterMetadata)
+        .filter_by(work_id=work_id, chapter_number=chapter_number)
+        .first()
+    )
+    if not row:
+        row = ChapterMetadata(id=_uuid(), work_id=work_id, chapter_number=chapter_number)
+        db.add(row)
+        db.flush()
+
+    row.summary = metadata.summary or ""
+    row.key_plot_points = [str(x) for x in (metadata.key_plot_points or [])]
+    row.outline_links = [x.model_dump() for x in (metadata.outline_links or [])]
+    row.involved_characters = [x.model_dump() for x in (metadata.involved_characters or [])]
+    row.foreshadows = [x.model_dump() for x in (metadata.foreshadows or [])]
+    row.facts = [x.model_dump() for x in (metadata.facts or [])]
+    return row
+
+
 def _submit_chapter_metadata_tool(**kwargs) -> str:
-    """Accept extracted chapter metadata as structured tool arguments."""
-    return "chapter_metadata_received"
+    """Accept extracted chapter metadata and persist in-place when DB context exists."""
+    metadata = ChapterMetadataOutput.model_validate(kwargs)
+    ctx = _METADATA_PERSIST_CTX.get()
+    if not ctx:
+        return "chapter_metadata_received"
+
+    db = ctx.get("db")
+    work_id = ctx.get("work_id")
+    chapter_number = ctx.get("chapter_number")
+    if db is None or not work_id or chapter_number is None:
+        raise ValueError("submit_chapter_metadata 缺少落库上下文（db/work_id/chapter_number）")
+
+    _upsert_metadata_row(
+        db,
+        work_id=str(work_id),
+        chapter_number=int(chapter_number),
+        metadata=metadata,
+    )
+    return "chapter_metadata_persisted"
 
 
 SUBMIT_CHAPTER_METADATA_TOOL = StructuredTool.from_function(
@@ -92,7 +142,7 @@ def _message_text(ai_msg: Any) -> str:
     return str(content)
 
 
-def _parse_metadata_from_tool_call(ai_msg: Any) -> ChapterMetadataOutput:
+def _execute_submit_from_tool_call(ai_msg: Any) -> ChapterMetadataOutput:
     for call in _extract_tool_calls(ai_msg):
         name = call.get("name") if isinstance(call, dict) else getattr(call, "name", None)
         if name != "submit_chapter_metadata":
@@ -102,6 +152,8 @@ def _parse_metadata_from_tool_call(ai_msg: Any) -> ChapterMetadataOutput:
             args = args.model_dump()
         if not isinstance(args, dict):
             raise ValueError("submit_chapter_metadata tool args must be an object")
+        # Execute tool function so metadata persistence happens inside tool path.
+        _submit_chapter_metadata_tool(**args)
         return ChapterMetadataOutput.model_validate(args)
 
     preview = _message_text(ai_msg)[:500]
@@ -213,8 +265,6 @@ class ChapterOutlineSyncService:
         llm = get_llm(temperature=0.2, streaming=False)
         llm_with_tools = llm.bind_tools(
             [SUBMIT_CHAPTER_METADATA_TOOL],
-            tool_choice="submit_chapter_metadata",
-            extra_body={"enable_thinking": False},
         )
 
         timeline = (outline_tree or {}).get("timeline", []) if isinstance(outline_tree, dict) else []
@@ -277,7 +327,7 @@ class ChapterOutlineSyncService:
             SystemMessage(content=prompt),
             HumanMessage(content=human_content),
         ])
-        return _parse_metadata_from_tool_call(response)
+        return _execute_submit_from_tool_call(response)
 
     @staticmethod
     def persist_metadata(
@@ -287,23 +337,12 @@ class ChapterOutlineSyncService:
         chapter_number: int,
         metadata: ChapterMetadataOutput,
     ) -> ChapterMetadata:
-        row = (
-            db.query(ChapterMetadata)
-            .filter_by(work_id=work_id, chapter_number=chapter_number)
-            .first()
+        return _upsert_metadata_row(
+            db,
+            work_id=work_id,
+            chapter_number=chapter_number,
+            metadata=metadata,
         )
-        if not row:
-            row = ChapterMetadata(id=_uuid(), work_id=work_id, chapter_number=chapter_number)
-            db.add(row)
-            db.flush()
-
-        row.summary = metadata.summary or ""
-        row.key_plot_points = [str(x) for x in (metadata.key_plot_points or [])]
-        row.outline_links = [x.model_dump() for x in (metadata.outline_links or [])]
-        row.involved_characters = [x.model_dump() for x in (metadata.involved_characters or [])]
-        row.foreshadows = [x.model_dump() for x in (metadata.foreshadows or [])]
-        row.facts = [x.model_dump() for x in (metadata.facts or [])]
-        return row
 
     @staticmethod
     async def generate_and_persist(
@@ -320,20 +359,30 @@ class ChapterOutlineSyncService:
             .limit(12)
             .all()
         )
-        generated = await ChapterOutlineSyncService.generate_metadata(
-            chapter_number=chapter.chapter_number,
-            title=chapter.title or f"第{chapter.chapter_number}章",
-            content=chapter.content or "",
-            outline_tree=work.outline_tree or {},
-            characters=chars,
-            previous_metadata=prev_meta,
+        token = _METADATA_PERSIST_CTX.set({
+            "db": db,
+            "work_id": work.id,
+            "chapter_number": chapter.chapter_number,
+        })
+        try:
+            await ChapterOutlineSyncService.generate_metadata(
+                chapter_number=chapter.chapter_number,
+                title=chapter.title or f"第{chapter.chapter_number}章",
+                content=chapter.content or "",
+                outline_tree=work.outline_tree or {},
+                characters=chars,
+                previous_metadata=prev_meta,
+            )
+        finally:
+            _METADATA_PERSIST_CTX.reset(token)
+
+        row = (
+            db.query(ChapterMetadata)
+            .filter_by(work_id=work.id, chapter_number=chapter.chapter_number)
+            .first()
         )
-        row = ChapterOutlineSyncService.persist_metadata(
-            db,
-            work_id=work.id,
-            chapter_number=chapter.chapter_number,
-            metadata=generated,
-        )
+        if not row:
+            raise ValueError("章节元数据提交后未写入数据库")
         return row
 
 

@@ -4,6 +4,7 @@ from app.schemas.work_schema import (
     ChapterChatRequest,
     ChapterChatResponse,
     ChapterGenerateResponse,
+    ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
@@ -57,6 +58,10 @@ def generate_chapter(work_id: str, chapter_number: int, db: Session, *, user_id:
 
 def update_chapter(work_id: str, chapter_number: int, payload: ChapterUpdateRequest, db: Session, *, user_id: str) -> ChapterOut:
     return service.update_chapter(work_id, chapter_number, payload, db, user_id=user_id)
+
+
+def delete_last_chapter(work_id: str, db: Session, *, user_id: str) -> ChapterDeleteLastResponse:
+    return service.delete_last_chapter(work_id, db, user_id=user_id)
 
 
 def get_chapter_intel(work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterIntelOut:

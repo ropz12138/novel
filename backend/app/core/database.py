@@ -48,6 +48,7 @@ def init_db() -> None:
     import app.models.agent_model  # noqa: F401 — register agent models
     import app.models.message_model  # noqa: F401 — register message model
     import app.models.writing_library_model  # noqa: F401 — register writing library models
+    import app.models.task_item_model  # noqa: F401 — register task item model
     Base.metadata.create_all(bind=engine)
     _ensure_columns(engine)
 
@@ -67,6 +68,13 @@ def _ensure_columns(engine) -> None:
         if not _column_exists("supervisor_sessions", "auto_mode"):
             conn.execute(text(
                 "ALTER TABLE supervisor_sessions ADD COLUMN auto_mode BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
+        # supervisor_sessions.ready_to_execute
+        if not _column_exists("supervisor_sessions", "ready_to_execute"):
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN ready_to_execute BOOLEAN NOT NULL DEFAULT FALSE"
             ))
             conn.commit()
 
@@ -93,6 +101,27 @@ def _ensure_columns(engine) -> None:
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 CONSTRAINT uq_work_chapter_metadata UNIQUE(work_id, chapter_number)
+            )
+            """
+        ))
+        conn.commit()
+
+        # task_items（任务清单状态机）
+        conn.execute(text(
+            """
+            CREATE TABLE IF NOT EXISTS task_items (
+                id VARCHAR(36) PRIMARY KEY,
+                session_id VARCHAR(36) NOT NULL REFERENCES supervisor_sessions(id) ON DELETE CASCADE,
+                task_id VARCHAR(20) NOT NULL,
+                task_description TEXT NOT NULL DEFAULT '',
+                owner VARCHAR(50) NOT NULL DEFAULT 'supervisor',
+                status VARCHAR(20) NOT NULL DEFAULT 'pending',
+                depends_on TEXT NOT NULL DEFAULT '',
+                done_criteria TEXT NOT NULL DEFAULT '',
+                result_summary TEXT NOT NULL DEFAULT '',
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
         ))

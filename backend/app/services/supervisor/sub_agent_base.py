@@ -5,10 +5,11 @@
 """
 
 import logging
+import uuid
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
-from langchain_openai import ChatOpenAI
+from app.core.deepseek_llm import DeepSeekChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph import MessagesState
 from langgraph.prebuilt import ToolNode
@@ -51,7 +52,29 @@ def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
     """将累计的 AIMessageChunk 转为 AIMessage，供 LangGraph 状态与 tool 路由使用。"""
     if isinstance(full, AIMessage):
         return full
-    tc = list(full.tool_calls) if getattr(full, "tool_calls", None) else []
+    raw_tc = list(full.tool_calls) if getattr(full, "tool_calls", None) else []
+    tc: list[dict[str, Any]] = []
+    for idx, call in enumerate(raw_tc):
+        call_id = call.get("id")
+        if not call_id:
+            call_id = f"call_auto_{uuid.uuid4().hex[:12]}"
+            logger.warning(
+                "chunk_to_ai_message missing tool_call id; generated id=%s name=%s idx=%s",
+                call_id,
+                call.get("name"),
+                idx,
+            )
+        args = call.get("args")
+        if not isinstance(args, dict):
+            args = {}
+        tc.append(
+            {
+                "name": call.get("name", ""),
+                "args": args,
+                "id": call_id,
+                "type": call.get("type", "tool_call"),
+            }
+        )
     kwargs: dict[str, Any] = {"content": full.content or "", "tool_calls": tc}
     _id = getattr(full, "id", None)
     if _id:
@@ -62,7 +85,7 @@ def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
 # ── LLM 工厂 ──
 
 
-def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str | None = None) -> ChatOpenAI:
+def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str | None = None) -> DeepSeekChatOpenAI:
     """创建子 Agent 使用的 LLM 实例。
 
     Args:
@@ -72,7 +95,7 @@ def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str
     """
     name = model_name or settings.default_model
     model_conf = settings.get_model_config(model_name)
-    return ChatOpenAI(
+    return DeepSeekChatOpenAI(
         model=name,
         api_key=model_conf["api_key"],
         base_url=model_conf["base_url"],

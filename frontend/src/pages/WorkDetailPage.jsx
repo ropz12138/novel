@@ -1362,6 +1362,30 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
         addMessage(result.addMessage.role, result.addMessage.content, result.addMessage.meta);
         break;
       }
+      case "task_status_updated": {
+        const { task_item_id, new_status, result_summary } = d || {};
+        if (!task_item_id) break;
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.type !== "requirements_todolist" || !msg.todoCard?.todolist) return msg;
+            const updatedTodolist = msg.todoCard.todolist.map((t) =>
+              t.db_id === task_item_id ? { ...t, status: new_status, result_summary: result_summary || t.result_summary } : t
+            );
+            return { ...msg, todoCard: { ...msg.todoCard, todolist: updatedTodolist } };
+          })
+        );
+        break;
+      }
+      case "todolist_readiness_updated": {
+        const { ready_to_execute } = d || {};
+        setMessages((prev) =>
+          prev.map((msg) => {
+            if (msg.type !== "requirements_todolist" || !msg.todoCard) return msg;
+            return { ...msg, todoCard: { ...msg.todoCard, ready_to_execute: !!ready_to_execute } };
+          })
+        );
+        break;
+      }
       case "outline_edit_diff": {
         const result = handleOutlineEditDiff(d);
         finalizeLastRunningStep();
@@ -1739,11 +1763,32 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
                       )}
                       {(msg.todoCard?.todolist || []).length > 0 ? (
                         <div className="space-y-2">
-                          {(msg.todoCard.todolist || []).map((t, idx) => (
-                            <div key={`${t.id || "T"}-${idx}`} className="rounded-lg border border-slate-200 bg-white p-2.5">
+                          {(msg.todoCard.todolist || []).map((t, idx) => {
+                            const statusIcon = {
+                              pending: "○",
+                              in_progress: "◑",
+                              completed: "✓",
+                              skipped: "⊘",
+                              failed: "✗",
+                            }[t.status || "pending"] || "○";
+                            const statusColor = {
+                              pending: "text-slate-400",
+                              in_progress: "text-blue-500",
+                              completed: "text-emerald-500",
+                              skipped: "text-slate-300",
+                              failed: "text-red-500",
+                            }[t.status || "pending"] || "text-slate-400";
+                            const borderColor = {
+                              completed: "border-emerald-200 bg-emerald-50/50",
+                              failed: "border-red-200 bg-red-50/50",
+                              in_progress: "border-blue-200 bg-blue-50/50",
+                            }[t.status || "pending"] || "border-slate-200 bg-white";
+                            return (
+                            <div key={`${t.db_id || t.task_id || "T"}-${idx}`} className={`rounded-lg border p-2.5 ${borderColor}`}>
                               <div className="flex items-center gap-2 text-xs">
-                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.id || `T${idx + 1}`}</span>
-                                <span className="font-medium text-slate-700">{t.task || "未命名任务"}</span>
+                                <span className={`text-sm ${statusColor}`}>{statusIcon}</span>
+                                <span className="rounded bg-slate-100 px-1.5 py-0.5 text-slate-600">{t.task_id || `T${idx + 1}`}</span>
+                                <span className={`font-medium ${t.status === "completed" ? "text-slate-400 line-through" : "text-slate-700"}`}>{t.task || "未命名任务"}</span>
                               </div>
                               <div className="mt-1 space-y-1 text-[11px] text-slate-500">
                                 <p>负责人：{t.owner || "supervisor"}</p>
@@ -1752,9 +1797,11 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
                                   <p>依赖：{t.depends_on.join(", ")}</p>
                                 )}
                                 {t.done_criteria && <p>验收：{t.done_criteria}</p>}
+                                {t.result_summary && <p className="text-emerald-600">结果：{t.result_summary}</p>}
                               </div>
                             </div>
-                          ))}
+                            );
+                          })}
                         </div>
                       ) : (
                         <p className="text-xs text-slate-500">暂无任务项。</p>
@@ -1930,6 +1977,40 @@ function normalizeChapterIntel(prev = {}, patch = {}) {
 function ChapterIntelSidebar({ chapterNumber, intel, outlineTree, characters }) {
   if (!chapterNumber) return null;
   const timeText = intel?.updated_at ? new Date(intel.updated_at).toLocaleString("zh-CN", { hour12: false }) : "尚无更新";
+  const outlineLinks = Array.isArray(intel?.outline_links) ? intel.outline_links : [];
+  const [activeOutlineLink, setActiveOutlineLink] = useState(null);
+  const timeline = Array.isArray(outlineTree?.timeline) ? outlineTree.timeline : [];
+  const branches = Array.isArray(outlineTree?.branches) ? outlineTree.branches : [];
+  const foreshadowing = Array.isArray(outlineTree?.foreshadowing) ? outlineTree.foreshadowing : [];
+
+  useEffect(() => {
+    setActiveOutlineLink(outlineLinks[0] || null);
+  }, [chapterNumber, intel?.updated_at]);
+
+  const inferOutlineLinkType = (link) => {
+    const explicitType = String(link?.type || "").toLowerCase();
+    if (explicitType === "branch") return "branch";
+    if (explicitType === "foreshadowing" || explicitType === "foreshadow") return "foreshadowing";
+    if (explicitType === "timeline" || explicitType === "main") return "timeline";
+    const id = String(link?.id || "").toUpperCase();
+    if (id.startsWith("B")) return "branch";
+    if (id.startsWith("F")) return "foreshadowing";
+    if (id.startsWith("T")) return "timeline";
+    return "timeline";
+  };
+
+  const activeNode = useMemo(() => {
+    if (!activeOutlineLink?.id) return null;
+    const id = String(activeOutlineLink.id);
+    const linkType = inferOutlineLinkType(activeOutlineLink);
+    if (linkType === "branch") {
+      return branches.find((n) => String(n.id) === id) || null;
+    }
+    if (linkType === "foreshadowing") {
+      return foreshadowing.find((n) => String(n.id) === id) || null;
+    }
+    return timeline.find((n) => String(n.id) === id) || null;
+  }, [activeOutlineLink, timeline, branches, foreshadowing]);
 
   return (
     <aside className="rounded-[14px] border border-slate-300 bg-white p-3 shadow-[0_6px_20px_rgba(31,42,55,0.06)]">
@@ -1953,20 +2034,57 @@ function ChapterIntelSidebar({ chapterNumber, intel, outlineTree, characters }) 
       <section className="mb-2 rounded-xl border border-slate-200 bg-white p-3">
         <h4 className="text-sm font-semibold text-slate-800">大纲关联关系</h4>
         <div className="mt-2 flex flex-wrap gap-1.5">
-          {(intel?.outline_links || []).slice(0, 6).map((n, idx) => (
-            <span key={`tm-${idx}`} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-semibold text-blue-700">
-              {(n.type === "branch" ? "支线" : "主线")}·{n.id || "节点"}
-            </span>
+          {outlineLinks.slice(0, 6).map((n, idx) => (
+            <button
+              key={`tm-${idx}`}
+              type="button"
+              onClick={() => setActiveOutlineLink(n)}
+              className={`rounded-full border px-2 py-0.5 text-[11px] font-semibold transition ${
+                activeOutlineLink?.id === n.id && inferOutlineLinkType(activeOutlineLink) === inferOutlineLinkType(n)
+                  ? "border-blue-400 bg-blue-100 text-blue-800"
+                  : "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100"
+              }`}
+              title="点击查看节点详情"
+            >
+              {(inferOutlineLinkType(n) === "branch"
+                ? "支线"
+                : inferOutlineLinkType(n) === "foreshadowing"
+                  ? "伏笔"
+                  : "主线")}·{n.id || "节点"}
+            </button>
           ))}
           {(intel?.involved_characters || []).slice(0, 6).map((c, idx) => (
             <span key={`ch-${idx}`} className="rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-700">
               角色·{c.name || "未知"}
             </span>
           ))}
-          {(intel?.outline_links || []).length === 0 && (intel?.involved_characters || []).length === 0 && (
+          {outlineLinks.length === 0 && (intel?.involved_characters || []).length === 0 && (
             <span className="text-xs text-slate-500">暂无可识别关联</span>
           )}
         </div>
+        {activeOutlineLink && (
+          <div className="mt-3 rounded-lg border border-slate-200 bg-slate-50 p-2 text-xs text-slate-700">
+            <p className="font-semibold text-slate-800">
+              {(inferOutlineLinkType(activeOutlineLink) === "branch"
+                ? "支线"
+                : inferOutlineLinkType(activeOutlineLink) === "foreshadowing"
+                  ? "伏笔"
+                  : "主线")}节点 · {activeOutlineLink.id || "未知"}
+            </p>
+            <p className="mt-1 text-slate-600">
+              名称：{activeNode?.name || activeNode?.development_node || activeNode?.content || "未命名节点"}
+            </p>
+            {(activeNode?.chapter_start || activeNode?.chapter_end) && (
+              <p className="mt-1 text-slate-600">
+                章节区间：第{activeNode?.chapter_start || "?"}-{activeNode?.chapter_end || "?"}章
+              </p>
+            )}
+            {activeNode?.summary && <p className="mt-1 whitespace-pre-wrap text-slate-600">摘要：{activeNode.summary}</p>}
+            {activeOutlineLink?.reason && (
+              <p className="mt-1 whitespace-pre-wrap text-slate-600">关联原因：{activeOutlineLink.reason}</p>
+            )}
+          </div>
+        )}
       </section>
 
       <section className="mb-2 rounded-xl border border-slate-200 bg-white p-3">
@@ -2025,6 +2143,7 @@ export function WorkDetailPage() {
   const [contentDraft, setContentDraft] = useState("");
   const [selectedChapter, setSelectedChapter] = useState(null);
   const [savingChapter, setSavingChapter] = useState(false);
+  const [deletingLastChapter, setDeletingLastChapter] = useState(false);
   const [evaluatingChapter, setEvaluatingChapter] = useState(false);
   const [evaluationResult, setEvaluationResult] = useState(null);
   const [evaluationError, setEvaluationError] = useState("");
@@ -2050,6 +2169,10 @@ export function WorkDetailPage() {
   );
   const filledChapterNums = useMemo(() => filledChapters.map((c) => c.chapter_number), [filledChapters]);
   const hasFilledChapters = filledChapterNums.length > 0;
+  const maxExistingChapterNum = useMemo(
+    () => (chapters.length > 0 ? Math.max(...chapters.map((c) => c.chapter_number)) : null),
+    [chapters],
+  );
 
   const effectiveChapterNum = useMemo(() => {
     if (chapterNumbers.length === 0) return null;
@@ -2059,6 +2182,8 @@ export function WorkDetailPage() {
     }
     return chapterNumbers.includes(selectedChapterNum) ? selectedChapterNum : null;
   }, [chapterNumbers, selectedChapterNum, hasFilledChapters, filledChapterNums]);
+  const canDeleteCurrentChapter =
+    effectiveChapterNum != null && maxExistingChapterNum != null && effectiveChapterNum === maxExistingChapterNum;
 
   useEffect(() => {
     const fetchWork = async () => {
@@ -2371,6 +2496,48 @@ export function WorkDetailPage() {
     }
   };
 
+  const handleDeleteLastChapter = async () => {
+    if (!canDeleteCurrentChapter || deletingLastChapter) return;
+    if (!window.confirm(`确认删除第 ${effectiveChapterNum} 章吗？此操作不可撤销。`)) return;
+    setDeletingLastChapter(true);
+    try {
+      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/last`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "删除失败" }));
+        throw new Error(err.detail || "删除失败");
+      }
+
+      const prevChapterNum =
+        effectiveChapterNum != null
+          ? chapters
+              .map((c) => c.chapter_number)
+              .filter((n) => n < effectiveChapterNum)
+              .sort((a, b) => b - a)[0] ?? null
+          : null;
+
+      await refreshChapters();
+      if (prevChapterNum != null) {
+        selectChapter(prevChapterNum);
+      } else {
+        setSearchParams(
+          (prev) => {
+            const n = new URLSearchParams(prev);
+            n.set("tab", "chapter");
+            n.delete("ch");
+            return n;
+          },
+          { replace: true },
+        );
+      }
+    } catch (err) {
+      alert(`删除失败：${err.message}`);
+    } finally {
+      setDeletingLastChapter(false);
+    }
+  };
+
   const handleEvaluateChapter = async () => {
     if (!effectiveChapterNum || evaluatingChapter) return;
     if (!contentDraft.trim()) {
@@ -2431,6 +2598,10 @@ export function WorkDetailPage() {
   const wordCount = contentDraft ? contentDraft.replace(/\s/g, "").length : 0;
   const generatedCount = chapters.filter((c) => c.status !== "生成中").length;
   const currentChapterIntel = effectiveChapterNum ? chapterIntelByNumber[effectiveChapterNum] : null;
+  const isChapterDraftDirty = !!(
+    selectedChapter &&
+    (titleDraft !== (selectedChapter.title || "") || contentDraft !== (selectedChapter.content || ""))
+  );
 
   const handleChapterIntelUpdate = (chapterNumber, patch) => {
     if (!chapterNumber) return;
@@ -2643,8 +2814,8 @@ export function WorkDetailPage() {
                         />
                         <span className="text-xs text-slate-400">{wordCount} 字</span>
                         {selectedChapter && (
-                          <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(selectedChapter.status)}`}>
-                            {selectedChapter.status}
+                          <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(isChapterDraftDirty ? "草稿" : selectedChapter.status)}`}>
+                            {isChapterDraftDirty ? "草稿" : selectedChapter.status}
                           </span>
                         )}
                       </div>
@@ -2653,7 +2824,7 @@ export function WorkDetailPage() {
                           variant="outline"
                           size="sm"
                           onClick={handleSaveChapter}
-                          disabled={savingChapter || (!titleDraft && !contentDraft)}
+                          disabled={savingChapter || deletingLastChapter || (!titleDraft && !contentDraft)}
                         >
                           {savingChapter ? (
                             <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
@@ -2661,6 +2832,21 @@ export function WorkDetailPage() {
                             <Save className="mr-1 h-3.5 w-3.5" />
                           )}
                           保存
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={handleDeleteLastChapter}
+                          disabled={!canDeleteCurrentChapter || deletingLastChapter || savingChapter}
+                          title={canDeleteCurrentChapter ? "删除当前末章" : "仅可删除当前末章"}
+                          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
+                        >
+                          {deletingLastChapter ? (
+                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Trash2 className="mr-1 h-3.5 w-3.5" />
+                          )}
+                          删除末章
                         </Button>
                       </div>
                     </div>

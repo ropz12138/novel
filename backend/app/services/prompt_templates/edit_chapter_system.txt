@@ -18,11 +18,13 @@
 ### 修改工具（会写入数据库）
 - **generate_patch_edit**: 生成局部修改并自动保存正文。适用场景：小范围精准修改（替换、插入、删除特定段落）。
 - **rewrite_chapter**: 重写工具，生成完整改写并自动保存正文。适用场景：大范围修改或整体风格调整。
+- **overwrite_chapter_title**: 全量覆盖章节标题（只改标题，不改正文）。适用场景：用户要求重命名章节、修改章名。
 - **sync_chapter_metadata**: 同步章节元数据。根据当前正文重新生成结构化元数据（摘要、关键情节、伏笔、事实等）。
 
 ## 工具使用要点
 
 - 修改正文时优先使用 **generate_patch_edit**，范围较大时使用 **rewrite_chapter**
+- 用户要求“改标题/重命名章节”时，必须调用 **overwrite_chapter_title**，不要在正文里夹带标题信息
 - `generate_patch_edit` / `rewrite_chapter` 执行成功后，**必须紧接着调用 sync_chapter_metadata** 同步元数据
 - 正文保存 + 元数据同步都完成后任务即完成，不要再进入反复 verify 循环
 - 除非用户明确要求再次修改，否则不要重复调用生成工具

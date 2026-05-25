@@ -19,30 +19,42 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 class ReadChapterInput(BaseModel):
     work_id: str
-    chapter_number: int
+    chapter_start: int = 1
+    chapter_end: int | None = None
+    chapter_number: int | None = None
 
 
 class QueryCharactersByChapterInput(BaseModel):
     work_id: str
-    chapter_number: int
+    chapter_start: int = 1
+    chapter_end: int | None = None
+    chapter_number: int | None = None
 
 
 class GrepInChapterInput(BaseModel):
     work_id: str
-    keyword: str
-    chapter_number: int
+    keywords: list[str] = Field(default_factory=list)
+    chapter_start: int = 1
+    chapter_end: int | None = None
+    chapter_number: int | None = None
+    keyword: str | None = None
     context_chars: int = 200
 
 
 class QueryChapterMetaInput(BaseModel):
     work_id: str
-    chapter_number: int
+    chapter_start: int = 1
+    chapter_end: int | None = None
+    chapter_number: int | None = None
 
 
 class GrepChapterMetaInput(BaseModel):
     work_id: str
-    chapter_number: int
-    keyword: str
+    keywords: list[str] = Field(default_factory=list)
+    chapter_start: int = 1
+    chapter_end: int | None = None
+    chapter_number: int | None = None
+    keyword: str | None = None
 
 
 class RewriteChapterInput(BaseModel):
@@ -66,6 +78,12 @@ class GeneratePatchEditInput(BaseModel):
 class SyncChapterMetadataInput(BaseModel):
     work_id: str
     chapter_number: int
+
+
+class OverwriteChapterTitleInput(BaseModel):
+    work_id: str
+    chapter_number: int
+    new_title: str = Field(description="新的章节标题（全量覆盖）")
 
 
 def _get_db(config: RunnableConfig) -> Session:
@@ -97,36 +115,75 @@ def _get_llm(temperature: float = 0.7):
 
 
 @tool(args_schema=ReadChapterInput)
-def read_chapter(work_id: str, chapter_number: int, config: RunnableConfig) -> str:
-    """读取指定章节正文与基础信息。"""
+def read_chapter(
+    work_id: str,
+    chapter_start: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """读取章节范围正文与基础信息。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
-    chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-    if not chapter:
-        return f"第{chapter_number}章不存在。"
-    if not chapter.content:
-        return f"第{chapter_number}章「{chapter.title}」暂无正文内容。"
-    return (
-        f"第{chapter.chapter_number}章「{chapter.title}」（状态：{chapter.status}）\n"
-        f"字数：{len(chapter.content)}\n\n"
-        f"--- 正文开始 ---\n{chapter.content}\n--- 正文结束 ---"
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
+
+    rows = (
+        db.query(Chapter)
+        .filter_by(work_id=work_id)
+        .filter(Chapter.chapter_number >= chapter_start)
+        .filter(Chapter.chapter_number <= chapter_end)
+        .order_by(Chapter.chapter_number.asc())
+        .all()
     )
+    if not rows:
+        return f"第{chapter_start}~{chapter_end}章不存在。"
+
+    parts = []
+    for chapter in rows:
+        if not chapter.content:
+            parts.append(f"第{chapter.chapter_number}章「{chapter.title}」暂无正文内容。")
+            continue
+        parts.append(
+            f"第{chapter.chapter_number}章「{chapter.title}」（状态：{chapter.status}）\n"
+            f"字数：{len(chapter.content)}\n\n"
+            f"--- 正文开始 ---\n{chapter.content}\n--- 正文结束 ---"
+        )
+    return "\n\n".join(parts)
 
 
 @tool(args_schema=QueryCharactersByChapterInput)
-def query_characters_by_chapter(work_id: str, chapter_number: int, config: RunnableConfig) -> str:
-    """查询本章及之前章节的角色信息。"""
+def query_characters_by_chapter(
+    work_id: str,
+    chapter_start: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """查询章节范围对应上下文的角色信息。"""
     from app.models.work_model import Character
 
     db = _get_db(config)
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    target_chapter = max(chapter_start, chapter_end)
+
     characters = db.query(Character).filter_by(work_id=work_id).all()
     if not characters:
         return "该作品暂无角色设定。"
 
-    relevant = [c for c in characters if c.first_chapter is None or c.first_chapter <= chapter_number]
+    relevant = [c for c in characters if c.first_chapter is None or c.first_chapter <= target_chapter]
     if not relevant:
-        return f"第{chapter_number}章暂无出场角色。"
+        return f"第{chapter_start}~{chapter_end}章暂无出场角色。"
 
     parts = []
     for c in relevant:
@@ -140,81 +197,185 @@ def query_characters_by_chapter(work_id: str, chapter_number: int, config: Runna
 
 
 @tool(args_schema=GrepInChapterInput)
-def grep_in_chapter(work_id: str, keyword: str, chapter_number: int, context_chars: int, config: RunnableConfig) -> str:
-    """在章节正文中按关键词检索并返回上下文。"""
+def grep_in_chapter(
+    work_id: str,
+    keywords: list[str],
+    chapter_start: int,
+    context_chars: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    keyword: str | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """在章节范围正文中按多个关键词检索并返回上下文。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
-    chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-    if not chapter or not chapter.content:
-        return f"第{chapter_number}章不存在或无正文。"
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
 
-    content = chapter.content
-    results = []
-    start = 0
-    while True:
-        idx = content.find(keyword, start)
-        if idx == -1:
-            break
-        ctx_start = max(0, idx - context_chars)
-        ctx_end = min(len(content), idx + len(keyword) + context_chars)
-        snippet = content[ctx_start:ctx_end]
-        if ctx_start > 0:
-            snippet = "..." + snippet
-        if ctx_end < len(content):
-            snippet = snippet + "..."
-        results.append(f"位置 {idx}：{snippet}")
-        start = idx + len(keyword)
+    kw_list = [k for k in (keywords or []) if k]
+    if keyword:
+        kw_list.append(keyword)
+    kw_list = list(dict.fromkeys(kw_list))
+    if not kw_list:
+        return "检索失败：请至少提供一个关键词。"
 
-    if not results:
-        return f"在第{chapter_number}章中未找到「{keyword}」。"
-    return f"在第{chapter_number}章「{chapter.title}」中找到 {len(results)} 处「{keyword}」：\n" + "\n\n".join(results)
+    chapters = (
+        db.query(Chapter)
+        .filter_by(work_id=work_id)
+        .filter(Chapter.chapter_number >= chapter_start)
+        .filter(Chapter.chapter_number <= chapter_end)
+        .order_by(Chapter.chapter_number.asc())
+        .all()
+    )
+    if not chapters:
+        return f"第{chapter_start}~{chapter_end}章不存在。"
+
+    output = []
+    for kw in kw_list:
+        kw_hits = []
+        for chapter in chapters:
+            content = chapter.content or ""
+            if not content:
+                continue
+            start = 0
+            while True:
+                idx = content.find(kw, start)
+                if idx == -1:
+                    break
+                ctx_start = max(0, idx - context_chars)
+                ctx_end = min(len(content), idx + len(kw) + context_chars)
+                snippet = content[ctx_start:ctx_end]
+                if ctx_start > 0:
+                    snippet = "..." + snippet
+                if ctx_end < len(content):
+                    snippet = snippet + "..."
+                kw_hits.append(
+                    f"第{chapter.chapter_number}章「{chapter.title}」位置 {idx}：{snippet}"
+                )
+                start = idx + len(kw)
+        if kw_hits:
+            output.append(f"关键词「{kw}」命中 {len(kw_hits)} 处：\n" + "\n\n".join(kw_hits))
+        else:
+            output.append(f"关键词「{kw}」在第{chapter_start}~{chapter_end}章未命中。")
+
+    return "\n\n".join(output)
 
 
 @tool(args_schema=QueryChapterMetaInput)
-def query_chapter_meta(work_id: str, chapter_number: int, config: RunnableConfig) -> str:
-    """查询章节元数据概览。"""
+def query_chapter_meta(
+    work_id: str,
+    chapter_start: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """查询章节范围元数据概览。"""
     from app.models.work_model import ChapterMetadata
 
     db = _get_db(config)
-    row = db.query(ChapterMetadata).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-    if not row:
-        return f"第{chapter_number}章暂无元数据记录。"
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
 
-    lines = [
-        f"第{chapter_number}章元数据",
-        f"摘要：{row.summary or '（无）'}",
-        f"关键情节：{len(row.key_plot_points or [])} 条",
-        f"大纲关联：{len(row.outline_links or [])} 条",
-        f"出场角色：{len(row.involved_characters or [])} 条",
-        f"伏笔：{len(row.foreshadows or [])} 条",
-        f"事实：{len(row.facts or [])} 条",
-    ]
-    return "\n".join(lines)
+    rows = (
+        db.query(ChapterMetadata)
+        .filter_by(work_id=work_id)
+        .filter(ChapterMetadata.chapter_number >= chapter_start)
+        .filter(ChapterMetadata.chapter_number <= chapter_end)
+        .order_by(ChapterMetadata.chapter_number.asc())
+        .all()
+    )
+    if not rows:
+        return f"第{chapter_start}~{chapter_end}章暂无元数据记录。"
+
+    blocks = []
+    for row in rows:
+        blocks.append("\n".join([
+            f"第{row.chapter_number}章元数据",
+            f"摘要：{row.summary or '（无）'}",
+            f"关键情节：{len(row.key_plot_points or [])} 条",
+            f"大纲关联：{len(row.outline_links or [])} 条",
+            f"出场角色：{len(row.involved_characters or [])} 条",
+            f"伏笔：{len(row.foreshadows or [])} 条",
+            f"事实：{len(row.facts or [])} 条",
+        ]))
+    return "\n\n".join(blocks)
 
 
 @tool(args_schema=GrepChapterMetaInput)
-def grep_chapter_meta(work_id: str, chapter_number: int, keyword: str, config: RunnableConfig) -> str:
-    """在章节元数据中检索关键词。"""
+def grep_chapter_meta(
+    work_id: str,
+    keywords: list[str],
+    chapter_start: int,
+    chapter_end: int | None = None,
+    chapter_number: int | None = None,
+    keyword: str | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """在章节范围元数据中按多个关键词检索。"""
     from app.models.work_model import ChapterMetadata
 
     db = _get_db(config)
-    row = db.query(ChapterMetadata).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-    if not row:
-        return f"第{chapter_number}章暂无元数据记录。"
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+    if chapter_end is None:
+        chapter_end = chapter_start
+    if chapter_start > chapter_end:
+        chapter_start, chapter_end = chapter_end, chapter_start
 
-    haystack = [
-        row.summary or "",
-        json.dumps(row.key_plot_points or [], ensure_ascii=False),
-        json.dumps(row.outline_links or [], ensure_ascii=False),
-        json.dumps(row.involved_characters or [], ensure_ascii=False),
-        json.dumps(row.foreshadows or [], ensure_ascii=False),
-        json.dumps(row.facts or [], ensure_ascii=False),
-    ]
-    matches = [s for s in haystack if keyword in s]
-    if not matches:
-        return f"在第{chapter_number}章的元数据中未找到「{keyword}」。"
-    return f"在第{chapter_number}章元数据中找到 {len(matches)} 处「{keyword}」。"
+    kw_list = [k for k in (keywords or []) if k]
+    if keyword:
+        kw_list.append(keyword)
+    kw_list = list(dict.fromkeys(kw_list))
+    if not kw_list:
+        return "检索失败：请至少提供一个关键词。"
+
+    rows = (
+        db.query(ChapterMetadata)
+        .filter_by(work_id=work_id)
+        .filter(ChapterMetadata.chapter_number >= chapter_start)
+        .filter(ChapterMetadata.chapter_number <= chapter_end)
+        .order_by(ChapterMetadata.chapter_number.asc())
+        .all()
+    )
+    if not rows:
+        return f"第{chapter_start}~{chapter_end}章暂无元数据记录。"
+
+    lines = []
+    for kw in kw_list:
+        hit_count = 0
+        hit_chapters = []
+        for row in rows:
+            haystack = [
+                row.summary or "",
+                json.dumps(row.key_plot_points or [], ensure_ascii=False),
+                json.dumps(row.outline_links or [], ensure_ascii=False),
+                json.dumps(row.involved_characters or [], ensure_ascii=False),
+                json.dumps(row.foreshadows or [], ensure_ascii=False),
+                json.dumps(row.facts or [], ensure_ascii=False),
+            ]
+            matches = [s for s in haystack if kw in s]
+            if matches:
+                hit_count += len(matches)
+                hit_chapters.append(str(row.chapter_number))
+        if hit_count:
+            lines.append(f"关键词「{kw}」在章节 {', '.join(hit_chapters)} 共命中 {hit_count} 处。")
+        else:
+            lines.append(f"关键词「{kw}」在第{chapter_start}~{chapter_end}章未命中。")
+
+    return "\n".join(lines)
 
 
 def _snapshot_metadata(row) -> dict:
@@ -612,6 +773,64 @@ sync_chapter_metadata = StructuredTool.from_function(
 )
 
 
+async def _overwrite_chapter_title_coroutine(
+    work_id: str,
+    chapter_number: int,
+    new_title: str,
+    config: RunnableConfig = None,
+) -> str:
+    """全量覆盖章节标题，不修改正文。"""
+    from app.models.work_model import Chapter
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+
+    normalized = (new_title or "").strip()
+    if not normalized:
+        return "标题覆盖失败：new_title 不能为空。"
+    if len(normalized) > 200:
+        return "标题覆盖失败：new_title 不能超过 200 个字符。"
+
+    try:
+        with _with_lock(config):
+            chapter = db.query(Chapter).filter_by(
+                work_id=work_id, chapter_number=chapter_number
+            ).first()
+            if not chapter:
+                return f"第{chapter_number}章不存在，无法覆盖标题。"
+
+            old_title = chapter.title or ""
+            chapter.title = normalized
+            db.commit()
+            db.refresh(chapter)
+    except Exception as exc:
+        with _with_lock(config):
+            db.rollback()
+        return f"第{chapter_number}章标题覆盖失败：{exc!r}"
+
+    emit(
+        "chapter_title_overwritten",
+        {
+            "chapter_number": chapter_number,
+            "old_title": old_title,
+            "new_title": chapter.title,
+        },
+    )
+    return f"第{chapter_number}章标题已覆盖：{old_title or '（空）'} -> {chapter.title}"
+
+
+overwrite_chapter_title = StructuredTool.from_function(
+    func=None,
+    coroutine=_overwrite_chapter_title_coroutine,
+    name="overwrite_chapter_title",
+    description=(
+        "全量覆盖章节标题（不修改正文）。"
+        "当用户明确要求改标题、重命名章节时使用此工具。"
+    ),
+    args_schema=OverwriteChapterTitleInput,
+)
+
+
 EDIT_CHAPTER_TOOLS = [
     read_chapter,
     query_characters_by_chapter,
@@ -620,5 +839,6 @@ EDIT_CHAPTER_TOOLS = [
     grep_chapter_meta,
     generate_patch_edit,
     rewrite_chapter,
+    overwrite_chapter_title,
     sync_chapter_metadata,
 ]

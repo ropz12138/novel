@@ -1,18 +1,20 @@
-"""SupervisorAgent 工具注册 — 查询工具 + 派发工具
+"""SupervisorAgent 工具注册 — 查询工具 + 需求分析工具 + 状态机工具 + 派发工具
 
 架构:
-- 查询工具: 统筹 Agent 直接使用 (query_characters, query_chapters, query_chapter_meta, grep_chapter_meta, grep)
-- 派发工具: 统筹 Agent 将任务描述传给子 Agent, 子 Agent 自己决定如何执行
+- 查询工具: Supervisor 直接使用（包含原有工具 + 从子 Agent 补充的工具）
+- 需求分析工具: analyze_requirements, read_work_context, read_chat_history（原 RequirementsPlannerAgent 的工具）
+- 状态机工具: update_task_status（维护 task_items 表中的任务状态）
+- 派发工具: Supervisor 将任务描述传给子 Agent, 子 Agent 自己决定如何执行
   - dispatch_outline: 派发给 OutlineAgent (创建/编辑大纲)
   - dispatch_chapter: 派发给 ChapterAgent / EditChapterAgent (撰写新章 / 编辑正文，非只读查询)
   - dispatch_evaluation: 派发给 EvaluationAgent (章节质量评估)
-  - dispatch_writing_expert: 派发给 WritingExpertAgent（微咨询建议）
 """
 
 from __future__ import annotations
 
 import logging
 from json import dumps
+from pathlib import Path
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool, tool
@@ -23,8 +25,24 @@ from app.services.supervisor.edit_chapter_tools import (
     grep_chapter_meta,
     query_chapter_meta,
 )
+from app.services.supervisor.edit_chapter_tools import (
+    grep_in_chapter,
+    query_characters_by_chapter,
+    read_chapter,
+)
+from app.services.supervisor.outline_tools import (
+    query_outline_related_chapters,
+    read_outline,
+)
+from app.services.agent.chapter_tools import (
+    query_chapter_outline,
+    query_foreshadowing,
+    query_previous_chapters,
+)
 
 logger = logging.getLogger(__name__)
+
+PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 # ── Tool input schemas ──
@@ -58,7 +76,9 @@ class GrepInput(BaseModel):
     keywords: list[str] = Field(description="搜索关键词列表，支持同时搜索多个关键词")
     scope: str = Field(default="all", description="搜索范围: all / characters / chapters")
     character_name: str | None = Field(default=None, description="可选：仅搜索指定角色名")
-    chapter_number: int | None = Field(default=None, description="可选：仅搜索指定章节号")
+    chapter_start: int | None = Field(default=None, description="可选：起始章节号")
+    chapter_end: int | None = Field(default=None, description="可选：结束章节号")
+    chapter_number: int | None = Field(default=None, description="兼容字段：单章节号（等价于 start=end）")
     context_chars: int = Field(default=200, description="上下文字符数")
 
 
@@ -91,9 +111,32 @@ class DispatchEvaluationInput(BaseModel):
     )
 
 
-class DispatchRequirementsPlannerInput(BaseModel):
-    message: str = Field(description="用户当前需求描述")
-    work_id: str | None = Field(default=None, description="可选：关联作品ID")
+class ReadWorkContextInput(BaseModel):
+    work_id: str = Field(description="作品ID")
+
+
+class ReadChatHistoryInput(BaseModel):
+    session_id: str = Field(description="会话ID")
+    limit: int = Field(default=10, description="读取最近几条消息")
+
+
+class AnalyzeRequirementsInput(BaseModel):
+    message: str = Field(description="用户的需求描述")
+    work_context: str = Field(default="", description="作品上下文信息")
+    history: str = Field(default="", description="历史对话")
+
+
+class UpdateTaskStatusInput(BaseModel):
+    task_item_id: str = Field(description="任务记录ID（task_items 表的主键）")
+    status: str = Field(
+        description="新状态，可选值: pending / in_progress / completed / skipped / failed",
+    )
+    result_summary: str = Field(default="", description="可选：执行结果摘要")
+
+
+class UpdateTodolistReadinessInput(BaseModel):
+    session_id: str = Field(description="当前会话ID（supervisor_sessions 表的主键）")
+    ready_to_execute: bool = Field(description="信息是否充分可执行。true=可执行，false=待澄清")
 
 
 class DispatchWritingExpertInput(BaseModel):
@@ -125,6 +168,12 @@ def _get_db(config: RunnableConfig) -> Session:
 def _get_emit(config: RunnableConfig):
     configurable = config.get("configurable", {})
     return configurable.get("emit", lambda event, data: None)
+
+
+def _store_memory(memories: dict[str, list[str]], agent_key: str, text: str) -> None:
+    if agent_key not in memories:
+        memories[agent_key] = []
+    memories[agent_key].append(text)
 
 
 def _get_user_id(config: RunnableConfig) -> str | None:
@@ -256,6 +305,8 @@ def grep(
     context_chars: int,
     config: RunnableConfig,
     character_name: str | None = None,
+    chapter_start: int | None = None,
+    chapter_end: int | None = None,
     chapter_number: int | None = None,
 ) -> str:
     """在角色设定和/或章节正文中搜索关键词（不搜索章节元数据字段）。
@@ -271,12 +322,18 @@ def grep(
 
     all_results = []
     seen_snippets = set()
+    if chapter_number is not None:
+        chapter_start = chapter_number
+        chapter_end = chapter_number
+
     for kw in keywords:
         results = CharacterService.grep(
             work_id=work_id, keyword=kw, scope=scope,
             context_chars=context_chars, db=db,
             character_name=character_name,
             chapter_number=chapter_number,
+            chapter_start=chapter_start,
+            chapter_end=chapter_end,
             user_id=_get_user_id(config),
         )
         for r in results:
@@ -304,6 +361,246 @@ def grep(
             else:
                 lines.append(f"  [第{r['chapter_number']}章 {r['chapter_title']}] {r['snippet']}")
     return "\n".join(lines)
+
+
+# ── 需求分析工具（原 RequirementsPlannerAgent 的工具） ──
+
+
+@tool(args_schema=ReadWorkContextInput)
+def read_work_context(work_id: str, config: RunnableConfig) -> str:
+    """读取作品的基本信息，用于理解当前写作进度和上下文。"""
+    from app.models.work_model import Work
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"作品 {work_id} 不存在。"
+
+    outline = work.outline_tree or {}
+    story = outline.get("story", {})
+    timeline = outline.get("timeline", [])
+
+    context = "\n".join([
+        f"work_id: {work.id}",
+        f"标题: {work.title}",
+        f"类型: {story.get('genre', '')}",
+        f"卷: {story.get('volume', '')}",
+        f"时间线节点数: {len(timeline)}",
+    ])
+
+    emit("requirements_context_read", {"work_id": work_id})
+    return context
+
+
+@tool(args_schema=ReadChatHistoryInput)
+def read_chat_history(session_id: str, limit: int, config: RunnableConfig) -> str:
+    """读取当前会话的最近对话历史，用于理解用户的前后文需求。"""
+    from app.services import message_service
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+
+    messages = message_service.get_messages_by_session(db, session_id)
+    recent = messages[-limit:] if len(messages) > limit else messages
+
+    if not recent:
+        return "暂无对话历史。"
+
+    parts = []
+    for m in recent:
+        parts.append(f"[{m.role}] {m.content[:200]}")
+
+    emit("requirements_history_read", {"count": len(recent)})
+    return "\n".join(parts)
+
+
+async def _analyze_requirements_coroutine(
+    message: str,
+    work_context: str = "",
+    history: str = "",
+    config: RunnableConfig = None,
+) -> str:
+    """分析用户需求，生成结构化的需求分析和任务清单，并持久化到 task_items 表。"""
+    from langchain_core.prompts import PromptTemplate
+
+    from app.models.task_item_model import TaskItem
+    from app.services.supervisor.sub_agent_base import get_llm
+
+    class TaskItemResult(BaseModel):
+        id: str = Field(default="T1", description="任务ID")
+        task: str = Field(description="任务描述")
+        owner: str = Field(default="supervisor", description="负责人")
+        depends_on: list[str] = Field(default_factory=list, description="依赖任务ID")
+        status: str = Field(default="pending", description="状态")
+        done_criteria: str = Field(default="", description="完成判定标准")
+
+    class RequirementsAnalysisResult(BaseModel):
+        intent_summary: str = Field(default="", description="一句话目标")
+        requirements: list[str] = Field(default_factory=list, description="明确需求列表")
+        constraints: list[str] = Field(default_factory=list, description="约束列表")
+        assumptions: list[str] = Field(default_factory=list, description="假设列表")
+        questions: list[str] = Field(default_factory=list, description="需要用户确认的问题")
+        todolist: list[TaskItemResult] = Field(default_factory=list, description="任务清单")
+        ready_to_execute: bool = Field(default=False, description="信息是否充分可执行")
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    session_id = (config or {}).get("configurable", {}).get("supervisor_session_id")
+
+    template = (PROMPT_DIR / "requirements_planner.txt").read_text(encoding="utf-8")
+    prompt = PromptTemplate.from_template(template)
+    llm = get_llm(temperature=0.2, streaming=False)
+    structured_llm = llm.with_structured_output(
+        RequirementsAnalysisResult,
+        method="function_calling",
+    )
+
+    chain = prompt | structured_llm
+
+    result = await chain.ainvoke({
+        "user_message": message,
+        "work_context": work_context or "（未绑定作品）",
+        "history": history or "（无历史对话）",
+    })
+
+    questions = result.questions if result.questions else []
+    todolist = result.todolist if result.todolist else []
+
+    # 持久化任务到 task_items 表
+    persisted_tasks = []
+    for idx, t in enumerate(todolist):
+        import uuid
+        task_item = TaskItem(
+            id=str(uuid.uuid4()),
+            session_id=session_id or "",
+            task_id=t.id or f"T{idx + 1}",
+            task_description=t.task,
+            owner=t.owner,
+            status=t.status or "pending",
+            depends_on=",".join(t.depends_on) if t.depends_on else "",
+            done_criteria=t.done_criteria or "",
+            sort_order=idx,
+        )
+        db.add(task_item)
+        persisted_tasks.append({
+            "db_id": task_item.id,
+            "task_id": task_item.task_id,
+            "task": task_item.task_description,
+            "owner": task_item.owner,
+            "status": task_item.status,
+            "depends_on": t.depends_on,
+            "done_criteria": task_item.done_criteria,
+        })
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    if todolist or result.intent_summary:
+        # 将 ready_to_execute 持久化到 session
+        if session_id:
+            from app.models.agent_model import SupervisorSession
+            session_obj = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session_obj:
+                session_obj.ready_to_execute = result.ready_to_execute
+
+        emit("todolist_generated", {
+            "intent_summary": result.intent_summary or "",
+            "todolist": persisted_tasks,
+            "ready_to_execute": result.ready_to_execute,
+        })
+
+    if questions:
+        return f"需求分析完成。发现 {len(questions)} 个需要澄清的问题。\n" + "\n".join(f"- {q}" for q in questions[:5])
+
+    return f"需求已明确，生成了 {len(todolist)} 条任务。\n" + "\n".join(f"- {t.task}" for t in todolist[:8])
+
+
+analyze_requirements = StructuredTool.from_function(
+    func=None,
+    coroutine=_analyze_requirements_coroutine,
+    name="analyze_requirements",
+    description="分析用户需求，生成结构化的需求分析、澄清问题和任务清单。任务清单会持久化到数据库，可通过 update_task_status 更新状态。",
+    args_schema=AnalyzeRequirementsInput,
+)
+
+
+# ── 状态机工具 ──
+
+
+@tool(args_schema=UpdateTaskStatusInput)
+def update_task_status(task_item_id: str, status: str, result_summary: str, config: RunnableConfig) -> str:
+    """更新任务状态。合法状态: pending / in_progress / completed / skipped / failed。"""
+    import uuid
+
+    from app.models.task_item_model import TaskItem
+
+    VALID_STATUSES = {"pending", "in_progress", "completed", "skipped", "failed"}
+    if status not in VALID_STATUSES:
+        return f"无效状态：{status}。合法值为：{', '.join(sorted(VALID_STATUSES))}"
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+
+    task = db.query(TaskItem).filter_by(id=task_item_id).first()
+    if not task:
+        return f"任务记录 {task_item_id} 不存在。"
+
+    old_status = task.status
+    task.status = status
+    if result_summary:
+        task.result_summary = result_summary
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    emit("task_status_updated", {
+        "task_item_id": task_item_id,
+        "task_id": task.task_id,
+        "old_status": old_status,
+        "new_status": status,
+        "result_summary": result_summary or task.result_summary,
+    })
+
+    return f"任务 {task.task_id}（{task.task_description[:50]}）状态已更新：{old_status} -> {status}"
+
+
+@tool(args_schema=UpdateTodolistReadinessInput)
+def update_todolist_readiness(session_id: str, ready_to_execute: bool, config: RunnableConfig) -> str:
+    """更新任务清单的'可执行'状态。当需求信息已充分时设为 true，当需要进一步澄清时设为 false。"""
+    from app.models.agent_model import SupervisorSession
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+
+    session = db.query(SupervisorSession).filter_by(id=session_id).first()
+    if not session:
+        return f"会话 {session_id} 不存在。"
+
+    old_value = session.ready_to_execute
+    session.ready_to_execute = ready_to_execute
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    label = "可执行" if ready_to_execute else "待澄清"
+    old_label = "可执行" if old_value else "待澄清"
+    emit("todolist_readiness_updated", {
+        "session_id": session_id,
+        "ready_to_execute": ready_to_execute,
+    })
+
+    return f"任务清单状态已更新：{old_label} -> {label}"
 
 
 # ── 派发工具（异步，统筹 Agent 传递意图给子 Agent） ──
@@ -339,6 +636,8 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
         )
 
     agent = OutlineAgent(emit=emit, user_id=configurable.get("user_id"))
+
+    memories: dict[str, list[str]] = configurable.get("sub_agent_memories", {})
 
     async def _run_locked(coro):
         """如果有 db_lock（threading.Lock）则直接执行（锁已传给内层 graph）。"""
@@ -378,6 +677,7 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
                 session_id,
                 created_work_id,
             )
+        _store_memory(memories, "outline", f"创建大纲：{result.get('title', '')}（work_id={result.get('work_id', '')}）")
         return (
             f"大纲创建成功。作品「{result.get('title', '')}」"
             f"（work_id: {result.get('work_id', '')}）"
@@ -388,12 +688,14 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
 
         result = await _run_locked(
             agent.edit_outline(
-                work_id=work_id, message=message, history=[], db=db,
+                work_id=work_id, message=message, history=memories.get("outline", []), db=db,
                 auto_mode=auto_mode, db_lock=db_lock,
             )
         )
         if result.get("error"):
             return f"编辑大纲失败：{result.get('message', result.get('error', '未知错误'))}"
+
+        _store_memory(memories, "outline", f"编辑大纲 work_id={work_id}：{result.get('message', '')[:300]}")
 
         if auto_mode:
             return result.get("message", "大纲编辑已完成。")
@@ -537,6 +839,9 @@ async def _dispatch_chapter_coroutine(
         "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
     })
 
+    memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+    _store_memory(memories, "chapter", f"写第{actual_chapter}章完成")
+
     return (
         f"第{actual_chapter}章写作完成。"
         "已同步章节元数据。"
@@ -598,8 +903,9 @@ async def _edit_chapter_inner(
             "diff": diff,
             "new_content": new_content,
         })
+        memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+        _store_memory(memories, "chapter", f"自动编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
         return (
-            f"第{chapter_number}章已自动优化并保存"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
         )
 
@@ -638,6 +944,8 @@ async def _edit_chapter_inner(
                 raise
 
     if summary:
+        memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+        _store_memory(memories, "chapter", f"编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
         return (
             f"第{chapter_number}章修改已完成"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
@@ -648,72 +956,6 @@ async def _edit_chapter_inner(
         f"第{chapter_number}章修改已完成。"
         f"{result.get('message', '')}"
     )
-
-
-
-async def _dispatch_requirements_planner_coroutine(
-    message: str,
-    work_id: str | None = None,
-    config: RunnableConfig = None,
-) -> str:
-    """派发需求澄清与任务规划给 RequirementsPlannerAgent。"""
-    from app.models.agent_model import SupervisorSession
-    from app.services.supervisor.requirements_planner_agent import RequirementsPlannerAgent
-
-    emit = _get_emit(config)
-    db = _get_db(config)
-
-    session_id = config.get("configurable", {}).get("supervisor_session_id")
-    history = []
-    if session_id:
-        from app.services import message_service
-
-        for m in message_service.get_messages_by_session(db, session_id)[-10:]:
-            history.append({"role": m.role, "content": m.content})
-
-    agent = RequirementsPlannerAgent(emit=emit)
-    result = await agent.plan(
-        message=message,
-        work_id=work_id,
-        history=history,
-        db=db,
-    )
-
-    if session_id:
-        sess = db.query(SupervisorSession).filter_by(id=session_id).first()
-        if sess:
-            sess.active_child = {
-                "type": "requirements_planner",
-                "work_id": work_id,
-                "result": result,
-            }
-            sess.status = "waiting"
-            sess.stage = "executing"
-            try:
-                db.commit()
-            except Exception:
-                db.rollback()
-                raise
-
-    questions = result.get("questions", [])
-    if questions:
-        question_details = "\n".join(f"  {i+1}. {q}" for i, q in enumerate(questions))
-        return (
-            f"需求澄清完成：当前仍需用户确认 {len(questions)} 个问题：\n"
-            f"{question_details}\n"
-            "请先回答上述问题，再继续执行写作任务。"
-        )
-
-    todolist = result.get("todolist", [])
-    if todolist:
-        task_details = "\n".join(f"  {i+1}. {t}" for i, t in enumerate(todolist[:8]))
-        return (
-            f"需求已明确，已生成 {len(todolist)} 条任务：\n"
-            f"{task_details}\n"
-            "请等待用户确认是否按该计划执行。"
-        )
-
-    return "需求分析已完成，但未生成具体的任务清单。请等待用户确认。"
 
 
 async def _dispatch_evaluation_coroutine(
@@ -733,54 +975,39 @@ async def _dispatch_evaluation_coroutine(
 
     emit("stage_start", {"stage": "evaluation", "label": f"评估第{chapter_number}章"})
 
+    memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+    eval_history = memories.get("evaluation", [])
+
     agent = EvaluationAgent()
     try:
-        title, editor, reader, sync = await agent.evaluate_chapter(
+        title, editor_text, reader_text, sync_text = await agent.evaluate_chapter(
             db=db,
             work_id=work_id,
             chapter_number=chapter_number,
             chapter_content_override=chapter_content,
+            history=eval_history,
         )
-    except ValueError as exc:
-        return f"评估失败：{exc}"
     except Exception as exc:
         logger.exception("dispatch_evaluation failed: %s", exc)
         return f"评估失败：{exc}"
 
-    def _to_dict(obj) -> dict:
-        if isinstance(obj, dict):
-            return obj
-        if hasattr(obj, "model_dump"):
-            return obj.model_dump()
-        return {}
-
-    editor_data = _to_dict(editor)
-    reader_data = _to_dict(reader)
-    sync_data = _to_dict(sync)
+    # 存入子 agent 记忆
+    summary = f"第{chapter_number}章「{title}」编辑评估：{editor_text[:500]}；读者评估：{reader_text[:500]}；同步性：{sync_text[:300]}"
+    _store_memory(memories, "evaluation", summary)
 
     emit("evaluation_done", {
         "chapter_number": chapter_number,
         "chapter_title": title,
-        "editor": editor_data,
-        "reader": reader_data,
-        "sync": sync_data,
+        "editor": editor_text,
+        "reader": reader_text,
+        "sync": sync_text,
     })
-
-    def _brief(role: str, result) -> str:
-        data = _to_dict(result)
-        issues_list = data.get("issues") or []
-        suggestions_list = data.get("suggestions") or []
-        issues = "；".join(issues_list[:3]) if issues_list else "暂无明显问题"
-        suggestions = "；".join(suggestions_list[:3]) if suggestions_list else "暂无建议"
-        total_score = data.get("total_score", 0)
-        return f"{role} {total_score}/60。问题：{issues}。建议：{suggestions}"
 
     return (
         f"第{chapter_number}章「{title}」评估完成。\n"
-        f"{_brief('编辑视角', editor)}\n"
-        f"{_brief('读者视角', reader)}\n"
-        f"同步性：{sync_data.get('sync_score', 0)}/100（{sync_data.get('status', 'partial_mismatch')}），"
-        f"建议动作：{sync_data.get('action_hint', 'fix_chapter')}"
+        f"【编辑视角】{editor_text[:800]}\n"
+        f"【读者视角】{reader_text[:800]}\n"
+        f"【同步性】{sync_text[:800]}"
     )
 
 
@@ -803,6 +1030,8 @@ async def _dispatch_writing_expert_coroutine(
     if err:
         return err
 
+    memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+
     agent = WritingExpertAgent(emit=emit)
     try:
         result = await agent.advise(
@@ -813,12 +1042,15 @@ async def _dispatch_writing_expert_coroutine(
             chapter_goal=chapter_goal,
             chapter_number=chapter_number,
             count=count,
+            history=memories.get("writing_expert", []),
         )
     except ValueError as exc:
         return f"写作专家建议生成失败：{exc}"
     except Exception as exc:
         logger.exception("dispatch_writing_expert failed: %s", exc)
         return f"写作专家建议生成失败：{exc}"
+
+    _store_memory(memories, "writing_expert", f"写作建议({problem_type})：{str(result.get('recommended_pick', {}))[:300]}")
 
     recommended = result.get("recommended_pick", {})
     options = result.get("options", [])
@@ -864,20 +1096,6 @@ dispatch_chapter = StructuredTool.from_function(
 )
 
 
-dispatch_requirements_planner = StructuredTool.from_function(
-    func=None,
-    coroutine=_dispatch_requirements_planner_coroutine,
-    name="dispatch_requirements_planner",
-    description=(
-        "派发需求澄清与任务规划任务给 RequirementsPlannerAgent。"
-        "当用户写章节的请求模糊、包含多个关联目标、或缺少执行边界时，调用本工具完成需求拆解和确认。"
-        "触发场景包括：需求表述模糊（如'类似''大概''看着办''差不多'）、多个关联目标需拆解、涉及多章节联动需确认范围和优先级。"
-        "该工具会返回结构化需求分析和 todolist，帮助确保写作方向正确。"
-    ),
-    args_schema=DispatchRequirementsPlannerInput,
-)
-
-
 dispatch_evaluation = StructuredTool.from_function(
     func=None,
     coroutine=_dispatch_evaluation_coroutine,
@@ -912,7 +1130,23 @@ ALL_TOOLS = [
     query_chapter_meta,
     grep_chapter_meta,
     grep,
-    dispatch_requirements_planner,
+    # 从子 Agent 补充的查询工具
+    read_outline,
+    query_outline_related_chapters,
+    read_chapter,
+    query_characters_by_chapter,
+    grep_in_chapter,
+    query_chapter_outline,
+    query_previous_chapters,
+    query_foreshadowing,
+    # 需求分析工具
+    read_work_context,
+    read_chat_history,
+    analyze_requirements,
+    # 状态机工具
+    update_task_status,
+    update_todolist_readiness,
+    # 派发工具
     dispatch_outline,
     dispatch_chapter,
     dispatch_evaluation,
