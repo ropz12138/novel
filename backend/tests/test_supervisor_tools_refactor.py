@@ -42,14 +42,11 @@ class TestToolsRegistration:
         "update_todolist_readiness",
     }
 
-    EXPECTED_DISPATCH_TOOLS = {
+    REMOVED_TOOLS = {
+        "dispatch_requirements_planner",
         "dispatch_outline",
         "dispatch_chapter",
         "dispatch_evaluation",
-    }
-
-    REMOVED_TOOLS = {
-        "dispatch_requirements_planner",
     }
 
     def _get_tool_names(self):
@@ -57,7 +54,7 @@ class TestToolsRegistration:
         return {t.name for t in ALL_TOOLS}
 
     def test_all_tools_count(self):
-        """应该恰好注册 21 个工具"""
+        """应该恰好注册 20 个工具（不含 dispatch_*）"""
         from app.services.supervisor.tools import ALL_TOOLS
         assert len(ALL_TOOLS) == 21
 
@@ -79,11 +76,11 @@ class TestToolsRegistration:
         for tool_name in self.EXPECTED_ANALYSIS_TOOLS:
             assert tool_name in names, f"分析工具 {tool_name} 未注册"
 
-    def test_dispatch_tools_kept(self):
-        """3 个派发工具应保留"""
+    def test_dispatch_tools_removed_from_supervisor(self):
+        """dispatch_* 入口工具已从 Supervisor 移除"""
         names = self._get_tool_names()
-        for tool_name in self.EXPECTED_DISPATCH_TOOLS:
-            assert tool_name in names, f"派发工具 {tool_name} 缺失"
+        for tool_name in ("dispatch_outline", "dispatch_chapter", "dispatch_evaluation"):
+            assert tool_name not in names, f"派发工具 {tool_name} 仍暴露在 ALL_TOOLS"
 
     def test_dispatch_requirements_planner_removed(self):
         """dispatch_requirements_planner 应已移除"""
@@ -196,6 +193,31 @@ class TestUpdateTaskStatusTool:
         mock_db.commit.assert_called()
         assert any(e[0] == "task_status_updated" for e in emitted)
 
+    def test_update_task_status_rejects_reopening_terminal_task(self):
+        """终态任务不应被 LLM 重开或改跳过，以免绕过失败任务继续执行。"""
+        from unittest.mock import MagicMock
+        from app.services.supervisor.tools import update_task_status
+
+        mock_task = MagicMock()
+        mock_task.status = "failed"
+        mock_task.task_id = "T1"
+        mock_task.task_description = "撰写第二章正文"
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_task
+
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+
+        result = update_task_status.func(
+            task_item_id="ti-1",
+            status="pending",
+            result_summary="重试",
+            config=config,
+        )
+
+        assert "不可改为 pending" in result
+        assert mock_task.status == "failed"
+        mock_db.commit.assert_not_called()
+
 
 class TestAnalyzeRequirementsTool:
     """验证 analyze_requirements 工具的 schema"""
@@ -218,24 +240,23 @@ class TestUpdateTodolistReadinessTool:
         from app.services.supervisor.tools import UpdateTodolistReadinessInput
         schema = UpdateTodolistReadinessInput.model_json_schema()
         props = schema["properties"]
-        assert "session_id" in props
+        assert "session_id" not in props
         assert "ready_to_execute" in props
         required = schema.get("required", [])
-        assert "session_id" in required
         assert "ready_to_execute" in required
 
     def test_update_todolist_readiness_returns_not_found(self):
-        """不存在的 session_id 应返回未找到"""
+        """不存在的程序注入 session_id 应返回未找到"""
         from unittest.mock import MagicMock
         from app.services.supervisor.tools import update_todolist_readiness
 
         mock_db = MagicMock()
         mock_db.query.return_value.filter_by.return_value.first.return_value = None
 
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "supervisor_session_id": "nonexistent"}}
 
         result = update_todolist_readiness.func(
-            session_id="nonexistent", ready_to_execute=True, config=config,
+            ready_to_execute=True, config=config,
         )
         assert "不存在" in result
 
@@ -254,10 +275,10 @@ class TestUpdateTodolistReadinessTool:
         def capture_emit(event, data):
             emitted.append((event, data))
 
-        config = {"configurable": {"db": mock_db, "emit": capture_emit}}
+        config = {"configurable": {"db": mock_db, "emit": capture_emit, "supervisor_session_id": "sess-1"}}
 
         result = update_todolist_readiness.func(
-            session_id="sess-1", ready_to_execute=True, config=config,
+            ready_to_execute=True, config=config,
         )
 
         mock_db.commit.assert_called()

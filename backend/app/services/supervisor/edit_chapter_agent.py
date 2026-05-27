@@ -141,18 +141,23 @@ class EditChapterAgent:
         db: Session,
         emit_diff_event: bool = True,
         db_lock: object | None = None,
+        base_configurable: dict | None = None,
     ) -> dict:
         """执行章节编辑任务。"""
         self.emit("stage_start", {"stage": "edit_chapter", "label": f"处理第{chapter_number}章"})
 
         graph = self._build_graph()
 
+        configurable = dict(base_configurable or {})
+        configurable.update({
+            "db": db,
+            "emit": self.emit,
+            "db_lock": db_lock,
+            "work_id": work_id,
+            "chapter_number": chapter_number,
+        })
         config = {
-            "configurable": {
-                "db": db,
-                "emit": self.emit,
-                "db_lock": db_lock,
-            },
+            "configurable": configurable,
             "recursion_limit": 100,
         }
 

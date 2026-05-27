@@ -19,7 +19,7 @@ class TestDispatchToolRegistration:
     """验证重构后的工具注册"""
 
     def test_all_tools_count_is_9(self):
-        """应该恰好注册 20 个工具（15 查询 + 2 分析/状态机 + 3 派发）"""
+        """Supervisor ALL_TOOLS 不再包含 dispatch_* 入口（20 个工具）"""
         from app.services.supervisor.tools import ALL_TOOLS
         assert len(ALL_TOOLS) == 21
 
@@ -33,14 +33,15 @@ class TestDispatchToolRegistration:
         assert "grep_chapter_meta" in names
         assert "grep" in names
 
-    def test_dispatch_tools_exist(self):
-        """3 个派发工具应存在"""
+    def test_dispatch_tools_not_in_supervisor_all_tools(self):
+        """dispatch_* 已从 Supervisor 工具表移除，仅保留模块级 coroutine 供遗留测试"""
         from app.services.supervisor.tools import ALL_TOOLS
         names = {t.name for t in ALL_TOOLS}
-        assert "dispatch_outline" in names
-        assert "dispatch_chapter" in names
-        assert "dispatch_evaluation" in names
+        assert "dispatch_outline" not in names
+        assert "dispatch_chapter" not in names
+        assert "dispatch_evaluation" not in names
         assert "dispatch_requirements_planner" not in names
+        assert "execute_todo_task" in names
 
     def test_old_operation_tools_removed(self):
         """旧的操作型工具应全部移除"""
@@ -89,34 +90,29 @@ class TestDispatchToolSchemas:
         schema = DispatchOutlineInput.model_json_schema()
         props = schema["properties"]
         assert "message" in props
-        assert "work_id" in props
-        # work_id 应为可选
+        assert "work_id" not in props
         required = schema.get("required", [])
         assert "message" in required
-        assert "work_id" not in required
 
     def test_dispatch_chapter_schema(self):
         from app.services.supervisor.tools import DispatchChapterInput
         schema = DispatchChapterInput.model_json_schema()
         props = schema["properties"]
         assert "instruction" in props
-        assert "work_id" in props
         assert "chapter_number" in props
-        # work_id 必传，chapter_number 可选
+        # work_id 由会话/config 绑定，不由模型传入
+        assert "work_id" not in props
         required = schema.get("required", [])
-        assert "work_id" in required
-        assert "instruction" not in required or "instruction" in required
+        assert "work_id" not in required
         assert "chapter_number" not in required
 
     def test_dispatch_evaluation_schema(self):
         from app.services.supervisor.tools import DispatchEvaluationInput
         schema = DispatchEvaluationInput.model_json_schema()
         props = schema["properties"]
-        assert "work_id" in props
         assert "chapter_number" in props
         assert "chapter_content" in props
         required = schema.get("required", [])
-        assert "work_id" in required
         assert "chapter_number" in required
         assert "chapter_content" not in required
 
@@ -348,6 +344,61 @@ class TestDispatchChapterCoroutine:
         )
         assert "新增章节必须严格顺序" in result
         assert "只能新增第4章" in result
+
+    @pytest.mark.asyncio
+    async def test_dispatch_chapter_metadata_error_does_not_fail_saved_chapter(self):
+        """正文已保存后，元数据补同步异常不应把写作父任务标成失败。"""
+        from app.services.supervisor.tools import dispatch_chapter
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.chapter_number = 1
+        mock_chapter.content = "正文"
+        mock_chapter.title = "第一章"
+        mock_work = MagicMock()
+        mock_work.id = "w-1"
+        mock_work.outline_tree = True
+
+        chapter_q = MagicMock()
+        chapter_q.filter_by.return_value.first.side_effect = [None, mock_chapter]
+        chapter_q.filter_by.return_value.order_by.return_value.first.return_value = None
+
+        work_q = MagicMock()
+        work_q.filter_by.return_value.first.return_value = mock_work
+
+        metadata_q = MagicMock()
+        metadata_q.filter_by.return_value.first.return_value = None
+
+        def query_side_effect(model):
+            if getattr(model, "__name__", "") == "Chapter":
+                return chapter_q
+            if getattr(model, "__name__", "") == "Work":
+                return work_q
+            if getattr(model, "__name__", "") == "ChapterMetadata":
+                return metadata_q
+            return MagicMock()
+
+        mock_db.query.side_effect = query_side_effect
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+
+        with patch("app.services.supervisor.chapter_agent.ChapterAgent.run", new_callable=AsyncMock) as mock_run, \
+             patch(
+                 "app.services.chapter_outline_sync_service.ChapterOutlineSyncService.generate_and_persist",
+                 new_callable=AsyncMock,
+             ) as mock_sync:
+            mock_run.return_value = {"message": "写作完成"}
+            mock_sync.side_effect = AttributeError("'bool' object has no attribute 'get'")
+
+            result = await dispatch_chapter.coroutine(
+                instruction="写第一章",
+                work_id="w-1",
+                chapter_number=1,
+                config=config,
+            )
+
+        assert "第1章写作完成" in result
+        assert "失败" not in result
+        assert "章节元数据稍后可重新同步" in result
 
 
 # ────────────────────────── 5. 查询工具不变测试 ──────────────────────────

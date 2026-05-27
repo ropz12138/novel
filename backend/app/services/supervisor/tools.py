@@ -49,7 +49,6 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 class QueryCharactersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     filters: dict = Field(
         default_factory=dict,
         description="过滤条件，支持 role_type, gender, name, current_status, "
@@ -59,7 +58,6 @@ class QueryCharactersInput(BaseModel):
 
 
 class QueryChaptersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     filters: dict = Field(
         default_factory=dict,
         description="过滤条件，支持 chapter_number, chapter_number__lte/gte, "
@@ -72,7 +70,6 @@ class QueryChaptersInput(BaseModel):
 
 
 class GrepInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     keywords: list[str] = Field(description="搜索关键词列表，支持同时搜索多个关键词")
     scope: str = Field(default="all", description="搜索范围: all / characters / chapters")
     character_name: str | None = Field(default=None, description="可选：仅搜索指定角色名")
@@ -84,11 +81,9 @@ class GrepInput(BaseModel):
 
 class DispatchOutlineInput(BaseModel):
     message: str = Field(description="任务描述：用户想要对大纲做什么，如「丰富大纲，增加女主角戏份」或「从零创建一个末日科幻故事」")
-    work_id: str | None = Field(default=None, description="作品ID。已有作品时传入，不传则视为创建新大纲")
 
 
 class DispatchChapterInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     instruction: str = Field(
         default="",
         description=(
@@ -103,7 +98,6 @@ class DispatchChapterInput(BaseModel):
 
 
 class DispatchEvaluationInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_number: int = Field(description="要评估的章节号")
     chapter_content: str = Field(
         default="",
@@ -112,11 +106,10 @@ class DispatchEvaluationInput(BaseModel):
 
 
 class ReadWorkContextInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class ReadChatHistoryInput(BaseModel):
-    session_id: str = Field(description="会话ID")
     limit: int = Field(default=10, description="读取最近几条消息")
 
 
@@ -135,12 +128,10 @@ class UpdateTaskStatusInput(BaseModel):
 
 
 class UpdateTodolistReadinessInput(BaseModel):
-    session_id: str = Field(description="当前会话ID（supervisor_sessions 表的主键）")
     ready_to_execute: bool = Field(description="信息是否充分可执行。true=可执行，false=待澄清")
 
 
 class DispatchWritingExpertInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     problem_type: str = Field(
         description="问题类型：conflict_event/hook_design/pacing_fix/character_tension/dialogue_upgrade",
     )
@@ -181,6 +172,13 @@ def _get_user_id(config: RunnableConfig) -> str | None:
     return configurable.get("user_id")
 
 
+def _get_session_id(config: RunnableConfig) -> str:
+    session_id = (config or {}).get("configurable", {}).get("supervisor_session_id")
+    if not session_id:
+        raise ValueError("当前没有活跃的会话。")
+    return str(session_id)
+
+
 def _resolve_bound_work_id(
     config: RunnableConfig,
     db: Session,
@@ -192,24 +190,23 @@ def _resolve_bound_work_id(
       (effective_work_id, error_message)
     """
     session_id = (config or {}).get("configurable", {}).get("supervisor_session_id")
-    if not session_id:
-        return requested_work_id, None
+    cfg_work_id = (config or {}).get("configurable", {}).get("work_id") or None
 
     from app.models.agent_model import SupervisorSession
 
-    session = db.query(SupervisorSession).filter_by(id=session_id).first()
-    if not session or not session.work_id:
+    session = db.query(SupervisorSession).filter_by(id=session_id).first() if session_id else None
+    bound_work_id = (session.work_id if session and session.work_id else None) or cfg_work_id
+    if not bound_work_id:
         return requested_work_id, None
 
-    if requested_work_id is None:
-        return session.work_id, None
+    if not requested_work_id:
+        return bound_work_id, None
 
-    if requested_work_id != session.work_id:
+    if requested_work_id != bound_work_id:
         return None, (
             "业务规则校验未通过：会话与作品绑定不一致。"
-            f"当前会话绑定作品为 {session.work_id}，但你传入的是 {requested_work_id}。"
             "为避免跨作品误操作，本次请求已拒绝。"
-            "请改为使用当前会话绑定的 work_id，或开启新会话后再操作其他作品。"
+            "请使用当前会话继续操作，或开启新会话后再操作其他作品。"
         )
 
     return requested_work_id, None
@@ -262,11 +259,42 @@ def _format_grep(results: list[dict], keyword: str) -> str:
     return "\n".join(lines)
 
 
+def _dispatch_tool_result(
+    *,
+    ok: bool,
+    status: str,
+    tool: str,
+    message: str,
+    action: str = "",
+    work_id: str | None = None,
+    chapter_number: int | None = None,
+    warnings: list[str] | None = None,
+    error: dict | None = None,
+    payload: dict | None = None,
+) -> str:
+    """Return a structured dispatch result for the deterministic todo harness."""
+    return dumps(
+        {
+            "ok": ok,
+            "status": status,
+            "tool": tool,
+            "action": action,
+            "work_id": work_id,
+            "chapter_number": chapter_number,
+            "message": message,
+            "warnings": warnings or [],
+            "error": error,
+            "payload": payload or {},
+        },
+        ensure_ascii=False,
+    )
+
+
 # ── 查询工具（同步，统筹 Agent 直接使用） ──
 
 
 @tool(args_schema=QueryCharactersInput)
-def query_characters(work_id: str, filters: dict, config: RunnableConfig) -> str:
+def query_characters(filters: dict, config: RunnableConfig, work_id: str | None = None) -> str:
     """结构化查询角色卡。支持按角色类型、性别、名字、状态等字段过滤。
     在回答用户关于角色的问题之前，先用此工具查询角色信息。"""
     from app.services.character_service import CharacterService
@@ -275,12 +303,14 @@ def query_characters(work_id: str, filters: dict, config: RunnableConfig) -> str
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
     results = CharacterService.query_data(work_id=work_id, target="characters", filters=filters, db=db, user_id=_get_user_id(config))
     return _format_characters(results)
 
 
 @tool(args_schema=QueryChaptersInput)
-def query_chapters(work_id: str, filters: dict, content_preview_length: int, config: RunnableConfig) -> str:
+def query_chapters(filters: dict, content_preview_length: int, config: RunnableConfig, work_id: str | None = None) -> str:
     """结构化查询章节列表与基本信息（章节号、标题、状态、字数、正文预览）。
 
     不包含章节元数据（摘要、关键情节、伏笔、角色状态变化、事实索引、一致性状态）。
@@ -293,17 +323,48 @@ def query_chapters(work_id: str, filters: dict, content_preview_length: int, con
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
     results = CharacterService.query_data(work_id=work_id, target="chapters", filters=filters, db=db, user_id=_get_user_id(config))
     return _format_chapters(results, content_preview_length=content_preview_length)
 
 
+class CountChapterWordsInput(BaseModel):
+    chapter_number: int = Field(description="要计算字数的章节号")
+    work_id: str | None = Field(default=None, description="作品 ID（默认使用当前会话绑定的作品）")
+
+
+@tool(args_schema=CountChapterWordsInput)
+def count_chapter_words(chapter_number: int, config: RunnableConfig, work_id: str | None = None) -> str:
+    """计算指定章节正文的字数（去除空格和换行后的纯文字数）。"""
+    from app.models.work_model import Chapter
+
+    db = _get_db(config)
+    work_id, err = _resolve_bound_work_id(config, db, work_id)
+    if err:
+        return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
+
+    chapter = db.query(Chapter).filter_by(
+        work_id=work_id, chapter_number=chapter_number
+    ).first()
+    if not chapter:
+        return f"第{chapter_number}章不存在。"
+
+    content = chapter.content or ""
+    word_count = len(content.replace("\n", "").replace(" ", ""))
+
+    return f"第{chapter_number}章「{chapter.title}」字数：{word_count} 字"
+
+
 @tool(args_schema=GrepInput)
 def grep(
-    work_id: str,
     keywords: list[str],
     scope: str,
     context_chars: int,
     config: RunnableConfig,
+    work_id: str | None = None,
     character_name: str | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
@@ -319,6 +380,8 @@ def grep(
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
 
     all_results = []
     seen_snippets = set()
@@ -367,12 +430,17 @@ def grep(
 
 
 @tool(args_schema=ReadWorkContextInput)
-def read_work_context(work_id: str, config: RunnableConfig) -> str:
+def read_work_context(config: RunnableConfig, work_id: str | None = None) -> str:
     """读取作品的基本信息，用于理解当前写作进度和上下文。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id, err = _resolve_bound_work_id(config, db, work_id)
+    if err:
+        return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
 
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
@@ -383,7 +451,6 @@ def read_work_context(work_id: str, config: RunnableConfig) -> str:
     timeline = outline.get("timeline", [])
 
     context = "\n".join([
-        f"work_id: {work.id}",
         f"标题: {work.title}",
         f"类型: {story.get('genre', '')}",
         f"卷: {story.get('volume', '')}",
@@ -395,12 +462,13 @@ def read_work_context(work_id: str, config: RunnableConfig) -> str:
 
 
 @tool(args_schema=ReadChatHistoryInput)
-def read_chat_history(session_id: str, limit: int, config: RunnableConfig) -> str:
+def read_chat_history(limit: int, config: RunnableConfig, session_id: str | None = None) -> str:
     """读取当前会话的最近对话历史，用于理解用户的前后文需求。"""
     from app.services import message_service
 
     db = _get_db(config)
     emit = _get_emit(config)
+    session_id = session_id or _get_session_id(config)
 
     messages = message_service.get_messages_by_session(db, session_id)
     recent = messages[-limit:] if len(messages) > limit else messages
@@ -432,6 +500,9 @@ async def _analyze_requirements_coroutine(
         id: str = Field(default="T1", description="任务ID")
         task: str = Field(description="任务描述")
         owner: str = Field(default="supervisor", description="负责人")
+        task_type: str = Field(default="", description="任务类型")
+        dispatch_tool: str = Field(default="", description="建议执行工具")
+        instruction: str = Field(default="", description="传给执行工具的任务意图")
         depends_on: list[str] = Field(default_factory=list, description="依赖任务ID")
         status: str = Field(default="pending", description="状态")
         done_criteria: str = Field(default="", description="完成判定标准")
@@ -468,20 +539,72 @@ async def _analyze_requirements_coroutine(
     questions = result.questions if result.questions else []
     todolist = result.todolist if result.todolist else []
 
+    # owner -> dispatch_tool 推断映射
+    OWNER_DISPATCH_MAP = {
+        "outline_agent": "dispatch_outline",
+        "chapter_agent": "dispatch_chapter",
+        "evaluation_agent": "dispatch_evaluation",
+    }
+    TASK_TYPE_DISPATCH_MAP = {
+        "outline": "dispatch_outline",
+        "chapter_write": "dispatch_chapter",
+        "chapter_edit": "dispatch_chapter",
+        "metadata": "dispatch_chapter",
+        "evaluation": "dispatch_evaluation",
+    }
+    DISPATCH_OWNER_MAP = {
+        "dispatch_outline": "outline_agent",
+        "dispatch_chapter": "chapter_agent",
+        "dispatch_evaluation": "evaluation_agent",
+    }
+
+    def infer_dispatch_tool(t: TaskItemResult) -> str:
+        if t.dispatch_tool and t.dispatch_tool != "none":
+            return t.dispatch_tool
+        if OWNER_DISPATCH_MAP.get(t.owner):
+            return OWNER_DISPATCH_MAP[t.owner]
+        if TASK_TYPE_DISPATCH_MAP.get(t.task_type):
+            return TASK_TYPE_DISPATCH_MAP[t.task_type]
+
+        text = f"{t.task or ''} {t.instruction or ''} {message or ''}"
+        if any(keyword in text for keyword in ("评估", "评价", "审稿", "打分")):
+            return "dispatch_evaluation"
+        if any(keyword in text for keyword in ("章节", "正文", "写第", "撰写", "续写", "改写", "编辑")):
+            return "dispatch_chapter"
+        if any(keyword in text for keyword in ("大纲", "角色", "主线", "支线", "伏笔", "设定")):
+            return "dispatch_outline"
+        return ""
+
     # 持久化任务到 task_items 表
     persisted_tasks = []
     for idx, t in enumerate(todolist):
         import uuid
+        # 兼容：LLM 未返回 dispatch_tool 或误填 owner=user/supervisor 时，从任务类型和文本推断
+        effective_dispatch_tool = infer_dispatch_tool(t)
+        if not effective_dispatch_tool:
+            effective_dispatch_tool = "none"
+        effective_owner = t.owner
+        if effective_dispatch_tool != "none" and effective_owner in ("user", "supervisor", "", None):
+            effective_owner = DISPATCH_OWNER_MAP.get(effective_dispatch_tool, effective_owner)
+        # 兼容：LLM 未返回 instruction 时使用 task 描述
+        effective_instruction = t.instruction or t.task or message
+
         task_item = TaskItem(
             id=str(uuid.uuid4()),
             session_id=session_id or "",
+            parent_id=None,
+            depth=0,
+            agent_scope="supervisor",
             task_id=t.id or f"T{idx + 1}",
             task_description=t.task,
-            owner=t.owner,
+            owner=effective_owner,
             status=t.status or "pending",
             depends_on=",".join(t.depends_on) if t.depends_on else "",
             done_criteria=t.done_criteria or "",
             sort_order=idx,
+            task_type=t.task_type or "",
+            dispatch_tool=effective_dispatch_tool,
+            instruction=effective_instruction,
         )
         db.add(task_item)
         persisted_tasks.append({
@@ -490,9 +613,23 @@ async def _analyze_requirements_coroutine(
             "task": task_item.task_description,
             "owner": task_item.owner,
             "status": task_item.status,
+            "parent_id": "",
+            "depth": 0,
+            "agent_scope": "supervisor",
             "depends_on": t.depends_on,
             "done_criteria": task_item.done_criteria,
+            "task_type": task_item.task_type,
+            "dispatch_tool": task_item.dispatch_tool,
+            "instruction": task_item.instruction,
         })
+
+    # 将 ready_to_execute 持久化到 session（与 task_items 在同一个事务中）
+    if todolist or result.intent_summary:
+        if session_id:
+            from app.models.agent_model import SupervisorSession
+            session_obj = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session_obj:
+                session_obj.ready_to_execute = result.ready_to_execute
 
     try:
         db.commit()
@@ -501,13 +638,6 @@ async def _analyze_requirements_coroutine(
         raise
 
     if todolist or result.intent_summary:
-        # 将 ready_to_execute 持久化到 session
-        if session_id:
-            from app.models.agent_model import SupervisorSession
-            session_obj = db.query(SupervisorSession).filter_by(id=session_id).first()
-            if session_obj:
-                session_obj.ready_to_execute = result.ready_to_execute
-
         emit("todolist_generated", {
             "intent_summary": result.intent_summary or "",
             "todolist": persisted_tasks,
@@ -517,7 +647,16 @@ async def _analyze_requirements_coroutine(
     if questions:
         return f"需求分析完成。发现 {len(questions)} 个需要澄清的问题。\n" + "\n".join(f"- {q}" for q in questions[:5])
 
-    return f"需求已明确，生成了 {len(todolist)} 条任务。\n" + "\n".join(f"- {t.task}" for t in todolist[:8])
+    task_lines = []
+    for pt in persisted_tasks[:8]:
+        task_lines.append(
+            f"- [{pt['task_id']}] {pt['task']} (db_id={pt['db_id']}, 状态={pt['status']}, 派发={pt['dispatch_tool']})"
+        )
+    return (
+        f"需求已明确，生成了 {len(todolist)} 条任务。\n"
+        + "\n".join(task_lines)
+        + "\n\n请使用 execute_todo_task(task_item_id=<task_id 或 db_id>) 依次执行任务。"
+    )
 
 
 analyze_requirements = StructuredTool.from_function(
@@ -535,11 +674,10 @@ analyze_requirements = StructuredTool.from_function(
 @tool(args_schema=UpdateTaskStatusInput)
 def update_task_status(task_item_id: str, status: str, result_summary: str, config: RunnableConfig) -> str:
     """更新任务状态。合法状态: pending / in_progress / completed / skipped / failed。"""
-    import uuid
-
     from app.models.task_item_model import TaskItem
 
     VALID_STATUSES = {"pending", "in_progress", "completed", "skipped", "failed"}
+    TERMINAL_STATUSES = {"completed", "skipped", "failed"}
     if status not in VALID_STATUSES:
         return f"无效状态：{status}。合法值为：{', '.join(sorted(VALID_STATUSES))}"
 
@@ -551,6 +689,13 @@ def update_task_status(task_item_id: str, status: str, result_summary: str, conf
         return f"任务记录 {task_item_id} 不存在。"
 
     old_status = task.status
+    if old_status in TERMINAL_STATUSES and status != old_status:
+        return (
+            f"任务 {task.task_id} 当前已是终态 {old_status}，不可改为 {status}。"
+            "如果任务执行失败，请向用户反馈失败原因，或重新分析需求生成新的 todolist；"
+            "不要重开、跳过或绕过已结束的任务。"
+        )
+
     task.status = status
     if result_summary:
         task.result_summary = result_summary
@@ -573,12 +718,13 @@ def update_task_status(task_item_id: str, status: str, result_summary: str, conf
 
 
 @tool(args_schema=UpdateTodolistReadinessInput)
-def update_todolist_readiness(session_id: str, ready_to_execute: bool, config: RunnableConfig) -> str:
+def update_todolist_readiness(ready_to_execute: bool, config: RunnableConfig, session_id: str | None = None) -> str:
     """更新任务清单的'可执行'状态。当需求信息已充分时设为 true，当需要进一步澄清时设为 false。"""
     from app.models.agent_model import SupervisorSession
 
     db = _get_db(config)
     emit = _get_emit(config)
+    session_id = session_id or _get_session_id(config)
 
     session = db.query(SupervisorSession).filter_by(id=session_id).first()
     if not session:
@@ -603,36 +749,167 @@ def update_todolist_readiness(session_id: str, ready_to_execute: bool, config: R
     return f"任务清单状态已更新：{old_label} -> {label}"
 
 
+# ── Todo Execution Harness 工具 ──
+
+
+class ExecuteTodoTaskInput(BaseModel):
+    task_item_id: str = Field(
+        description="要执行的任务编号（如 T1、T2）或数据库ID（db_id）。"
+        "analyze_requirements 返回结果中包含此信息。"
+    )
+
+
+class ReadTodolistInput(BaseModel):
+    pass  # session_id 从 config 自动获取，LLM 无需传参
+
+
+async def _execute_todo_task_coroutine(task_item_id: str, config: RunnableConfig) -> str:
+    """执行 todolist 中的一条任务"""
+    from app.services.supervisor.todo_harness import execute_todo_task
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    return await execute_todo_task(
+        task_item_id=task_item_id,
+        db=db,
+        emit=emit,
+        config=config,
+    )
+
+
+execute_todo_task_tool = StructuredTool.from_function(
+    func=None,
+    coroutine=_execute_todo_task_coroutine,
+    name="execute_todo_task",
+    description=(
+        "执行 todolist 中的一条任务。该工具会自动维护任务状态："
+        "pending -> in_progress -> completed/failed，并路由到对应子 Agent。"
+        "执行 todolist 任务时必须使用本工具；Supervisor 不再暴露 dispatch_* 入口工具。"
+        "该工具会自动校验依赖、更新状态并发射事件，无需手动调用 update_task_status。"
+        "参数 task_item_id 可以是任务编号（如 T1、T2，推荐）或数据库ID（如 abc-def-...）。"
+        "analyze_requirements 返回值中包含了每个任务的编号，直接使用即可。"
+    ),
+    args_schema=ExecuteTodoTaskInput,
+)
+
+
+@tool(args_schema=ReadTodolistInput)
+def read_todolist(config: RunnableConfig) -> str:
+    """读取当前会话的任务清单（todolist），返回所有任务及其状态、依赖关系和执行信息。无需传参，自动获取当前会话。"""
+    import json
+    from app.models.agent_model import SupervisorSession
+    from app.models.task_item_model import TaskItem
+    from app.services.supervisor.todo_harness import serialize_task_item
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    session_id = (config or {}).get("configurable", {}).get("supervisor_session_id")
+
+    if not session_id:
+        return "当前没有活跃的会话。"
+
+    session = db.query(SupervisorSession).filter_by(id=session_id).first()
+    if not session:
+        return f"会话 {session_id} 不存在。"
+
+    tasks = (
+        db.query(TaskItem)
+        .filter_by(session_id=session_id)
+        .order_by(TaskItem.depth.asc(), TaskItem.sort_order.asc(), TaskItem.created_at.asc())
+        .all()
+    )
+
+    serialized = [serialize_task_item(t) for t in tasks]
+
+    status_counts = {}
+    for t in tasks:
+        status_counts[t.status] = status_counts.get(t.status, 0) + 1
+
+    summary = {
+        "session_id": session_id,
+        "ready_to_execute": session.ready_to_execute,
+        "total_tasks": len(tasks),
+        "status_counts": status_counts,
+        "tasks": serialized,
+    }
+
+    return json.dumps(summary, ensure_ascii=False, indent=2)
+
+
 # ── 派发工具（异步，统筹 Agent 传递意图给子 Agent） ──
 
 
-async def _dispatch_outline_coroutine(message: str, work_id: str | None, config: RunnableConfig) -> str:
+def _guard_direct_dispatch_todolist(tool_name: str, config: RunnableConfig, db: Session) -> str | None:
+    """有待执行或失败的顶层 todolist 时，禁止 Supervisor 绕过状态机 dispatch。"""
+    configurable = (config or {}).get("configurable", {})
+    if configurable.get("todo_harness_bypass"):
+        return None
+
+    session_id = configurable.get("supervisor_session_id")
+    if not session_id:
+        return None
+
+    from app.models.task_item_model import TaskItem
+
+    blocked_tasks = (
+        db.query(TaskItem)
+        .filter_by(session_id=session_id)
+        .filter(TaskItem.status.in_(["pending", "in_progress", "failed"]))
+        .order_by(TaskItem.sort_order)
+        .all()
+    )
+    blocked = next((t for t in blocked_tasks if getattr(t, "parent_id", None) in (None, "")), None)
+    if not blocked:
+        return None
+
+    if blocked.status == "failed":
+        return (
+            f"工具策略拦截：当前会话存在失败任务 {blocked.task_id}"
+            f"（{blocked.task_description[:50]}）。"
+            "请先向用户反馈失败原因，或重新调用 analyze_requirements 生成新的 todolist，"
+            f"不要直接调用 {tool_name}。"
+        )
+
+    if blocked.status == "in_progress":
+        return (
+            f"工具策略拦截：当前会话存在执行中任务 {blocked.task_id}"
+            f"（{blocked.task_description[:50]}）。"
+            "请等待 execute_todo_task 返回结果，"
+            f"不要并行直接调用 {tool_name}。"
+        )
+
+    return (
+        f"工具策略拦截：当前会话仍有待执行任务 {blocked.task_id}"
+        f"（{blocked.task_description[:50]}）。"
+        f"请调用 execute_todo_task(task_item_id=\"{blocked.task_id}\")，"
+        f"不要直接调用 {tool_name}。"
+    )
+
+
+async def _dispatch_outline_coroutine(message: str, config: RunnableConfig, work_id: str | None = None) -> str:
     """派发大纲任务 — 子 Agent 自行决定创建还是编辑"""
     from app.models.agent_model import SupervisorSession
     from app.services.supervisor.outline_agent import OutlineAgent
 
     emit = _get_emit(config)
     db = _get_db(config)
+    guard_message = _guard_direct_dispatch_todolist("dispatch_outline", config, db)
+    if guard_message:
+        return guard_message
     configurable = config.get("configurable", {})
     db_lock = config.get("configurable", {}).get("db_lock")
     session_id = configurable.get("supervisor_session_id")
     session = None
     if session_id:
         session = db.query(SupervisorSession).filter_by(id=session_id).first()
-
-    # 限制：会话一旦绑定作品，禁止在该会话内再创建新作品
-    if session and session.work_id and not work_id:
-        return (
-            "业务规则校验未通过：当前会话已绑定作品，禁止再次创建新作品。"
-            f"本会话绑定作品 work_id={session.work_id}，因此本次“创建大纲/作品”请求已拒绝。"
-            "请改为编辑该作品大纲（传入该 work_id）。"
-        )
+    if not work_id and session and session.work_id:
+        work_id = session.work_id
 
     # 保护：若调用方传入 work_id，与会话绑定作品不一致，则拒绝跨作品操作
     if session and session.work_id and work_id and work_id != session.work_id:
         return (
-            f"无法执行：当前会话绑定作品为 {session.work_id}，但你传入的是 {work_id}。"
-            "请使用当前会话绑定的 work_id，或开启新会话后再操作其他作品。"
+            "无法执行：当前操作目标与会话绑定作品不一致。"
+            "请使用当前会话继续操作，或开启新会话后再操作其他作品。"
         )
 
     agent = OutlineAgent(emit=emit, user_id=configurable.get("user_id"))
@@ -646,7 +923,13 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
     if not work_id:
         # 无 work_id → 创建新大纲（直接执行，不需要确认）
         result = await _run_locked(
-            agent.create_outline(idea=message, tags=[], db=db, db_lock=db_lock)
+            agent.create_outline(
+                idea=message,
+                tags=[],
+                db=db,
+                db_lock=db_lock,
+                base_configurable=configurable,
+            )
         )
         if result.get("error"):
             if session:
@@ -677,10 +960,9 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
                 session_id,
                 created_work_id,
             )
-        _store_memory(memories, "outline", f"创建大纲：{result.get('title', '')}（work_id={result.get('work_id', '')}）")
+        _store_memory(memories, "outline", f"创建大纲：{result.get('title', '')}")
         return (
             f"大纲创建成功。作品「{result.get('title', '')}」"
-            f"（work_id: {result.get('work_id', '')}）"
         )
     else:
         # 有 work_id → 编辑已有大纲
@@ -689,7 +971,7 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
         result = await _run_locked(
             agent.edit_outline(
                 work_id=work_id, message=message, history=memories.get("outline", []), db=db,
-                auto_mode=auto_mode, db_lock=db_lock,
+                auto_mode=auto_mode, db_lock=db_lock, base_configurable=configurable,
             )
         )
         if result.get("error"):
@@ -711,6 +993,7 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
                 sess.active_child = {
                     "type": "edit_outline",
                     "work_id": work_id,
+                    "task_item_id": configurable.get("current_task_item_id"),
                 }
                 sess.status = "waiting"
                 sess.stage = "executing"
@@ -733,167 +1016,251 @@ async def _dispatch_outline_coroutine(message: str, work_id: str | None, config:
 
 async def _dispatch_chapter_coroutine(
     instruction: str,
-    work_id: str,
     chapter_number: int | None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
-    """派发章节任务 — 子 Agent 自行决定写新章还是改旧章"""
+    """派发章节任务 — 统一由 ChapterAgent 处理新写和编辑"""
     from app.models.work_model import Chapter
     from app.services.chapter_outline_sync_service import ChapterOutlineSyncService
+    from app.services.supervisor.chapter_agent import ChapterAgent
 
     emit = _get_emit(config)
     db = _get_db(config)
+    guard_message = _guard_direct_dispatch_todolist("dispatch_chapter", config, db)
+    if guard_message:
+        return _dispatch_tool_result(
+            ok=False,
+            status="rejected",
+            tool="dispatch_chapter",
+            action="chapter_dispatch",
+            work_id=work_id,
+            chapter_number=chapter_number,
+            message=guard_message,
+            error={"code": "TODO_STATE_BLOCKED", "detail": guard_message},
+        )
     db_lock = config.get("configurable", {}).get("db_lock")
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
-        return err
+        return _dispatch_tool_result(
+            ok=False,
+            status="rejected",
+            tool="dispatch_chapter",
+            action="chapter_dispatch",
+            work_id=work_id,
+            chapter_number=chapter_number,
+            message=err,
+            error={"code": "WORK_BINDING_MISMATCH", "detail": err},
+        )
+    if not work_id:
+        message = "当前会话尚未绑定作品。"
+        return _dispatch_tool_result(
+            ok=False,
+            status="rejected",
+            tool="dispatch_chapter",
+            action="chapter_dispatch",
+            chapter_number=chapter_number,
+            message=message,
+            error={"code": "WORK_NOT_BOUND", "detail": message},
+        )
 
     auto_mode = config.get("configurable", {}).get("auto_mode", False)
 
-    # 如果指定了章节号且该章节已有正文 → 走编辑流程
+    # 判断是新写还是编辑
+    is_new_chapter = False
     if chapter_number is not None:
         existing = db.query(Chapter).filter_by(
             work_id=work_id, chapter_number=chapter_number
         ).first()
         if existing and existing.content:
-            return await _edit_chapter_inner(
+            is_new_chapter = False
+        else:
+            is_new_chapter = True
+    else:
+        # 未指定章节号 → 新写下一章
+        is_new_chapter = True
+
+    # 新写章节时校验顺序约束
+    if is_new_chapter:
+        max_chapter = db.query(Chapter).filter_by(work_id=work_id).order_by(Chapter.chapter_number.desc()).first()
+        expected_next = (max_chapter.chapter_number + 1) if max_chapter else 1
+
+        if chapter_number is None:
+            actual_chapter = expected_next
+        else:
+            actual_chapter = chapter_number
+
+        if actual_chapter != expected_next:
+            message = (
+                "业务规则校验未通过：新增章节必须严格顺序。"
+                f"当前已存在至第{expected_next - 1}章，因此只能新增第{expected_next}章，"
+                f"不能新增第{actual_chapter}章。本次请求已拒绝。"
+                f"请改为“写第{expected_next}章”或“写下一章”。"
+            )
+            return _dispatch_tool_result(
+                ok=False,
+                status="rejected",
+                tool="dispatch_chapter",
+                action="chapter_write",
                 work_id=work_id,
-                chapter_number=chapter_number,
-                user_message=instruction or f"修改第{chapter_number}章",
-                auto_mode=auto_mode,
-                config=config,
+                chapter_number=actual_chapter,
+                message=message,
+                error={"code": "CHAPTER_SEQUENCE_VIOLATION", "detail": message},
+                payload={"expected_next_chapter": expected_next},
             )
 
-    # 新增章节必须严格顺序：只能新增“当前最大章 + 1”
-    max_chapter = db.query(Chapter).filter_by(work_id=work_id).order_by(Chapter.chapter_number.desc()).first()
-    expected_next = (max_chapter.chapter_number + 1) if max_chapter else 1
+        chapter_number = actual_chapter
 
-    if chapter_number is None:
-        actual_chapter = expected_next
-    else:
-        actual_chapter = chapter_number
-
-    if actual_chapter != expected_next:
-        return (
-            "业务规则校验未通过：新增章节必须严格顺序。"
-            f"当前已存在至第{expected_next - 1}章，因此只能新增第{expected_next}章，"
-            f"不能新增第{actual_chapter}章。本次请求已拒绝。"
-            f"请改为“写第{expected_next}章”或“写下一章”。"
+        # 拼接上下文包
+        write_context = ChapterOutlineSyncService.build_write_context(
+            db,
+            work_id=work_id,
+            chapter_number=actual_chapter,
+            user_instruction=instruction or "",
         )
+        enriched_instruction = (
+            f"{instruction or ''}\n\n"
+            f"{write_context}\n\n"
+            "输出要求：正文完成后保持与上述上下文一致，避免角色状态与时间线冲突。"
+        )
+    else:
+        enriched_instruction = instruction or f"修改第{chapter_number}章"
 
-    # 否则走写章节流程（由 ChapterAgentGraph 处理）
-    # 写作前拼接“全前文梗概 + 事实索引 + 按需原文片段”上下文包，减少跨章冲突。
-    write_context = ChapterOutlineSyncService.build_write_context(
-        db,
-        work_id=work_id,
-        chapter_number=actual_chapter,
-        user_instruction=instruction or "",
-    )
-    enriched_instruction = (
-        f"{instruction or ''}\n\n"
-        f"{write_context}\n\n"
-        "输出要求：正文完成后保持与上述上下文一致，避免角色状态与时间线冲突。"
-    )
-
-    emit("stage_start", {"stage": "chapter_write", "label": f"写第{actual_chapter}章"})
-
-    from app.services.agent.graph import ChapterAgentGraph
+    # 统一调用 ChapterAgent
+    agent = ChapterAgent(emit=emit)
 
     try:
-        graph = ChapterAgentGraph(
-            work_id=work_id, chapter_number=actual_chapter,
-            db=db, emit=emit, auto_mode=True, db_lock=db_lock,
+        result = await agent.run(
+            work_id=work_id,
+            chapter_number=chapter_number,
+            user_message=enriched_instruction,
+            db=db,
+            is_new_chapter=is_new_chapter,
+            auto_mode=auto_mode,
+            db_lock=db_lock,
+            base_configurable=config.get("configurable", {}),
         )
-        agent_record = await graph.start(instruction=enriched_instruction)
+    except Exception as exc:
+        db.rollback()
+        task_label = "写作" if is_new_chapter else "编辑"
+        import traceback
+        tb_str = traceback.format_exception(type(exc), exc, exc.__traceback__)
+        logger.error("dispatch_chapter %s failed:\n%s", task_label, "".join(tb_str))
+        message = f"第{chapter_number}章{task_label}失败：{exc!r}"
+        return _dispatch_tool_result(
+            ok=False,
+            status="failed",
+            tool="dispatch_chapter",
+            action="chapter_write" if is_new_chapter else "chapter_edit",
+            work_id=work_id,
+            chapter_number=chapter_number,
+            message=message,
+            error={"code": "CHAPTER_AGENT_ERROR", "detail": repr(exc)},
+        )
 
-        if agent_record.status == "error":
-            return f"第{actual_chapter}章写作失败。"
-
-        # 写后：生成并保存章节元数据。
-        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=actual_chapter).first()
+    # ── 新写章节的后续处理 ──
+    if is_new_chapter:
+        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         if not chapter:
-            return f"第{actual_chapter}章写作完成，但未找到章节记录。"
+            message = f"第{chapter_number}章写作完成，但未找到章节记录。"
+            return _dispatch_tool_result(
+                ok=False,
+                status="failed",
+                tool="dispatch_chapter",
+                action="chapter_write",
+                work_id=work_id,
+                chapter_number=chapter_number,
+                message=message,
+                error={"code": "CHAPTER_RECORD_MISSING", "detail": message},
+            )
 
         from app.models.work_model import Work
         work = db.query(Work).filter_by(id=work_id).first()
         if not work:
-            return f"第{actual_chapter}章写作完成，但未找到作品记录。"
+            message = f"第{chapter_number}章写作完成，但未找到作品记录。"
+            return _dispatch_tool_result(
+                ok=False,
+                status="failed",
+                tool="dispatch_chapter",
+                action="chapter_write",
+                work_id=work_id,
+                chapter_number=chapter_number,
+                message=message,
+                error={"code": "WORK_RECORD_MISSING", "detail": message},
+            )
 
-        metadata_row = await ChapterOutlineSyncService.generate_and_persist(
-            db,
-            work=work,
-            chapter=chapter,
-        )
-        db.commit()
-    except Exception as exc:
-        db.rollback()
-        return f"第{actual_chapter}章写作失败：{exc!r}"
-    emit("chapter_metadata_generated", {
-        "chapter_number": actual_chapter,
-        "summary": metadata_row.summary,
-        "key_plot_points": metadata_row.key_plot_points,
-        "outline_links": metadata_row.outline_links,
-        "involved_characters": metadata_row.involved_characters,
-        "foreshadows": metadata_row.foreshadows,
-        "facts": metadata_row.facts,
-        "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
-    })
+        metadata_row = None
+        try:
+            from app.models.work_model import ChapterMetadata
 
-    memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
-    _store_memory(memories, "chapter", f"写第{actual_chapter}章完成")
+            metadata_row = (
+                db.query(ChapterMetadata)
+                .filter_by(work_id=work_id, chapter_number=chapter_number)
+                .first()
+            )
+            if not metadata_row:
+                metadata_row = await ChapterOutlineSyncService.generate_and_persist(
+                    db,
+                    work=work,
+                    chapter=chapter,
+                )
+                db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "dispatch_chapter metadata sync skipped after saved chapter=%s: %s",
+                chapter_number,
+                exc,
+            )
 
-    return (
-        f"第{actual_chapter}章写作完成。"
-        "已同步章节元数据。"
-    )
+        if metadata_row:
+            emit("chapter_metadata_generated", {
+                "chapter_number": chapter_number,
+                "summary": metadata_row.summary,
+                "key_plot_points": metadata_row.key_plot_points,
+                "outline_links": metadata_row.outline_links,
+                "involved_characters": metadata_row.involved_characters,
+                "foreshadows": metadata_row.foreshadows,
+                "facts": metadata_row.facts,
+                "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
+            })
 
+        memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
+        _store_memory(memories, "chapter", f"写第{chapter_number}章完成")
 
-async def _edit_chapter_inner(
-    work_id: str,
-    chapter_number: int,
-    user_message: str,
-    auto_mode: bool,
-    config: RunnableConfig,
-) -> str:
-    """编辑章节的内部实现 — 调用 EditChapterAgent.run() 启动 Tool-Calling 子 Agent"""
-    from app.models.agent_model import SupervisorSession
-    from app.services.supervisor.edit_chapter_agent import EditChapterAgent
-
-    emit = _get_emit(config)
-    db = _get_db(config)
-    db_lock = config.get("configurable", {}).get("db_lock")
-
-    agent = EditChapterAgent(emit=emit)
-
-    if auto_mode:
-        # 自动模式：直接应用修改
-        # 先记录旧内容（apply_edit 已在子 agent 内部写库）
-        from app.models.work_model import Chapter
-
-        old_chapter = db.query(Chapter).filter_by(
-            work_id=work_id, chapter_number=chapter_number
-        ).first()
-        old_content = old_chapter.content if old_chapter else ""
-
-        result = await agent.run(
+        metadata_note = "已同步章节元数据。" if metadata_row else "章节元数据稍后可重新同步。"
+        message = f"第{chapter_number}章写作完成。{metadata_note}"
+        return _dispatch_tool_result(
+            ok=True,
+            status="completed",
+            tool="dispatch_chapter",
+            action="chapter_write",
             work_id=work_id,
             chapter_number=chapter_number,
-            user_message=user_message,
-            db=db,
-            emit_diff_event=False,
-            db_lock=db_lock,
+            message=message,
+            warnings=[] if metadata_row else [metadata_note],
+            payload={
+                "created": True,
+                "metadata_synced": bool(metadata_row),
+            },
         )
 
-        if result.get("error"):
-            return f"编辑第{chapter_number}章失败：{result['error']}"
+    # ── 编辑章节的后续处理 ──
+    summary = result.get("summary", {})
 
-        # 从 DB 读新内容，计算 diff
-        db.refresh(old_chapter) if old_chapter else None
+    if auto_mode:
+        from app.models.work_model import Chapter as _Ch
+        old_chapter = db.query(_Ch).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         new_content = old_chapter.content if old_chapter else ""
+        old_content = result.get("old_content", "")
 
-        from app.services.supervisor.edit_chapter_agent import _build_diff, _summarize_diff
-        diff = _build_diff(old_content, new_content)
-        summary = _summarize_diff(diff)
+        from app.services.supervisor.chapter_agent import _build_diff, _summarize_diff
+        if old_content and new_content and old_content != new_content:
+            diff = _build_diff(old_content, new_content)
+            summary = _summarize_diff(diff)
+        else:
+            diff = []
+            summary = summary or {}
 
         emit("edit_chapter_auto_applied", {
             "chapter_number": chapter_number,
@@ -905,25 +1272,26 @@ async def _edit_chapter_inner(
         })
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"自动编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
-        return (
+        message = (
+            f"第{chapter_number}章修改已完成"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
+        )
+        return _dispatch_tool_result(
+            ok=True,
+            status="completed",
+            tool="dispatch_chapter",
+            action="chapter_edit",
+            work_id=work_id,
+            chapter_number=chapter_number,
+            message=message,
+            payload={
+                "auto_applied": True,
+                "summary": summary,
+            },
         )
 
     # 默认模式：设置 waiting 状态，等待用户确认
-    result = await agent.run(
-        work_id=work_id,
-        chapter_number=chapter_number,
-        user_message=user_message,
-        db=db,
-        emit_diff_event=True,
-        db_lock=db_lock,
-    )
-
-    if result.get("error"):
-        return f"编辑第{chapter_number}章失败：{result['error']}"
-
-    summary = result.get("summary", {})
-
+    from app.models.agent_model import SupervisorSession
     session_id = config.get("configurable", {}).get("supervisor_session_id")
     if session_id:
         sess = db.query(SupervisorSession).filter_by(id=session_id).first()
@@ -934,6 +1302,7 @@ async def _edit_chapter_inner(
                 "chapter_number": chapter_number,
                 "old_content": result.get("old_content", ""),
                 "new_content": result.get("new_content", ""),
+                "task_item_id": config.get("configurable", {}).get("current_task_item_id"),
             }
             sess.status = "waiting"
             sess.stage = "executing"
@@ -946,32 +1315,61 @@ async def _edit_chapter_inner(
     if summary:
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
-        return (
+        message = (
             f"第{chapter_number}章修改已完成"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
             f"请等待用户确认是否接受修改。"
         )
+        return _dispatch_tool_result(
+            ok=True,
+            status="waiting",
+            tool="dispatch_chapter",
+            action="chapter_edit",
+            work_id=work_id,
+            chapter_number=chapter_number,
+            message=message,
+            payload={
+                "auto_applied": False,
+                "summary": summary,
+            },
+        )
 
-    return (
+    message = (
         f"第{chapter_number}章修改已完成。"
         f"{result.get('message', '')}"
     )
+    return _dispatch_tool_result(
+        ok=True,
+        status="waiting",
+        tool="dispatch_chapter",
+        action="chapter_edit",
+        work_id=work_id,
+        chapter_number=chapter_number,
+        message=message,
+        payload={"auto_applied": False},
+    )
+
 
 
 async def _dispatch_evaluation_coroutine(
-    work_id: str,
     chapter_number: int,
     chapter_content: str = "",
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """派发章节评估任务给 EvaluationAgent。"""
     from app.services.evaluation_agent import EvaluationAgent
 
     emit = _get_emit(config)
     db = _get_db(config)
+    guard_message = _guard_direct_dispatch_todolist("dispatch_evaluation", config, db)
+    if guard_message:
+        return guard_message
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
 
     emit("stage_start", {"stage": "evaluation", "label": f"评估第{chapter_number}章"})
 
@@ -986,6 +1384,7 @@ async def _dispatch_evaluation_coroutine(
             chapter_number=chapter_number,
             chapter_content_override=chapter_content,
             history=eval_history,
+            base_configurable=config.get("configurable", {}),
         )
     except Exception as exc:
         logger.exception("dispatch_evaluation failed: %s", exc)
@@ -1012,7 +1411,6 @@ async def _dispatch_evaluation_coroutine(
 
 
 async def _dispatch_writing_expert_coroutine(
-    work_id: str,
     problem_type: str,
     genre_tags: list[str],
     constraints: list[str] | None = None,
@@ -1020,6 +1418,7 @@ async def _dispatch_writing_expert_coroutine(
     chapter_number: int | None = None,
     count: int = 8,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """派发写作专家微咨询任务。"""
     from app.services.supervisor.writing_expert_agent import WritingExpertAgent
@@ -1029,6 +1428,8 @@ async def _dispatch_writing_expert_coroutine(
     work_id, err = _resolve_bound_work_id(config, db, work_id)
     if err:
         return err
+    if not work_id:
+        return "当前会话尚未绑定作品。"
 
     memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
 
@@ -1074,7 +1475,7 @@ dispatch_outline = StructuredTool.from_function(
         "派发大纲任务给大纲子 Agent。"
         "当用户想要创建新大纲或修改已有大纲时使用。"
         "传入任务描述，子 Agent 会自行决定如何执行（创建新大纲或编辑已有大纲的节点、角色等）。"
-        "如果没有提供 work_id，子 Agent 将创建全新大纲。"
+        "作品绑定由系统自动处理。"
     ),
     args_schema=DispatchOutlineInput,
 )
@@ -1084,13 +1485,13 @@ dispatch_chapter = StructuredTool.from_function(
     coroutine=_dispatch_chapter_coroutine,
     name="dispatch_chapter",
     description=(
-        "派发章节撰写或编辑任务给章节子 Agent（执行型工具，不是只读查询）。"
-        "适用：撰写新章、修改已有章节正文、根据评估建议优化正文。"
-        "不适用：仅查看章节元数据（摘要/伏笔/关键情节）→ 用 query_chapter_meta 或 grep_chapter_meta；"
-        "仅查看标题/状态/正文预览 → 用 query_chapters；仅在正文中搜关键词 → 用 grep。"
-        "子 Agent 分工：无正文或写下一章时由 ChapterAgent 生成正文并落库；"
-        "该章已有正文时由 EditChapterAgent 读取正文与元数据后局部或全量修改。"
-        "传入 instruction 描述用户意图；建议带上 chapter_number。"
+        "【兼容工具，不推荐】派发章节撰写或编辑任务给 ChapterAgent（执行型，不是只读查询）。"
+        "todolist 中的章节任务必须使用 execute_todo_task，禁止直接调用本工具。"
+        "仅在没有活跃 todolist 且需手动触发章节子 Agent 的非清单场景下使用。"
+        "适用：撰写新章、修改已有章节正文。"
+        "不适用：仅查看章节元数据 → query_chapter_meta / grep_chapter_meta；"
+        "仅查看标题/状态/正文预览 → query_chapters；正文内搜关键词 → grep。"
+        "传入 instruction 描述用户意图；章节号由 ChapterAgent 在工具调用时自行传入。"
     ),
     args_schema=DispatchChapterInput,
 )
@@ -1127,6 +1528,7 @@ dispatch_writing_expert = StructuredTool.from_function(
 ALL_TOOLS = [
     query_characters,
     query_chapters,
+    count_chapter_words,
     query_chapter_meta,
     grep_chapter_meta,
     grep,
@@ -1146,8 +1548,7 @@ ALL_TOOLS = [
     # 状态机工具
     update_task_status,
     update_todolist_readiness,
-    # 派发工具
-    dispatch_outline,
-    dispatch_chapter,
-    dispatch_evaluation,
+    # Todo Execution Harness 工具
+    execute_todo_task_tool,
+    read_todolist,
 ]

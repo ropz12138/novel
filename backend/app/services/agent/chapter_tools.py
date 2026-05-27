@@ -26,18 +26,16 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 class QueryOutlineInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class QueryChapterOutlineInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_start: int = Field(default=1, description="起始章节号")
     chapter_end: int | None = Field(default=None, description="结束章节号")
     chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
 
 
 class QueryPreviousChaptersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_start: int = Field(default=1, description="起始章节号，会查询每章之前的章节")
     chapter_end: int | None = Field(default=None, description="结束章节号")
     chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
@@ -45,11 +43,11 @@ class QueryPreviousChaptersInput(BaseModel):
 
 
 class QueryCharactersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class QueryForeshadowingInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class GenerateChapterContentInput(BaseModel):
@@ -64,14 +62,12 @@ class GenerateChapterContentInput(BaseModel):
 
 
 class SaveChapterInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_number: int = Field(description="章节号")
     title: str = Field(description="章节标题")
     content: str = Field(description="章节正文")
 
 
 class UpdateCharactersAfterChapterInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_number: int = Field(description="章节号")
     chapter_content: str = Field(description="章节正文，用于分析角色状态变化")
 
@@ -96,6 +92,22 @@ def _get_db_lock(config: RunnableConfig):
     return config.get("configurable", {}).get("db_lock")
 
 
+def _get_work_id(config: RunnableConfig) -> str:
+    work_id = str(config.get("configurable", {}).get("work_id") or "")
+    if work_id:
+        return work_id
+    configurable = config.get("configurable", {})
+    session_id = configurable.get("supervisor_session_id")
+    if session_id:
+        db = configurable.get("db")
+        if db:
+            from app.models.agent_model import SupervisorSession
+            session = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session and session.work_id:
+                return str(session.work_id)
+    raise ValueError("work_id 未在 configurable 中提供")
+
+
 def _with_lock(config: RunnableConfig):
     lock = _get_db_lock(config)
     if lock is not None:
@@ -106,6 +118,10 @@ def _with_lock(config: RunnableConfig):
 
 def _word_count(text: str) -> int:
     return len(re.sub(r"\s", "", text))
+
+
+def _as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
 
 
 def _extract_body_and_title(text: str, chapter_number: int) -> tuple[str, str]:
@@ -143,24 +159,24 @@ def _extract_body_and_title(text: str, chapter_number: int) -> tuple[str, str]:
 
 
 @tool(args_schema=QueryOutlineInput)
-def query_outline(work_id: str, config: RunnableConfig) -> str:
+def query_outline(config: RunnableConfig, work_id: str | None = None) -> str:
     """读取作品的完整大纲信息，包括故事设定、类型、卷信息等。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return f"作品 {work_id} 不存在。"
 
-    outline = work.outline_tree or {}
+    outline = _as_dict(work.outline_tree)
     story = outline.get("story", {})
     timeline = outline.get("timeline", [])
 
     parts = [
-        f"作品ID：{work_id}",
         f"标题：{work.title}",
         f"类型：{story.get('genre', '未知')}",
         f"卷：{story.get('volume', '未知')}",
@@ -172,11 +188,11 @@ def query_outline(work_id: str, config: RunnableConfig) -> str:
 
 @tool(args_schema=QueryChapterOutlineInput)
 def query_chapter_outline(
-    work_id: str,
     chapter_start: int,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """读取章节范围的大纲节点信息。"""
     from app.models.work_model import Work
@@ -184,6 +200,7 @@ def query_chapter_outline(
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         work = db.query(Work).filter_by(id=work_id).first()
@@ -208,18 +225,19 @@ def query_chapter_outline(
 
 @tool(args_schema=QueryPreviousChaptersInput)
 def query_previous_chapters(
-    work_id: str,
     chapter_start: int,
     limit: int,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """查询章节范围内每个目标章节之前的正文摘要。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     if chapter_number is not None:
         chapter_start = chapter_number
@@ -258,12 +276,13 @@ def query_previous_chapters(
 
 
 @tool(args_schema=QueryCharactersInput)
-def query_characters(work_id: str, config: RunnableConfig) -> str:
+def query_characters(config: RunnableConfig, work_id: str | None = None) -> str:
     """查询作品的所有角色设定信息，包括性格、状态、目的等。"""
     from app.models.work_model import Character
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         characters = db.query(Character).filter_by(work_id=work_id).all()
@@ -289,24 +308,28 @@ def query_characters(work_id: str, config: RunnableConfig) -> str:
 
 
 @tool(args_schema=QueryForeshadowingInput)
-def query_foreshadowing(work_id: str, config: RunnableConfig) -> str:
+def query_foreshadowing(config: RunnableConfig, work_id: str | None = None) -> str:
     """查询作品中的伏笔信息，包括埋设位置和回收位置。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return f"作品 {work_id} 不存在。"
 
-    foreshadowing = work.outline_tree.get("foreshadowing", []) if work.outline_tree else []
+    outline = _as_dict(work.outline_tree)
+    foreshadowing = outline.get("foreshadowing", [])
     if not foreshadowing:
         return "暂无伏笔信息。"
 
     parts = []
     for f in foreshadowing:
+        if not isinstance(f, dict):
+            continue
         entry = f"伏笔 {f.get('id', '')}：{f.get('content', '')}（埋设于{f.get('plant_node', '')}，回收于{f.get('payoff_node', '')}）"
         parts.append(entry)
         emit("query_result", {"source": f"伏笔 {f.get('id', '')}", "summary": f.get('content', '')})
@@ -334,20 +357,16 @@ async def _generate_chapter_content_coroutine(
     emit = _get_emit(config)
 
     try:
-        # 若 outline_tree 缺失，尝试从 story_info 中提取 work_id 并自动补齐完整大纲，
+        work_id = _get_work_id(config)
+
+        # 若 outline_tree 缺失，从程序注入的 work_id 自动补齐完整大纲，
         # 避免提示词退化为“完整大纲（未提供）”。
         if not (outline_tree or "").strip():
             try:
-                work_id_match = re.search(r"作品ID[：:]\s*([0-9a-fA-F-]{32,36})", story_info or "")
-                if work_id_match:
-                    work_id = work_id_match.group(1)
-                    from app.models.work_model import Work
-
-                    db = _get_db(config)
-                    with _with_lock(config):
-                        work = db.query(Work).filter_by(id=work_id).first()
-                    if work and work.outline_tree:
-                        outline_tree = json.dumps(work.outline_tree, ensure_ascii=False)
+                with _with_lock(config):
+                    work = db.query(Work).filter_by(id=work_id).first()
+                if work and work.outline_tree:
+                    outline_tree = json.dumps(work.outline_tree, ensure_ascii=False)
             except Exception:
                 # 补齐失败不抛错，交由后续校验与提示处理
                 pass
@@ -379,32 +398,35 @@ async def _generate_chapter_content_coroutine(
 
         # 章节创建强约束：只能创建“当前最大章节 + 1”。
         # 该约束放在 generate_chapter_content 内部，避免同一章节被连续重复创建。
-        work_id = None
-        cfg = (config or {}).get("configurable", {})
-        if cfg.get("work_id"):
-            work_id = str(cfg.get("work_id"))
-        if not work_id:
-            work_id_match = re.search(r"作品ID[：:]\s*([0-9a-fA-F-]{32,36})", story_info or "")
-            if work_id_match:
-                work_id = work_id_match.group(1)
-
-        if not work_id:
-            msg = (
-                "生成正文失败：无法解析 work_id，无法执行 n+1 章节校验。"
-                "请在会话上下文或 story_info 中提供有效作品ID。"
-            )
-            emit("error", {"message": msg})
-            return msg
-
         from app.models.work_model import Chapter
 
         with _with_lock(config):
+            existing_chapter = (
+                db.query(Chapter)
+                .filter_by(work_id=work_id, chapter_number=chapter_number)
+                .first()
+            )
             max_chapter = (
                 db.query(Chapter)
                 .filter_by(work_id=work_id)
                 .order_by(Chapter.chapter_number.desc())
                 .first()
             )
+        if existing_chapter and existing_chapter.content:
+            msg = (
+                "生成正文失败：目标章节已存在。"
+                f"第{chapter_number}章已有正文，generate_chapter_content 只能创建新章节，"
+                "不能用于覆盖或重写已有章节。"
+                "请改用 generate_patch_edit、rewrite_chapter 或 save_chapter 编辑该章。"
+            )
+            emit("error", {"message": msg})
+            logger.warning(
+                "generate_chapter_content rejected existing chapter work_id=%s chapter=%s",
+                work_id,
+                chapter_number,
+            )
+            return msg
+
         expected_next = (max_chapter.chapter_number + 1) if max_chapter else 1
         if chapter_number != expected_next:
             msg = (
@@ -483,11 +505,6 @@ async def _generate_chapter_content_coroutine(
                 emit("error", {"message": msg})
                 return msg
 
-            metadata_row = await ChapterOutlineSyncService.generate_and_persist(
-                db,
-                work=work,
-                chapter=chapter,
-            )
             db.commit()
             db.refresh(chapter)
 
@@ -502,21 +519,56 @@ async def _generate_chapter_content_coroutine(
             chapter_number,
             chapter.title,
         )
-        emit("chapter_metadata_generated", {
-            "chapter_number": chapter_number,
-            "summary": metadata_row.summary,
-            "key_plot_points": metadata_row.key_plot_points,
-            "outline_links": metadata_row.outline_links,
-            "involved_characters": metadata_row.involved_characters,
-            "foreshadows": metadata_row.foreshadows,
-            "facts": metadata_row.facts,
-            "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
-        })
 
-        return (
-            f"{chapter_body}\n\n"
-            "【系统说明】本章已创建并保存，且已自动同步章节元数据。后续优化请调用编辑工具。"
-        )
+        metadata_row = None
+        try:
+            from app.models.work_model import ChapterMetadata
+
+            with _with_lock(config):
+                metadata_row = (
+                    db.query(ChapterMetadata)
+                    .filter_by(work_id=work_id, chapter_number=chapter_number)
+                    .first()
+                )
+                if not metadata_row:
+                    work = db.query(Work).filter_by(id=work_id).first()
+                    if work:
+                        metadata_row = await ChapterOutlineSyncService.generate_and_persist(
+                            db,
+                            work=work,
+                            chapter=chapter,
+                        )
+                if metadata_row is not None:
+                    db.commit()
+        except Exception as exc:
+            db.rollback()
+            logger.exception(
+                "generate_chapter_content metadata sync skipped after saved chapter=%s: %s",
+                chapter_number,
+                exc,
+            )
+
+        if metadata_row:
+            emit("chapter_metadata_generated", {
+                "chapter_number": chapter_number,
+                "summary": metadata_row.summary,
+                "key_plot_points": metadata_row.key_plot_points,
+                "outline_links": metadata_row.outline_links,
+                "involved_characters": metadata_row.involved_characters,
+                "foreshadows": metadata_row.foreshadows,
+                "facts": metadata_row.facts,
+                "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
+            })
+            system_note = (
+                "【系统说明】本章已创建并保存，且已自动同步章节元数据。后续优化请调用编辑工具。"
+            )
+        else:
+            system_note = (
+                "【系统说明】本章已创建并保存。章节元数据稍后可重新同步"
+                "（可调用 sync_chapter_metadata）。后续优化请调用编辑工具。"
+            )
+
+        return f"{chapter_body}\n\n{system_note}"
     except Exception as exc:
         # 关键：工具内异常必须回滚当前 Session，避免后续轮次继续使用脏事务。
         db.rollback()
@@ -534,18 +586,21 @@ generate_chapter_content = StructuredTool.from_function(
         "调用 LLM 生成章节正文，并自动保存到数据库（已保存状态）。"
         "在调用前，应先用其他工具查询大纲、前文、角色等上下文信息。"
         "传入所有收集到的上下文和用户要求，返回完整的章节正文。"
+        "重要约束：只能创建当前最大章节号+1的下一章（若尚无章节则为第1章），不允许跳章或重复创建。"
+        "如果目标章节已存在，请使用编辑工具，不要调用本工具。"
     ),
     args_schema=GenerateChapterContentInput,
 )
 
 
 @tool(args_schema=SaveChapterInput)
-def save_chapter(work_id: str, chapter_number: int, title: str, content: str, config: RunnableConfig) -> str:
+def save_chapter(chapter_number: int, title: str, content: str, config: RunnableConfig, work_id: str | None = None) -> str:
     """将章节正文保存到数据库。仅在正文生成完毕且满意后调用。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     try:
         with _with_lock(config):
@@ -586,28 +641,20 @@ def save_chapter(work_id: str, chapter_number: int, title: str, content: str, co
 
 
 async def _update_characters_after_chapter_coroutine(
-    work_id: str,
     chapter_number: int,
     chapter_content: str,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """分析章节正文，更新角色的当前状态、目的和位置。"""
-    from pydantic import BaseModel as PydanticBase
+    import re as _re
 
     from app.models.work_model import Character
     from app.services.supervisor.sub_agent_base import get_llm
 
-    class CharacterUpdate(PydanticBase):
-        name: str = Field(description="角色名")
-        current_status: str = Field(default="", description="新状态")
-        current_goal: str = Field(default="", description="新目的")
-        last_location: str = Field(default="", description="新位置")
-
-    class CharacterUpdatesResult(PydanticBase):
-        character_updates: list[CharacterUpdate] = Field(default_factory=list)
-
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         characters = db.query(Character).filter_by(work_id=work_id).all()
@@ -623,32 +670,43 @@ async def _update_characters_after_chapter_coroutine(
     template = (PROMPT_DIR / "agent_update_characters.txt").read_text(encoding="utf-8")
     prompt = PromptTemplate.from_template(template)
     llm = get_llm(temperature=0.3, streaming=False)
-    structured_llm = llm.with_structured_output(CharacterUpdatesResult)
 
-    chain = prompt | structured_llm
+    chain = prompt | llm
 
     try:
-        result = await chain.ainvoke({
+        ai_msg = await chain.ainvoke({
             "chapter_number": str(chapter_number),
             "chapter_title": f"第{chapter_number}章",
             "chapter_content": chapter_content[:3000],
             "characters": char_text,
         })
+        raw_text = getattr(ai_msg, "content", str(ai_msg))
 
-        updates = result.character_updates if result else []
+        # Extract JSON from potentially markdown-fenced output
+        json_match = _re.search(r"\{[\s\S]*\}", raw_text)
+        if not json_match:
+            return "角色状态更新跳过：LLM 未返回有效 JSON。"
+        parsed = json.loads(json_match.group())
+        updates_raw = parsed.get("character_updates", [])
 
         updated_names = []
-        for upd in updates:
-            char_name = upd.name
+        for upd in updates_raw:
+            if not isinstance(upd, dict):
+                logger.warning(
+                    "update_characters_after_chapter ignored non-dict update item: %r",
+                    upd,
+                )
+                continue
+            char_name = upd.get("name", "")
             char = next((c for c in characters if c.name == char_name), None)
             if not char:
                 continue
-            if upd.current_status:
-                char.current_status = upd.current_status
-            if upd.current_goal:
-                char.current_goal = upd.current_goal
-            if upd.last_location:
-                char.last_location = upd.last_location
+            if upd.get("current_status"):
+                char.current_status = upd["current_status"]
+            if upd.get("current_goal"):
+                char.current_goal = upd["current_goal"]
+            if upd.get("last_location"):
+                char.last_location = upd["last_location"]
             char.last_chapter = chapter_number
             updated_names.append(char_name)
 
@@ -680,7 +738,16 @@ update_characters_after_chapter = StructuredTool.from_function(
 
 # ── 导出工具列表 ──
 
+from app.services.supervisor.outline_tools import (  # noqa: E402
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
+)
+
 CHAPTER_TOOLS = [
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
     query_outline,
     query_chapter_outline,
     query_previous_chapters,

@@ -109,7 +109,7 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
 
         work = db.query(Work).filter_by(id=work_id).first()
         if work:
-            parts = [f"作品ID: {work_id}", f"标题: {work.title}"]
+            parts = [f"标题: {work.title}"]
             outline = work.outline_tree or {}
             story = outline.get("story", {})
             if story.get("genre"):
@@ -133,7 +133,7 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
 
             work_context = "\n".join(parts)
         else:
-            work_context = f"（作品 {work_id} 不存在）"
+            work_context = "（当前绑定作品不存在）"
 
     return SystemMessage(content=template.format(work_context=work_context))
 
@@ -354,6 +354,7 @@ class SupervisorAgent:
                 "db_lock": threading.Lock(),
                 "emit": self.emit,
                 "supervisor_session_id": session.id,
+                "work_id": session.work_id or self.work_id or "",
                 "auto_mode": session.auto_mode,
                 "user_id": session.user_id or self.user_id,
                 "sub_agent_memories": {},

@@ -405,16 +405,7 @@ async def save_node(state: AgentGraphState, emit, db: Session) -> AgentGraphStat
 
 async def update_characters_node(state: AgentGraphState, emit, db: Session) -> AgentGraphState:
     """Node: After saving, analyze the chapter to update character states."""
-    from pydantic import BaseModel as PydanticBase, Field
-
-    class CharacterUpdateNode(PydanticBase):
-        name: str = Field(description="角色名")
-        current_status: str = Field(default="", description="新状态")
-        current_goal: str = Field(default="", description="新目的")
-        last_location: str = Field(default="", description="新位置")
-
-    class CharacterUpdatesNodeResult(PydanticBase):
-        character_updates: list[CharacterUpdateNode] = Field(default_factory=list)
+    import re as _re
 
     emit("stage_start", {"stage": "update_characters", "label": "更新角色状态"})
 
@@ -433,32 +424,38 @@ async def update_characters_node(state: AgentGraphState, emit, db: Session) -> A
     template = _read_prompt("agent_update_characters.txt")
     prompt = PromptTemplate.from_template(template)
     llm = _get_llm(temperature=0.3)
-    structured_llm = llm.with_structured_output(CharacterUpdatesNodeResult)
 
-    chain = prompt | structured_llm
+    chain = prompt | llm
 
     try:
-        result = await chain.ainvoke({
+        ai_msg = await chain.ainvoke({
             "chapter_number": str(state.chapter_number),
             "chapter_title": state.chapter_title,
             "chapter_content": state.chapter_content[:3000],
             "characters": char_text,
         })
+        raw_text = getattr(ai_msg, "content", str(ai_msg))
 
-        updates = result.character_updates if result else []
+        # Extract JSON from potentially markdown-fenced output
+        json_match = _re.search(r"\{[\s\S]*\}", raw_text)
+        if not json_match:
+            emit("characters_updated", {"message": "角色状态更新跳过：LLM 未返回有效 JSON"})
+            return state
+        parsed = json.loads(json_match.group())
+        updates_raw = parsed.get("character_updates", [])
 
         updated_names = []
-        for upd in updates:
-            char_name = upd.name
+        for upd in updates_raw:
+            char_name = upd.get("name", "")
             char = next((c for c in characters if c.name == char_name), None)
             if not char:
                 continue
-            if upd.current_status:
-                char.current_status = upd.current_status
-            if upd.current_goal:
-                char.current_goal = upd.current_goal
-            if upd.last_location:
-                char.last_location = upd.last_location
+            if upd.get("current_status"):
+                char.current_status = upd["current_status"]
+            if upd.get("current_goal"):
+                char.current_goal = upd["current_goal"]
+            if upd.get("last_location"):
+                char.last_location = upd["last_location"]
             char.last_chapter = state.chapter_number
             updated_names.append(char_name)
 

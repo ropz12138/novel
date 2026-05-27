@@ -7,12 +7,15 @@ from unittest.mock import MagicMock, patch
 class TestEditChapterToolRegistration:
     def test_edit_chapter_tools_count(self):
         from app.services.supervisor.edit_chapter_tools import EDIT_CHAPTER_TOOLS
-        assert len(EDIT_CHAPTER_TOOLS) == 7
+        assert len(EDIT_CHAPTER_TOOLS) == 12
 
     def test_edit_chapter_tool_names(self):
         from app.services.supervisor.edit_chapter_tools import EDIT_CHAPTER_TOOLS
         names = {t.name for t in EDIT_CHAPTER_TOOLS}
         assert names == {
+            "create_child_todolist",
+            "read_child_todolist",
+            "update_child_task_status",
             "read_chapter",
             "query_characters_by_chapter",
             "grep_in_chapter",
@@ -20,6 +23,8 @@ class TestEditChapterToolRegistration:
             "grep_chapter_meta",
             "generate_patch_edit",
             "rewrite_chapter",
+            "overwrite_chapter_title",
+            "sync_chapter_metadata",
         }
 
 

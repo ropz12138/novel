@@ -24,21 +24,18 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 class ReadChapterForEvalInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_start: int = Field(default=1, description="起始章节号")
     chapter_end: int | None = Field(default=None, description="结束章节号")
     chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
 
 
 class ReadChapterOutlineForEvalInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_start: int = Field(default=1, description="起始章节号")
     chapter_end: int | None = Field(default=None, description="结束章节号")
     chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
 
 
 class ReadPreviousChaptersForEvalInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     chapter_start: int = Field(default=1, description="起始章节号")
     chapter_end: int | None = Field(default=None, description="结束章节号")
     chapter_number: int | None = Field(default=None, description="兼容字段：单章节号")
@@ -60,6 +57,7 @@ class EvaluateAsReaderInput(BaseModel):
 
 
 class EvaluateChapterOutlineSyncInput(BaseModel):
+    chapter_number: int = Field(description="要评估的章节号")
     trigger: str = Field(default="run", description="触发参数，保持默认即可")
 
 
@@ -88,21 +86,38 @@ def _get_work_chapter_from_config(config: RunnableConfig) -> tuple[str, int]:
     return work_id, chapter_number
 
 
+def _get_work_id(config: RunnableConfig) -> str:
+    work_id = str(config.get("configurable", {}).get("work_id", "") or "")
+    if work_id:
+        return work_id
+    configurable = config.get("configurable", {})
+    session_id = configurable.get("supervisor_session_id")
+    if session_id:
+        db = configurable.get("db")
+        if db:
+            from app.models.agent_model import SupervisorSession
+            session = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session and session.work_id:
+                return str(session.work_id)
+    raise ValueError("work_id 未在 configurable 中提供")
+
+
 # ── 工具实现 ──
 
 
 @tool(args_schema=ReadChapterForEvalInput)
 def read_chapter_for_eval(
-    work_id: str,
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """读取要评估的章节正文。评估前必须先调用此工具。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -133,17 +148,18 @@ def read_chapter_for_eval(
 
 @tool(args_schema=ReadChapterOutlineForEvalInput)
 def read_chapter_outline_for_eval(
-    work_id: str,
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """读取本章的大纲节点信息，用于评估正文是否偏离大纲。"""
     from app.models.work_model import Work
     from app.services.work_service import WorkService
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return f"作品 {work_id} 不存在。"
@@ -165,17 +181,18 @@ def read_chapter_outline_for_eval(
 
 @tool(args_schema=ReadPreviousChaptersForEvalInput)
 def read_previous_chapters_for_eval(
-    work_id: str,
-    chapter_start: int,
-    limit: int,
+    chapter_start: int = 1,
+    limit: int = 3,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """读取前几章的正文摘要，用于评估上下文连贯性。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
 
     if chapter_number is not None:
         chapter_start = chapter_number
@@ -282,6 +299,7 @@ def _history_summaries_to_natural_text(rows: list[Any]) -> str:
 
 
 async def _evaluate_chapter_outline_sync_coroutine(
+    chapter_number: int,
     trigger: str = "run",
     config: RunnableConfig = None,
 ) -> str:
@@ -295,7 +313,9 @@ async def _evaluate_chapter_outline_sync_coroutine(
 
     db = _get_db(config)
     emit = _get_emit(config)
-    work_id, chapter_number = _get_work_chapter_from_config(config)
+    work_id = _get_work_id(config)
+    if chapter_number <= 0:
+        return "同步性评估失败：必须显式传入有效的 chapter_number。"
 
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
@@ -449,8 +469,8 @@ evaluate_chapter_outline_sync = StructuredTool.from_function(
     coroutine=_evaluate_chapter_outline_sync_coroutine,
     name="evaluate_chapter_outline_sync",
     description=(
-        "评估最新章节与大纲的同步性。"
-        "无需传业务内容，工具会内部读取大纲、角色、最新章节全文和元数据、历史章节梗概后一次性评估。"
+        "评估指定章节与大纲的同步性。"
+        "必须显式传入 chapter_number；工具会内部读取大纲、角色、该章全文和元数据、历史章节梗概后一次性评估。"
     ),
     args_schema=EvaluateChapterOutlineSyncInput,
 )
@@ -458,7 +478,16 @@ evaluate_chapter_outline_sync = StructuredTool.from_function(
 
 # ── 导出工具列表 ──
 
+from app.services.supervisor.outline_tools import (  # noqa: E402
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
+)
+
 EVALUATION_TOOLS = [
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
     read_chapter_for_eval,
     read_chapter_outline_for_eval,
     read_previous_chapters_for_eval,

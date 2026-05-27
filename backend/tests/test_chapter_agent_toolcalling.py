@@ -21,12 +21,15 @@ class TestChapterToolRegistration:
 
     def test_chapter_tools_count(self):
         from app.services.agent.chapter_tools import CHAPTER_TOOLS
-        assert len(CHAPTER_TOOLS) == 8
+        assert len(CHAPTER_TOOLS) == 11
 
     def test_chapter_tool_names(self):
         from app.services.agent.chapter_tools import CHAPTER_TOOLS
         names = {t.name for t in CHAPTER_TOOLS}
         assert names == {
+            "create_child_todolist",
+            "read_child_todolist",
+            "update_child_task_status",
             "query_outline",
             "query_chapter_outline",
             "query_previous_chapters",

@@ -21,7 +21,7 @@ class TestToolRegistration:
     """验证所有工具正确注册"""
 
     def test_all_tools_count(self):
-        """应该恰好注册 20 个工具（5 查询 + 4 派发）"""
+        """应该恰好注册 20 个工具（不含 dispatch_*）"""
         from app.services.supervisor.tools import ALL_TOOLS
         assert len(ALL_TOOLS) == 21
 
@@ -40,24 +40,24 @@ class TestToolRegistration:
         assert grep.name == "grep"
         assert "搜索" in grep.description
 
-    def test_dispatch_outline_registered(self):
-        from app.services.supervisor.tools import dispatch_outline
-        assert dispatch_outline.name == "dispatch_outline"
+    def test_dispatch_tools_not_exposed_to_supervisor(self):
+        from app.services.supervisor.tools import ALL_TOOLS
+        names = {t.name for t in ALL_TOOLS}
+        assert "dispatch_outline" not in names
+        assert "dispatch_chapter" not in names
+        assert "dispatch_evaluation" not in names
+
+    def test_legacy_dispatch_coroutines_still_importable(self):
+        """模块级 dispatch coroutine 保留供单元测试，但不注册给 Supervisor"""
+        from app.services.supervisor.tools import (
+            dispatch_chapter,
+            dispatch_evaluation,
+            dispatch_outline,
+            dispatch_writing_expert,
+        )
         assert dispatch_outline.coroutine is not None
-
-    def test_dispatch_chapter_registered(self):
-        from app.services.supervisor.tools import dispatch_chapter
-        assert dispatch_chapter.name == "dispatch_chapter"
         assert dispatch_chapter.coroutine is not None
-
-    def test_dispatch_evaluation_registered(self):
-        from app.services.supervisor.tools import dispatch_evaluation
-        assert dispatch_evaluation.name == "dispatch_evaluation"
         assert dispatch_evaluation.coroutine is not None
-
-    def test_dispatch_writing_expert_registered(self):
-        from app.services.supervisor.tools import dispatch_writing_expert
-        assert dispatch_writing_expert.name == "dispatch_writing_expert"
         assert dispatch_writing_expert.coroutine is not None
 
     def test_tool_names_unique(self):
@@ -98,19 +98,16 @@ class TestToolSchemas:
     def test_query_characters_schema(self):
         from app.services.supervisor.tools import QueryCharactersInput
         schema = QueryCharactersInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "filters" in schema["properties"]
 
     def test_query_chapters_schema(self):
         from app.services.supervisor.tools import QueryChaptersInput
         schema = QueryChaptersInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "filters" in schema["properties"]
 
     def test_grep_schema(self):
         from app.services.supervisor.tools import GrepInput
         schema = GrepInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "keywords" in schema["properties"]
         assert "scope" in schema["properties"]
 
@@ -118,40 +115,31 @@ class TestToolSchemas:
         from app.services.supervisor.tools import DispatchOutlineInput
         schema = DispatchOutlineInput.model_json_schema()
         assert "message" in schema["properties"]
-        assert "work_id" in schema["properties"]
         required = schema.get("required", [])
         assert "message" in required
-        assert "work_id" not in required
 
     def test_dispatch_chapter_schema(self):
         from app.services.supervisor.tools import DispatchChapterInput
         schema = DispatchChapterInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "instruction" in schema["properties"]
         assert "chapter_number" in schema["properties"]
-        required = schema.get("required", [])
-        assert "work_id" in required
-        assert "chapter_number" not in required
+        assert "work_id" not in schema["properties"]
 
     def test_dispatch_evaluation_schema(self):
         from app.services.supervisor.tools import DispatchEvaluationInput
         schema = DispatchEvaluationInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "chapter_number" in schema["properties"]
         assert "chapter_content" in schema["properties"]
         required = schema.get("required", [])
-        assert "work_id" in required
         assert "chapter_number" in required
         assert "chapter_content" not in required
 
     def test_dispatch_writing_expert_schema(self):
         from app.services.supervisor.tools import DispatchWritingExpertInput
         schema = DispatchWritingExpertInput.model_json_schema()
-        assert "work_id" in schema["properties"]
         assert "problem_type" in schema["properties"]
         assert "genre_tags" in schema["properties"]
         required = schema.get("required", [])
-        assert "work_id" in required
         assert "problem_type" in required
         assert "genre_tags" in required
 
@@ -187,25 +175,22 @@ class TestQueryToolsUnit:
     def test_query_characters_no_results(self):
         from app.services.supervisor.tools import query_characters
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         with patch("app.services.character_service.CharacterService.query_data", return_value=[]):
-            result = query_characters.invoke(
-                {"work_id": "w1", "filters": {}},
-                config=config,
-            )
+            result = query_characters.invoke({"filters": {}}, config=config)
         assert "没有找到" in result
 
     def test_query_characters_with_results(self):
         from app.services.supervisor.tools import query_characters
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         fake_chars = [
             {"name": "张三", "role_type": "男主", "gender": "男", "age": "20",
              "personality": "勇敢", "background": "", "current_status": "存活", "current_goal": "复仇"},
         ]
         with patch("app.services.character_service.CharacterService.query_data", return_value=fake_chars):
             result = query_characters.invoke(
-                {"work_id": "w1", "filters": {"role_type": "男主"}},
+                {"filters": {"role_type": "男主"}},
                 config=config,
             )
         assert "张三" in result
@@ -214,10 +199,10 @@ class TestQueryToolsUnit:
     def test_query_chapters_no_results(self):
         from app.services.supervisor.tools import query_chapters
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         with patch("app.services.character_service.CharacterService.query_data", return_value=[]):
             result = query_chapters.invoke(
-                {"work_id": "w1", "filters": {}},
+                {"filters": {}, "content_preview_length": 200},
                 config=config,
             )
         assert "没有找到" in result
@@ -225,13 +210,13 @@ class TestQueryToolsUnit:
     def test_query_chapters_with_results(self):
         from app.services.supervisor.tools import query_chapters
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         fake_chapters = [
-            {"chapter_number": 1, "title": "开端", "status": "草稿", "content_preview": "在一个..."},
+            {"chapter_number": 1, "title": "开端", "status": "草稿", "content": "在一个...", "content_preview": "在一个..."},
         ]
         with patch("app.services.character_service.CharacterService.query_data", return_value=fake_chapters):
             result = query_chapters.invoke(
-                {"work_id": "w1", "filters": {"chapter_number": 1}},
+                {"filters": {"chapter_number": 1}, "content_preview_length": 200},
                 config=config,
             )
         assert "第1章" in result
@@ -240,10 +225,10 @@ class TestQueryToolsUnit:
     def test_grep_no_results(self):
         from app.services.supervisor.tools import grep
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         with patch("app.services.character_service.CharacterService.grep", return_value=[]):
             result = grep.invoke(
-                {"work_id": "w1", "keywords": ["不存在的内容"], "scope": "all", "context_chars": 200},
+                {"keywords": ["不存在的内容"], "scope": "all", "context_chars": 200},
                 config=config,
             )
         assert "未找到" in result
@@ -251,13 +236,13 @@ class TestQueryToolsUnit:
     def test_grep_with_results(self):
         from app.services.supervisor.tools import grep
         mock_db = MagicMock()
-        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None}}
+        config = {"configurable": {"db": mock_db, "emit": lambda e, d: None, "work_id": "w1"}}
         fake_results = [
             {"source": "character", "character_name": "张三", "field": "background", "snippet": "...复仇..."},
         ]
         with patch("app.services.character_service.CharacterService.grep", return_value=fake_results):
             result = grep.invoke(
-                {"work_id": "w1", "keywords": ["复仇"], "scope": "characters", "context_chars": 200},
+                {"keywords": ["复仇"], "scope": "characters", "context_chars": 200},
                 config=config,
             )
         assert "张三" in result
@@ -350,13 +335,11 @@ class TestSystemPrompt:
         mock_db.query.return_value.filter_by.return_value.first.return_value = mock_work
 
         msg = _build_system_message(work_id="w1", db=mock_db)
-        assert "w1" in msg.content
         assert "测试小说" in msg.content
 
-    def test_system_prompt_mentions_dispatch(self):
-        """system prompt 应提及派发工具"""
+    def test_system_prompt_mentions_execute_todo_task(self):
+        """system prompt 应强调 execute_todo_task，并说明 Supervisor 无 dispatch 工具"""
         from app.services.supervisor.supervisor_agent import _build_system_message
         msg = _build_system_message(work_id=None, db=MagicMock())
-        assert "dispatch_outline" in msg.content
-        assert "dispatch_chapter" in msg.content
-        assert "dispatch_evaluation" in msg.content
+        assert "execute_todo_task" in msg.content
+        assert "没有" in msg.content and "dispatch" in msg.content

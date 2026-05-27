@@ -21,15 +21,14 @@ logger = logging.getLogger(__name__)
 
 
 class ReadOutlineInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class QueryOutlineCharactersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
+    pass
 
 
 class QueryOutlineRelatedChaptersInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     outline_queries: list[str] = Field(default_factory=list, description="大纲片段查询词列表：可传多个节点ID或关键词")
     outline_query: str | None = Field(default=None, description="兼容字段：单个查询词")
     chapter_start: int | None = Field(default=None, description="可选：起始章节号")
@@ -38,23 +37,26 @@ class QueryOutlineRelatedChaptersInput(BaseModel):
 
 
 class GenerateOutlineInput(BaseModel):
-    idea: str = Field(description="故事创意/灵感描述")
-    tags: list[str] = Field(default_factory=list, description="题材标签列表")
+    idea: str = Field(
+        description=(
+            "故事创意与用户全部硬性约束（须原文写入）："
+            "章节规模、主线 timeline 节点数、支线 branches 数、伏笔 foreshadowing 数、角色 characters 数量等。"
+            "不要自行扩写题材或增加用户未要求的复杂度。"
+        ),
+    )
+    tags: list[str] = Field(default_factory=list, description="题材标签列表，如「科幻」「悬疑」")
 
 
 class EditOutlineInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     message: str = Field(description="编辑指令：用户想要对大纲做什么")
 
 
 class EditOutlineBySuggestionInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     suggestion: str = Field(description="修改建议（自然语言）")
     context_note: str = Field(default="", description="可选：补充上下文（自然语言）")
 
 
 class ReplaceOutlineFieldInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     path: str = Field(
         description="字段路径，例如 story.synopsis 或 timeline[id=T1].summary"
     )
@@ -73,12 +75,10 @@ class ReplaceOutlineFieldItem(BaseModel):
 
 
 class ReplaceOutlineFieldsInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     updates: list[ReplaceOutlineFieldItem] = Field(default_factory=list, description="批量替换项")
 
 
 class InsertOutlineItemInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     path: str = Field(description="目标列表路径：timeline/branches/foreshadowing")
     mode: str = Field(description="插入模式：append/after_id/before_id/index")
     anchor_id: str = Field(default="", description="锚点ID（after_id/before_id 时使用）")
@@ -89,7 +89,6 @@ class InsertOutlineItemInput(BaseModel):
 
 
 class DeleteOutlineItemInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     path: str = Field(description="目标列表路径：timeline/branches/foreshadowing")
     match_field: str = Field(description="匹配字段，如 id/name")
     match_value: str = Field(description="匹配值")
@@ -98,7 +97,6 @@ class DeleteOutlineItemInput(BaseModel):
 
 
 class ReplaceCharacterFieldInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     character_name: str = Field(description="角色名")
     field: str = Field(description="角色字段名")
     old_value: str = Field(default="", description="期望旧值（乐观锁）")
@@ -127,8 +125,29 @@ class DeleteCharacterInput(BaseModel):
 
 
 class CommitOrRollbackInput(BaseModel):
-    work_id: str = Field(description="作品ID")
     action: str = Field(description="操作：commit 或 rollback")
+
+
+class ChildTodoItemInput(BaseModel):
+    id: str = Field(default="", description="可选子任务ID，如 T1.1；不传则自动生成")
+    task: str = Field(description="子任务描述")
+    depends_on: list[str] = Field(default_factory=list, description="依赖的子任务ID")
+    done_criteria: str = Field(default="", description="完成判定标准")
+
+
+class CreateChildTodolistInput(BaseModel):
+    items: list[ChildTodoItemInput] = Field(description="当前父任务下的子任务列表")
+
+
+class ReadChildTodolistInput(BaseModel):
+    pass
+
+
+class UpdateChildTaskStatusInput(BaseModel):
+    task_identifier: str = Field(description="子任务ID或数据库ID，如 T1.1")
+    status: str = Field(description="新状态：pending / in_progress / completed / skipped / failed")
+    result_summary: str = Field(default="", description="可选：结果摘要")
+    error_message: str = Field(default="", description="可选：错误说明")
 
 
 # ── Helpers ──
@@ -145,6 +164,22 @@ def _get_db(config: RunnableConfig) -> Session:
 def _get_emit(config: RunnableConfig):
     configurable = config.get("configurable", {})
     return configurable.get("emit", lambda event, data: None)
+
+
+def _get_work_id(config: RunnableConfig) -> str:
+    configurable = config.get("configurable", {})
+    work_id = configurable.get("work_id")
+    if work_id:
+        return work_id
+    session_id = configurable.get("supervisor_session_id")
+    if session_id:
+        db = configurable.get("db")
+        if db:
+            from app.models.agent_model import SupervisorSession
+            session = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session and session.work_id:
+                return session.work_id
+    raise ValueError("work_id 未在 configurable 中提供")
 
 
 def _get_db_lock(config: RunnableConfig):
@@ -269,13 +304,61 @@ def _apply_single_outline_field_replace(
 # ── 工具实现 ──
 
 
+@tool(args_schema=CreateChildTodolistInput)
+def create_child_todolist(items: list[ChildTodoItemInput], config: RunnableConfig) -> str:
+    """为当前 Supervisor 父任务创建子任务清单。只维护当前任务内部进度。"""
+    from app.services.supervisor.todo_harness import create_child_todolist as _create_child_todolist
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    payload = [item.model_dump() if hasattr(item, "model_dump") else dict(item) for item in items]
+    with _with_lock(config):
+        return _create_child_todolist(items=payload, db=db, emit=emit, config=config)
+
+
+@tool(args_schema=ReadChildTodolistInput)
+def read_child_todolist(config: RunnableConfig) -> str:
+    """读取当前 Supervisor 父任务下的子任务清单。"""
+    from app.services.supervisor.todo_harness import read_child_todolist as _read_child_todolist
+
+    db = _get_db(config)
+    with _with_lock(config):
+        return _read_child_todolist(db=db, config=config)
+
+
+@tool(args_schema=UpdateChildTaskStatusInput)
+def update_child_task_status(
+    task_identifier: str,
+    status: str,
+    result_summary: str = "",
+    error_message: str = "",
+    config: RunnableConfig = None,
+) -> str:
+    """更新当前父任务下某个子任务的状态。"""
+    from app.services.supervisor.todo_harness import update_child_task_status as _update_child_task_status
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    with _with_lock(config):
+        return _update_child_task_status(
+            task_identifier=task_identifier,
+            status=status,
+            db=db,
+            emit=emit,
+            config=config,
+            result_summary=result_summary,
+            error_message=error_message,
+        )
+
+
 @tool(args_schema=ReadOutlineInput)
-def read_outline(work_id: str, config: RunnableConfig) -> str:
+def read_outline(config: RunnableConfig, work_id: str | None = None) -> str:
     """读取作品当前的完整大纲信息。编辑大纲前必须先读取现有数据。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         work = db.query(Work).filter_by(id=work_id).first()
@@ -305,12 +388,13 @@ def read_outline(work_id: str, config: RunnableConfig) -> str:
 
 
 @tool(args_schema=QueryOutlineCharactersInput)
-def query_outline_characters(work_id: str, config: RunnableConfig) -> str:
+def query_outline_characters(config: RunnableConfig, work_id: str | None = None) -> str:
     """查询作品的所有角色设定。编辑大纲涉及角色变更时应先查询。"""
     from app.models.work_model import Character
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         characters = db.query(Character).filter_by(work_id=work_id).order_by(
@@ -338,19 +422,20 @@ def query_outline_characters(work_id: str, config: RunnableConfig) -> str:
 
 @tool(args_schema=QueryOutlineRelatedChaptersInput)
 def query_outline_related_chapters(
-    work_id: str,
-    outline_queries: list[str],
-    chapter_limit: int,
+    outline_queries: list[str] | None = None,
+    chapter_limit: int = 10,
     outline_query: str | None = None,
     chapter_start: int | None = None,
     chapter_end: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """级联查询：先匹配大纲片段，再回查关联章节（基于 chapter_metadata）。"""
     from app.models.work_model import Chapter, ChapterMetadata, Work
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     with _with_lock(config):
         work = db.query(Work).filter_by(id=work_id).first()
@@ -524,19 +609,20 @@ async def _generate_outline_coroutine(idea: str, tags: list[str], config: Runnab
                 db.rollback()
                 raise
 
-    return f"大纲创建成功。作品「{result.get('title', '')}」（work_id: {result.get('work_id', '')}）"
+    return f"大纲创建成功。作品「{result.get('title', '')}」"
 
 
 async def _edit_outline_by_suggestion_coroutine(
-    work_id: str,
     suggestion: str,
     context_note: str,
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """单入口大纲编辑：外层只传建议，内部独立 LLM 完成具体字段修改。"""
     from app.services.work_service import WorkService
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     auto_mode = bool(config.get("configurable", {}).get("auto_mode", False))
     dry_run = not auto_mode
 
@@ -599,18 +685,19 @@ async def _edit_outline_by_suggestion_coroutine(
 
 @tool(args_schema=ReplaceOutlineFieldInput)
 def replace_outline_field(
-    work_id: str,
     path: str,
     old_value: str,
     new_value: str,
     op_id: str,
     reason: str,
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """原子替换大纲字段。仅修改一个字段，必须提供 path 与旧值校验。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return _atomic_result(
@@ -643,15 +730,16 @@ def replace_outline_field(
 
 @tool(args_schema=ReplaceOutlineFieldsInput)
 def replace_outline_fields(
-    work_id: str,
     updates: list[ReplaceOutlineFieldItem],
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """批量替换多个大纲字段。单次调用可提交多条 path/old/new。"""
     from app.models.work_model import Work
     import json
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return _atomic_result(
@@ -712,7 +800,6 @@ def replace_outline_fields(
 
 @tool(args_schema=InsertOutlineItemInput)
 def insert_outline_item(
-    work_id: str,
     path: str,
     mode: str,
     anchor_id: str,
@@ -721,11 +808,13 @@ def insert_outline_item(
     op_id: str,
     reason: str,
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """原子插入大纲节点。支持 append / after_id / before_id / index。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return _atomic_result(status="error", tool="insert_outline_item", op_id=op_id, message=f"作品 {work_id} 不存在。")
@@ -772,18 +861,19 @@ def insert_outline_item(
 
 @tool(args_schema=DeleteOutlineItemInput)
 def delete_outline_item(
-    work_id: str,
     path: str,
     match_field: str,
     match_value: str,
     op_id: str,
     reason: str,
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """原子删除大纲节点。按 match_field + match_value 匹配单条记录。"""
     from app.models.work_model import Work
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
         return _atomic_result(status="error", tool="delete_outline_item", op_id=op_id, message=f"作品 {work_id} 不存在。")
@@ -823,7 +913,6 @@ def delete_outline_item(
 
 @tool(args_schema=ReplaceCharacterFieldInput)
 def replace_character_field(
-    work_id: str,
     character_name: str,
     field: str,
     old_value: str,
@@ -831,11 +920,13 @@ def replace_character_field(
     op_id: str,
     reason: str,
     config: RunnableConfig,
+    work_id: str | None = None,
 ) -> str:
     """原子替换角色字段。只修改一个角色的一个字段。"""
     from app.models.work_model import Character
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     char = db.query(Character).filter_by(work_id=work_id, name=character_name).first()
     if not char:
         return _atomic_result(
@@ -957,10 +1048,11 @@ def delete_character(name: str, config: RunnableConfig) -> str:
 
 
 @tool(args_schema=CommitOrRollbackInput)
-def commit_or_rollback(work_id: str, action: str, config: RunnableConfig) -> str:
+def commit_or_rollback(action: str, config: RunnableConfig, work_id: str | None = None) -> str:
     """确认提交或回滚大纲变更。action 只能是 commit 或 rollback。"""
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     if action == "commit":
         try:
@@ -997,11 +1089,24 @@ def _character_to_dict(c) -> dict:
     }
 
 
+_GENERATE_OUTLINE_DESCRIPTION = (
+    "从零创建完整大纲并保存到数据库（一次调用完成，勿分步用自然语言代劳）。"
+    "工具内部会依次生成并入库："
+    "（1）作品 story（标题、类型、卷名）；"
+    "（2）主线 timeline 节点；"
+    "（3）角色卡 characters（含 name、role_type、gender、age、外貌、性格、背景、技能、当前状态、目标、首次出场章）；"
+    "（4）支线 branches；"
+    "（5）伏笔 foreshadowing；"
+    "（6）角色-剧情关联 character_links。"
+    "用户对节点数、角色数、伏笔数等数量约束必须完整写入 idea 参数。"
+    "创建角色、支线、伏笔、主线时禁止在回复中用自然语言输出角色卡或大纲 JSON，必须调用本工具。"
+)
+
 generate_outline = StructuredTool.from_function(
     func=None,
     coroutine=_generate_outline_coroutine,
     name="generate_outline",
-    description="从零创建大纲。传入故事创意和题材标签，生成完整大纲并保存到数据库。",
+    description=_GENERATE_OUTLINE_DESCRIPTION,
     args_schema=GenerateOutlineInput,
 )
 
@@ -1017,6 +1122,9 @@ edit_outline_by_suggestion = StructuredTool.from_function(
 
 # 基础工具（两种模式共用）
 _OUTLINE_BASE_TOOLS = [
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
     read_outline,
     query_outline_characters,
     query_outline_related_chapters,

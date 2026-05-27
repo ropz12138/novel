@@ -152,19 +152,22 @@ class TestWorkIdInjectedIntoPrompt:
         prompt = _build_evaluation_system_prompt(
             work_id="abc-123",
             chapter_number=3,
+            user_message="评估第3章",
         )
-        assert "abc-123" in prompt
         assert "第3章" in prompt
-        assert "禁止猜测" in prompt
+        assert "评估第3章" in prompt
+        assert "显式传入 chapter_number" in prompt
 
-    def test_system_prompt_rejects_placeholder_default(self):
+    def test_system_prompt_without_fixed_chapter(self):
         from app.services.evaluation_agent import _build_evaluation_system_prompt
 
         prompt = _build_evaluation_system_prompt(
             work_id="real-uuid-here",
-            chapter_number=1,
+            chapter_number=None,
+            user_message="评估第9章，参考第8章结尾",
         )
-        assert "default" not in prompt.split("作品ID")[1].split("\n")[0]
+        assert "未由系统固定" in prompt
+        assert "第8章" in prompt
 
 
 class TestEditChapterDiffFromDB:

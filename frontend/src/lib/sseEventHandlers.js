@@ -66,6 +66,26 @@ export function handleCharacterEditDiff(data) {
 /**
  * 处理 todolist_generated SSE 事件
  */
+export function normalizeTodoItem(t = {}) {
+  return {
+    db_id: t.db_id || "",
+    task_id: t.task_id || t.id || "",
+    task: t.task || "",
+    owner: t.owner || "supervisor",
+    status: t.status || "pending",
+    parent_id: t.parent_id || "",
+    depth: Number(t.depth || 0),
+    agent_scope: t.agent_scope || "",
+    depends_on: t.depends_on || [],
+    done_criteria: t.done_criteria || "",
+    task_type: t.task_type || "",
+    dispatch_tool: t.dispatch_tool || "",
+    instruction: t.instruction || "",
+    result_summary: t.result_summary || "",
+    error_message: t.error_message || "",
+  };
+}
+
 export function handleTodolistGenerated(data) {
   return {
     finalizeStep: true,
@@ -76,19 +96,23 @@ export function handleTodolistGenerated(data) {
         type: "requirements_todolist",
         todoCard: {
           intent_summary: data.intent_summary || "",
-          todolist: (data.todolist || []).map((t) => ({
-            db_id: t.db_id || "",
-            task_id: t.task_id || t.id || "",
-            task: t.task || "",
-            owner: t.owner || "supervisor",
-            status: t.status || "pending",
-            depends_on: t.depends_on || [],
-            done_criteria: t.done_criteria || "",
-          })),
+          todolist: (data.todolist || []).map(normalizeTodoItem),
           ready_to_execute: !!data.ready_to_execute,
         },
       },
     },
+  };
+}
+
+/**
+ * 处理 subtasks_created SSE 事件
+ */
+export function handleSubtasksCreated(data) {
+  return {
+    type: "subtasks_created",
+    parent_task_item_id: data.parent_task_item_id || "",
+    parent_task_id: data.parent_task_id || "",
+    subtasks: (data.subtasks || []).map(normalizeTodoItem),
   };
 }
 
@@ -103,6 +127,7 @@ export function handleTaskStatusUpdated(data) {
     old_status: data.old_status || "",
     new_status: data.new_status || "",
     result_summary: data.result_summary || "",
+    error_message: data.error_message || "",
   };
 }
 
@@ -125,6 +150,7 @@ export function createTimelineActions() {
     handleOutlineEditDiff,
     handleCharacterEditDiff,
     handleTodolistGenerated,
+    handleSubtasksCreated,
     handleTaskStatusUpdated,
     handleTodolistReadinessUpdated,
   };

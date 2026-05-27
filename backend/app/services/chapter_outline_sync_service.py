@@ -65,6 +65,10 @@ _METADATA_PERSIST_CTX: ContextVar[dict[str, Any] | None] = ContextVar(
 )
 
 
+def _as_dict(value: Any) -> dict:
+    return value if isinstance(value, dict) else {}
+
+
 def _upsert_metadata_row(
     db: Session,
     *,
@@ -226,7 +230,7 @@ class ChapterOutlineSyncService:
                     excerpt = excerpt[:280] + "..."
                 excerpt_lines.append(f"- 第{ch.chapter_number}章原文片段：{excerpt}")
 
-        outline = (work.outline_tree or {}) if work else {}
+        outline = _as_dict(work.outline_tree) if work else {}
         timeline = outline.get("timeline") if isinstance(outline, dict) else []
         timeline_lines = []
         for node in timeline or []:

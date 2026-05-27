@@ -96,12 +96,19 @@ class OutlineAgent:
         graph.add_edge("tools", "agent")
         return graph.compile()
 
-    async def create_outline(self, idea: str, tags: list[str], db: Session,
-                             db_lock: object = None) -> dict:
+    async def create_outline(
+        self,
+        idea: str,
+        tags: list[str],
+        db: Session,
+        db_lock: object = None,
+        base_configurable: dict | None = None,
+    ) -> dict:
         """创建新大纲 — 通过 Tool-Calling 让 LLM 自主调用 generate_outline"""
 
         graph = self._build_graph(auto_mode=True)
-        configurable = {"db": db, "emit": self.emit, "auto_mode": True, "user_id": self.user_id}
+        configurable = dict(base_configurable or {})
+        configurable.update({"db": db, "emit": self.emit, "auto_mode": True, "user_id": self.user_id})
         if db_lock is not None:
             configurable["db_lock"] = db_lock
         config = {"configurable": configurable, "recursion_limit": 100}
@@ -119,35 +126,60 @@ class OutlineAgent:
 
         result = {"work_id": None, "title": None}
 
-        def on_tool_result(event_data):
-            content = event_data.get("content", "")
+        original_emit = self.emit
+
+        def capture_create_emit(event: str, data: dict):
+            if event == "outline_done":
+                result["work_id"] = data.get("work_id") or result.get("work_id")
+                result["title"] = data.get("title") or result.get("title")
+            original_emit(event, data)
+
+        configurable["emit"] = capture_create_emit
+
+        def on_tool_result(content: object):
+            content = str(content or "")
             if "大纲创建成功" in content:
                 import re
                 wid_match = re.search(r"work_id:\s*(\S+)", content)
                 title_match = re.search(r"作品「(.+?)」", content)
                 if wid_match:
-                    result["work_id"] = wid_match.group(1).rstrip("）")
+                    result["work_id"] = wid_match.group(1).strip().rstrip("）)}，,。")
                 if title_match:
                     result["title"] = title_match.group(1)
 
         final_state = None
         stop_after_create = False
-        async for event in graph.astream(initial_state, config=config):
-            for node_name, node_output in event.items():
-                if node_name == "tools":
-                    tool_msgs = node_output.get("messages", [])
-                    for tm in tool_msgs:
-                        on_tool_result({"content": str(tm.content if hasattr(tm, "content") else tm)[:500]})
-                        if result.get("work_id"):
-                            stop_after_create = True
-                            logger.info(
-                                "outline_agent.create_outline stop_after_generate work_id=%s title=%s",
-                                result.get("work_id"),
-                                result.get("title"),
-                            )
-            final_state = node_output
-            if stop_after_create:
-                break
+        try:
+            async for event in graph.astream(initial_state, config=config):
+                for node_name, node_output in event.items():
+                    if node_name == "tools":
+                        tool_msgs = node_output.get("messages", [])
+                        for tm in tool_msgs:
+                            on_tool_result(tm.content if hasattr(tm, "content") else tm)
+                            if result.get("work_id"):
+                                stop_after_create = True
+                                logger.info(
+                                    "outline_agent.create_outline stop_after_generate work_id=%s title=%s",
+                                    result.get("work_id"),
+                                    result.get("title"),
+                                )
+                final_state = node_output
+                if stop_after_create:
+                    break
+        finally:
+            configurable["emit"] = original_emit
+
+        if not result.get("work_id"):
+            session_id = configurable.get("supervisor_session_id")
+            if session_id:
+                from app.models.agent_model import SupervisorSession
+                session = db.query(SupervisorSession).filter_by(id=session_id).first()
+                if session and session.work_id:
+                    result["work_id"] = session.work_id
+                    if not result.get("title"):
+                        from app.models.work_model import Work
+                        work = db.query(Work).filter_by(id=session.work_id).first()
+                        result["title"] = work.title if work else ""
 
         if not result.get("work_id"):
             result["error"] = "大纲生成未完成"
@@ -156,7 +188,8 @@ class OutlineAgent:
 
     async def edit_outline(self, work_id: str, message: str, history: list[dict], db: Session,
                            old_outline: dict | None = None, old_characters: list[dict] | None = None,
-                           *, auto_mode: bool = False, db_lock: object = None) -> dict:
+                           *, auto_mode: bool = False, db_lock: object = None,
+                           base_configurable: dict | None = None) -> dict:
         """编辑已有大纲
 
         默认模式（auto_mode=False）：LLM 只做 dry_run，不 commit，返回 diff 信息。
@@ -164,7 +197,14 @@ class OutlineAgent:
         """
 
         graph = self._build_graph(auto_mode=auto_mode)
-        configurable = {"db": db, "emit": self.emit, "auto_mode": auto_mode, "user_id": self.user_id}
+        configurable = dict(base_configurable or {})
+        configurable.update({
+            "db": db,
+            "emit": self.emit,
+            "auto_mode": auto_mode,
+            "user_id": self.user_id,
+            "work_id": work_id,
+        })
         if db_lock is not None:
             configurable["db_lock"] = db_lock
         config = {"configurable": configurable, "recursion_limit": 100}

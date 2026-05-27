@@ -129,6 +129,7 @@ class ChapterAgentGraph:
         *,
         auto_mode: bool = False,
         db_lock: object | None = None,
+        base_configurable: dict | None = None,
     ):
         self.work_id = work_id
         self.chapter_number = chapter_number
@@ -136,6 +137,7 @@ class ChapterAgentGraph:
         self.emit = emit
         self.auto_mode = auto_mode
         self.db_lock = db_lock
+        self.base_configurable = dict(base_configurable or {})
 
     def _build_graph(self):
         """构建 LangGraph StateGraph"""
@@ -176,14 +178,16 @@ class ChapterAgentGraph:
 
         graph = self._build_graph()
 
+        configurable = dict(self.base_configurable)
+        configurable.update({
+            "db": self.db,
+            "emit": self.emit,
+            "db_lock": self.db_lock,
+            "work_id": self.work_id,
+            "chapter_number": self.chapter_number,
+        })
         config = {
-            "configurable": {
-                "db": self.db,
-                "emit": self.emit,
-                "db_lock": self.db_lock,
-                "work_id": self.work_id,
-                "chapter_number": self.chapter_number,
-            },
+            "configurable": configurable,
             "recursion_limit": 30,
         }
 
@@ -202,7 +206,7 @@ class ChapterAgentGraph:
             final_state = None
             async for event in graph.astream(initial_state, config=config):
                 for node_name, node_output in event.items():
-                    if node_name == "tools":
+                    if node_name == "tools" and isinstance(node_output, dict):
                         tool_msgs = node_output.get("messages", [])
                         for tm in tool_msgs:
                             content = tm.content if hasattr(tm, "content") else str(tm)
@@ -216,7 +220,8 @@ class ChapterAgentGraph:
                             ):
                                 continue
                             self.emit("tool_result", {"content": text[:500]})
-                final_state = node_output
+                    if isinstance(node_output, dict):
+                        final_state = node_output
 
             # 提取最终回复
             final_messages = final_state.get("messages", []) if final_state else []

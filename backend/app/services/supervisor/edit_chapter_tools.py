@@ -18,21 +18,18 @@ PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
 class ReadChapterInput(BaseModel):
-    work_id: str
     chapter_start: int = 1
     chapter_end: int | None = None
     chapter_number: int | None = None
 
 
 class QueryCharactersByChapterInput(BaseModel):
-    work_id: str
     chapter_start: int = 1
     chapter_end: int | None = None
     chapter_number: int | None = None
 
 
 class GrepInChapterInput(BaseModel):
-    work_id: str
     keywords: list[str] = Field(default_factory=list)
     chapter_start: int = 1
     chapter_end: int | None = None
@@ -42,14 +39,12 @@ class GrepInChapterInput(BaseModel):
 
 
 class QueryChapterMetaInput(BaseModel):
-    work_id: str
     chapter_start: int = 1
     chapter_end: int | None = None
     chapter_number: int | None = None
 
 
 class GrepChapterMetaInput(BaseModel):
-    work_id: str
     keywords: list[str] = Field(default_factory=list)
     chapter_start: int = 1
     chapter_end: int | None = None
@@ -58,7 +53,6 @@ class GrepChapterMetaInput(BaseModel):
 
 
 class RewriteChapterInput(BaseModel):
-    work_id: str
     chapter_number: int
     current_content: str
     edit_instruction: str
@@ -67,7 +61,6 @@ class RewriteChapterInput(BaseModel):
 
 
 class GeneratePatchEditInput(BaseModel):
-    work_id: str
     chapter_number: int
     current_content: str
     edit_instruction: str
@@ -76,12 +69,10 @@ class GeneratePatchEditInput(BaseModel):
 
 
 class SyncChapterMetadataInput(BaseModel):
-    work_id: str
     chapter_number: int
 
 
 class OverwriteChapterTitleInput(BaseModel):
-    work_id: str
     chapter_number: int
     new_title: str = Field(description="新的章节标题（全量覆盖）")
 
@@ -95,6 +86,22 @@ def _get_db(config: RunnableConfig) -> Session:
 
 def _get_emit(config: RunnableConfig):
     return config.get("configurable", {}).get("emit", lambda event, data: None)
+
+
+def _get_work_id(config: RunnableConfig) -> str:
+    work_id = str(config.get("configurable", {}).get("work_id") or "")
+    if work_id:
+        return work_id
+    configurable = config.get("configurable", {})
+    session_id = configurable.get("supervisor_session_id")
+    if session_id:
+        db = configurable.get("db")
+        if db:
+            from app.models.agent_model import SupervisorSession
+            session = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session and session.work_id:
+                return str(session.work_id)
+    raise ValueError("work_id 未在 configurable 中提供")
 
 
 def _get_db_lock(config: RunnableConfig):
@@ -116,16 +123,17 @@ def _get_llm(temperature: float = 0.7):
 
 @tool(args_schema=ReadChapterInput)
 def read_chapter(
-    work_id: str,
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """读取章节范围正文与基础信息。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -160,16 +168,17 @@ def read_chapter(
 
 @tool(args_schema=QueryCharactersByChapterInput)
 def query_characters_by_chapter(
-    work_id: str,
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """查询章节范围对应上下文的角色信息。"""
     from app.models.work_model import Character
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -198,19 +207,20 @@ def query_characters_by_chapter(
 
 @tool(args_schema=GrepInChapterInput)
 def grep_in_chapter(
-    work_id: str,
     keywords: list[str],
-    chapter_start: int,
-    context_chars: int,
+    chapter_start: int = 1,
+    context_chars: int = 200,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     keyword: str | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """在章节范围正文中按多个关键词检索并返回上下文。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -270,16 +280,17 @@ def grep_in_chapter(
 
 @tool(args_schema=QueryChapterMetaInput)
 def query_chapter_meta(
-    work_id: str,
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """查询章节范围元数据概览。"""
     from app.models.work_model import ChapterMetadata
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -315,18 +326,19 @@ def query_chapter_meta(
 
 @tool(args_schema=GrepChapterMetaInput)
 def grep_chapter_meta(
-    work_id: str,
     keywords: list[str],
-    chapter_start: int,
+    chapter_start: int = 1,
     chapter_end: int | None = None,
     chapter_number: int | None = None,
     keyword: str | None = None,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """在章节范围元数据中按多个关键词检索。"""
     from app.models.work_model import ChapterMetadata
 
     db = _get_db(config)
+    work_id = work_id or _get_work_id(config)
     if chapter_number is not None:
         chapter_start = chapter_number
         chapter_end = chapter_number
@@ -560,9 +572,9 @@ async def _save_content_only(*, work_id: str, chapter_number: int, new_content: 
 
 
 async def _sync_chapter_metadata_coroutine(
-    work_id: str,
     chapter_number: int,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """独立元数据同步工具：根据当前章节正文重新生成结构化元数据。"""
     from app.models.work_model import Chapter, ChapterMetadata, Work
@@ -570,6 +582,7 @@ async def _sync_chapter_metadata_coroutine(
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
     if not chapter or not chapter.content:
@@ -618,15 +631,16 @@ async def _sync_chapter_metadata_coroutine(
 
 
 async def _rewrite_chapter_coroutine(
-    work_id: str,
     chapter_number: int,
     current_content: str,
     edit_instruction: str,
     story_info: str = "",
     chapter_outline: str = "",
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     template = (PROMPT_DIR / "edit_chapter.txt").read_text(encoding="utf-8")
     prompt = PromptTemplate.from_template(template)
@@ -685,17 +699,18 @@ def _parse_patch_json(raw: str) -> list[dict]:
 
 
 async def _generate_patch_edit_coroutine(
-    work_id: str,
     chapter_number: int,
     current_content: str,
     edit_instruction: str,
     story_info: str = "",
     chapter_outline: str = "",
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     from app.services.supervisor.edit_patch import EditOperation, apply_edits
 
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
     template = (PROMPT_DIR / "edit_chapter_patch.txt").read_text(encoding="utf-8")
     prompt = PromptTemplate.from_template(template)
     llm = _get_llm(temperature=0.7)
@@ -774,16 +789,17 @@ sync_chapter_metadata = StructuredTool.from_function(
 
 
 async def _overwrite_chapter_title_coroutine(
-    work_id: str,
     chapter_number: int,
     new_title: str,
     config: RunnableConfig = None,
+    work_id: str | None = None,
 ) -> str:
     """全量覆盖章节标题，不修改正文。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
     emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
 
     normalized = (new_title or "").strip()
     if not normalized:
@@ -831,7 +847,16 @@ overwrite_chapter_title = StructuredTool.from_function(
 )
 
 
+from app.services.supervisor.outline_tools import (  # noqa: E402
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
+)
+
 EDIT_CHAPTER_TOOLS = [
+    create_child_todolist,
+    read_child_todolist,
+    update_child_task_status,
     read_chapter,
     query_characters_by_chapter,
     grep_in_chapter,

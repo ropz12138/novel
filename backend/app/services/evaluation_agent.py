@@ -26,13 +26,35 @@ PROMPT_DIR = Path(__file__).resolve().parent / "prompt_templates"
 class EvaluationState(MessagesState):
     """EvaluationAgent 的状态"""
     work_id: str
-    chapter_number: int
+    chapter_number: int | None
     chapter_content_override: str
+    user_message: str
 
 
-def _build_evaluation_system_prompt(work_id: str, chapter_number: int) -> str:
+def _build_evaluation_system_prompt(
+    work_id: str,
+    chapter_number: int | None,
+    user_message: str,
+) -> str:
     template = (PROMPT_DIR / "evaluation_agent_system.txt").read_text(encoding="utf-8")
-    return template.format(work_id=work_id, chapter_number=chapter_number)
+    if chapter_number is None:
+        target_description = (
+            "未由系统固定；请从 Supervisor 下派任务中判断目标章节，"
+            "并在每次评估相关工具调用时显式传入 chapter_number。"
+        )
+        boundary_rule = (
+            "如果任务要求评估第N章，调用评估工具时就必须传入 chapter_number=N；"
+            "不要因为文本中出现其他章节引用而改成别的章节。"
+        )
+    else:
+        target_description = f"第{chapter_number}章"
+        boundary_rule = f"当前任务只评估第{chapter_number}章，不得改评其他章节。"
+    return template.format(
+        work_id=work_id,
+        target_description=target_description,
+        boundary_rule=boundary_rule,
+        user_message=user_message,
+    )
 
 
 async def _evaluation_agent_node(state: EvaluationState) -> dict:
@@ -45,7 +67,8 @@ async def _evaluation_agent_node(state: EvaluationState) -> dict:
     if not has_system:
         system_prompt = _build_evaluation_system_prompt(
             work_id=state.get("work_id", ""),
-            chapter_number=state.get("chapter_number", 0),
+            chapter_number=state.get("chapter_number"),
+            user_message=state.get("user_message", ""),
         )
         full_messages = [SystemMessage(content=system_prompt)] + messages
     else:
@@ -101,9 +124,11 @@ class EvaluationAgent:
         *,
         db: Session,
         work_id: str,
-        chapter_number: int,
+        chapter_number: int | None = None,
+        user_message: str = "",
         chapter_content_override: str = "",
         history: list[str] | None = None,
+        base_configurable: dict | None = None,
     ) -> tuple[str, str, str, str]:
         """评估章节 — 通过 Tool-Calling 让 LLM 自主选择工具完成评估。
 
@@ -116,23 +141,31 @@ class EvaluationAgent:
         from app.models.work_model import Chapter
 
         graph = self._build_graph()
+        configurable = dict(base_configurable or {})
+        configurable.update({
+            "db": db,
+            "emit": configurable.get("emit") or (lambda e, d: None),
+            "work_id": work_id,
+            "chapter_number": chapter_number,
+        })
         config = {
-            "configurable": {
-                "db": db,
-                "emit": lambda e, d: None,
-                "work_id": work_id,
-                "chapter_number": chapter_number,
-            },
+            "configurable": configurable,
             "recursion_limit": 100,
         }
 
-        user_msg = f"请评估第{chapter_number}章"
+        if user_message.strip():
+            user_msg = user_message.strip()
+        elif chapter_number is not None:
+            user_msg = f"请评估第{chapter_number}章"
+        else:
+            user_msg = "请按 Supervisor 下派任务评估目标章节。"
         if chapter_content_override:
-            user_msg += f"，以下是正文：\n{chapter_content_override}"
+            user_msg += f"\n\n以下是正文草稿：\n{chapter_content_override}"
 
         system_prompt = _build_evaluation_system_prompt(
             work_id=work_id,
             chapter_number=chapter_number,
+            user_message=user_msg,
         )
 
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_msg)]
@@ -145,6 +178,7 @@ class EvaluationAgent:
             "work_id": work_id,
             "chapter_number": chapter_number,
             "chapter_content_override": chapter_content_override,
+            "user_message": user_msg,
         }
 
         final_state = await graph.ainvoke(initial_state, config=config)
@@ -164,7 +198,11 @@ class EvaluationAgent:
                     elif msg.name == "evaluate_chapter_outline_sync":
                         sync_text = msg.content or ""
 
-        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-        title = chapter.title if chapter else f"第{chapter_number}章"
+        title = "章节评估"
+        if chapter_number is not None:
+            chapter = db.query(Chapter).filter_by(
+                work_id=work_id, chapter_number=chapter_number
+            ).first()
+            title = chapter.title if chapter else f"第{chapter_number}章"
 
         return title, editor_text, reader_text, sync_text

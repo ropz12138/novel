@@ -127,6 +127,24 @@ def _ensure_columns(engine) -> None:
         ))
         conn.commit()
 
+        # task_items 新增可执行字段
+        for col_name, col_type in [
+            ("parent_id", "VARCHAR(36) REFERENCES task_items(id) ON DELETE CASCADE"),
+            ("depth", "INTEGER NOT NULL DEFAULT 0"),
+            ("agent_scope", "VARCHAR(50) NOT NULL DEFAULT 'supervisor'"),
+            ("task_type", "VARCHAR(50) NOT NULL DEFAULT ''"),
+            ("dispatch_tool", "VARCHAR(80) NOT NULL DEFAULT ''"),
+            ("instruction", "TEXT NOT NULL DEFAULT ''"),
+            ("error_message", "TEXT NOT NULL DEFAULT ''"),
+            ("started_at", "TIMESTAMPTZ"),
+            ("completed_at", "TIMESTAMPTZ"),
+        ]:
+            if not _column_exists("task_items", col_name):
+                conn.execute(text(
+                    f"ALTER TABLE task_items ADD COLUMN {col_name} {col_type}"
+                ))
+                conn.commit()
+
 
 def get_db():
     db = SessionLocal()

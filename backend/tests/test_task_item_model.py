@@ -25,6 +25,8 @@ class TestTaskItemModel:
             "id", "session_id", "task_id", "task_description",
             "owner", "status", "depends_on", "done_criteria",
             "result_summary", "sort_order", "created_at", "updated_at",
+            "task_type", "dispatch_tool", "instruction",
+            "error_message", "started_at", "completed_at",
         }
         assert columns == expected
 

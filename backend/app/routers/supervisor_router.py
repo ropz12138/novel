@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
+from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.auth import get_current_user
 from app.core.database import SessionLocal, get_db
@@ -32,6 +33,11 @@ PERSISTABLE_EVENTS = frozenset({
     "character_edit_diff",
     "chapter_metadata_diff",
     "chapter_metadata_generated",
+    "todolist_generated",
+    "subtasks_created",
+    "task_status_updated",
+    "todolist_readiness_updated",
+    "supervisor_runtime_event",
 })
 
 
@@ -186,6 +192,128 @@ def persist_event_message(db: Session, session_id: str, event: str, data: dict) 
         )
         return True
 
+    if event == "todolist_generated":
+        message_service.create_message(
+            db,
+            session_id=session_id,
+            role="assistant",
+            content="",
+            work_id=sess.work_id,
+            sort_order=next_order,
+            meta={
+                "type": "requirements_todolist",
+                "event": event,
+                "todoCard": {
+                    "intent_summary": data.get("intent_summary", ""),
+                    "todolist": data.get("todolist", []),
+                    "ready_to_execute": data.get("ready_to_execute", False),
+                },
+            },
+        )
+        return True
+
+    if event == "subtasks_created":
+        all_msgs = message_service.get_messages_by_session(db, session_id)
+        existing_msg = None
+        for m in reversed(all_msgs):
+            if (
+                m.role == "assistant"
+                and m.meta
+                and m.meta.get("type") == "requirements_todolist"
+                and m.meta.get("todoCard")
+            ):
+                existing_msg = m
+                break
+
+        if not existing_msg:
+            return False
+
+        todo_card = existing_msg.meta.get("todoCard", {})
+        todolist = todo_card.setdefault("todolist", [])
+        known_ids = {t.get("db_id") for t in todolist if isinstance(t, dict)}
+        for subtask in data.get("subtasks", []):
+            if subtask.get("db_id") not in known_ids:
+                todolist.append(subtask)
+                known_ids.add(subtask.get("db_id"))
+        flag_modified(existing_msg, "meta")
+        db.commit()
+        return True
+
+    if event == "task_status_updated":
+        # 方案 B：原地更新最近一条 requirements_todolist message 中对应任务的状态
+        all_msgs = message_service.get_messages_by_session(db, session_id)
+        existing_msg = None
+        for m in reversed(all_msgs):
+            if (
+                m.role == "assistant"
+                and m.meta
+                and m.meta.get("type") == "requirements_todolist"
+                and m.meta.get("todoCard")
+            ):
+                existing_msg = m
+                break
+
+        if not existing_msg:
+            return False
+
+        todo_card = existing_msg.meta.get("todoCard", {})
+        todolist = todo_card.get("todolist", [])
+        target_id = data.get("task_item_id")
+        updated = False
+        for t in todolist:
+            if t.get("db_id") == target_id:
+                t["status"] = data.get("new_status", t.get("status"))
+                if data.get("result_summary"):
+                    t["result_summary"] = data["result_summary"]
+                if data.get("error_message"):
+                    t["error_message"] = data["error_message"]
+                updated = True
+                break
+
+        if updated:
+            flag_modified(existing_msg, "meta")
+            db.commit()
+        return True
+
+    if event == "todolist_readiness_updated":
+        all_msgs = message_service.get_messages_by_session(db, session_id)
+        existing_msg = None
+        for m in reversed(all_msgs):
+            if (
+                m.role == "assistant"
+                and m.meta
+                and m.meta.get("type") == "requirements_todolist"
+                and m.meta.get("todoCard")
+            ):
+                existing_msg = m
+                break
+
+        if not existing_msg:
+            return False
+
+        todo_card = existing_msg.meta.get("todoCard", {})
+        todo_card["ready_to_execute"] = data.get("ready_to_execute", False)
+        flag_modified(existing_msg, "meta")
+        db.commit()
+        return True
+
+    if event == "supervisor_runtime_event":
+        message_service.create_message(
+            db,
+            session_id=session_id,
+            role="assistant",
+            content="",
+            work_id=sess.work_id,
+            sort_order=next_order,
+            meta={
+                "type": "supervisor_runtime_event",
+                "run_id": data.get("run_id", ""),
+                "event": data.get("event", ""),
+                "payload": data.get("payload", {}),
+            },
+        )
+        return True
+
     return False
 
 
@@ -326,7 +454,23 @@ def confirm_action(
 
     child = session.active_child
     action_type = child.get("type")
+    task_item_id = child.get("task_item_id")
     next_order = message_service.get_next_sort_order(db, session.id)
+
+    # Helper: 更新关联 TaskItem 状态
+    def _update_linked_task(new_status: str, result_summary: str = "", error_message: str = ""):
+        if not task_item_id:
+            return
+        from app.models.task_item_model import TaskItem
+        task = db.query(TaskItem).filter_by(id=task_item_id).first()
+        if task and task.status == "in_progress":
+            task.status = new_status
+            if result_summary:
+                task.result_summary = result_summary
+            if error_message:
+                task.error_message = error_message
+            from datetime import datetime, timezone
+            task.completed_at = datetime.now(timezone.utc)
 
     if action_type == "edit_chapter":
         work_id = child.get("work_id")
@@ -359,6 +503,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("completed", f"第{chapter_number}章修改已保存")
             db.commit()
             return {"status": "accepted", "chapter_number": chapter_number}
         else:
@@ -376,6 +521,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("failed", f"第{chapter_number}章修改被用户拒绝")
             db.commit()
             return {"status": "rejected", "chapter_number": chapter_number}
 
@@ -398,6 +544,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("completed", "大纲修改已保存")
             db.commit()
             return {"status": "accepted", "type": "edit_outline"}
         else:
@@ -416,6 +563,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("failed", "大纲修改被用户拒绝")
             db.commit()
             return {"status": "rejected", "type": "edit_outline"}
 
@@ -443,6 +591,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("completed", "需求与任务清单已确认")
             db.commit()
             return {"status": "accepted", "type": "requirements_planner"}
         else:
@@ -461,6 +610,7 @@ def confirm_action(
             session.status = "completed"
             session.stage = "done"
             session.active_child = None
+            _update_linked_task("failed", "需求与任务清单被用户拒绝")
             db.commit()
             return {"status": "rejected", "type": "requirements_planner"}
 
@@ -491,10 +641,14 @@ def _launch_supervisor_task(
         )
         if event == "session_created":
             current_session_id = data.get("session_id")
-        if current_session_id and run_db is not None and isinstance(data, dict):
+        if current_session_id and isinstance(data, dict):
             try:
                 if event in PERSISTABLE_EVENTS:
-                    persist_event_message(run_db, current_session_id, event, data)
+                    persist_db = SessionLocal()
+                    try:
+                        persist_event_message(persist_db, current_session_id, event, data)
+                    finally:
+                        persist_db.close()
             except Exception:
                 logger.exception("persist supervisor event failed: %s", event)
         queue.put_nowait((event, data))

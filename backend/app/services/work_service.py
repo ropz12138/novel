@@ -464,35 +464,35 @@ class WorkService:
 
         self.outline_tool_llm = outline_model.bind_tools(
             [SUBMIT_OUTLINE_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_story_llm = outline_model.bind_tools(
             [SUBMIT_STORY_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_timeline_llm = outline_model.bind_tools(
             [SUBMIT_TIMELINE_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_character_briefs_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_BRIEFS_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_character_details_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_DETAILS_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_branches_llm = outline_model.bind_tools(
             [SUBMIT_BRANCHES_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_foreshadowing_llm = outline_model.bind_tools(
             [SUBMIT_FORESHADOWING_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         self.outline_character_links_llm = outline_model.bind_tools(
             [SUBMIT_CHARACTER_LINKS_TOOL],
-            max_tokens=393216,
+            max_tokens=131072,
         )
         # NOTE: chat_edit_model (with_structured_output) removed — chat_edit / chat_edit_async
         # now use native Tool-Calling via self.chat_model.bind_tools(ALL_OUTLINE_TOOLS).
@@ -609,7 +609,7 @@ class WorkService:
                     f"story：{json.dumps(story, ensure_ascii=False)}\n"
                     f"{_QUOTE_CONSTRAINT}"
                     "必须调用 submit_timeline，不要输出普通文本。"
-                    "timeline 节点数量控制在 6-10。"
+                    "timeline 节点数量由用户需求决定，无特殊约束时按故事复杂度自行决定。"
                     "每个 summary 控制在 80 字以内。"
                     "节点按 order 递增。"
                 ),
@@ -629,39 +629,51 @@ class WorkService:
                     "必须调用 submit_character_briefs，不要输出普通文本。\n"
                     "为每个角色提供 name、role_type、gender、age、first_chapter、brief。\n"
                     "brief 是一句话角色定位，如'与主角共同成长的挚友'。\n"
-                    "角色数量控制在 8-15 个，必须包含主角和主要反派。"
+                    "角色数量按故事需要与用户约束设置，优先列出会影响主线推进或长期出场的核心角色。"
                 ),
                 "submit_character_briefs",
                 "briefs",
             )
 
             BATCH_SIZE = 4
-            all_details: list[dict] = []
-
+            DETAIL_CONCURRENCY = 3
+            detail_batches: list[tuple[int, list[dict]]] = []
             for batch_start in range(0, len(briefs), BATCH_SIZE):
                 batch_briefs = briefs[batch_start : batch_start + BATCH_SIZE]
                 batch_num = batch_start // BATCH_SIZE + 1
-                total_batches = (len(briefs) + BATCH_SIZE - 1) // BATCH_SIZE
+                detail_batches.append((batch_num, batch_briefs))
 
-                _status("generating_character_details", f"正在生成角色详情（{batch_num}/{total_batches}）...")
+            total_batches = len(detail_batches)
+            detail_semaphore = asyncio.Semaphore(DETAIL_CONCURRENCY)
 
-                details = await _ainvoke_section(
-                    self.outline_character_details_llm,
-                    (
-                        "你是网络小说策划编辑。请为以下角色填充详细描述。\n"
-                        f"{requirement_context}"
-                        f"story：{json.dumps(story, ensure_ascii=False)}\n"
-                        f"timeline：{_compact(timeline, limit=12)}\n"
-                        f"全部角色概览：{json.dumps(briefs, ensure_ascii=False)}\n"
-                        f"本批次需要填充的角色：{json.dumps(batch_briefs, ensure_ascii=False)}\n"
-                        f"{_QUOTE_CONSTRAINT}"
-                        "必须调用 submit_character_details，不要输出普通文本。\n"
-                        "为每个角色填充 appearance/personality/background/skills/current_status/current_goal。\n"
-                        "角色字段必须是故事开始前状态。"
-                    ),
-                    "submit_character_details",
-                    "characters",
-                )
+            async def _generate_character_detail_batch(batch_num: int, batch_briefs: list[dict]) -> list[dict]:
+                async with detail_semaphore:
+                    _status("generating_character_details", f"正在生成角色详情（{batch_num}/{total_batches}）...")
+                    return await _ainvoke_section(
+                        self.outline_character_details_llm,
+                        (
+                            "你是网络小说策划编辑。请为以下角色填充详细描述。\n"
+                            f"{requirement_context}"
+                            f"story：{json.dumps(story, ensure_ascii=False)}\n"
+                            f"timeline：{_compact(timeline, limit=12)}\n"
+                            f"全部角色概览：{json.dumps(briefs, ensure_ascii=False)}\n"
+                            f"本批次需要填充的角色：{json.dumps(batch_briefs, ensure_ascii=False)}\n"
+                            f"{_QUOTE_CONSTRAINT}"
+                            "必须调用 submit_character_details，不要输出普通文本。\n"
+                            "为每个角色填充 appearance/personality/background/skills/current_status/current_goal。\n"
+                            "角色字段必须是故事开始前状态。"
+                        ),
+                        "submit_character_details",
+                        "characters",
+                    )
+
+            detail_results = await asyncio.gather(*[
+                _generate_character_detail_batch(batch_num, batch_briefs)
+                for batch_num, batch_briefs in detail_batches
+            ])
+
+            all_details: list[dict] = []
+            for details in detail_results:
                 all_details.extend(details)
 
             detail_map = {d["name"]: d for d in all_details}
@@ -709,7 +721,7 @@ class WorkService:
                     f"branches：{_compact(branches, limit=12)}\n"
                     f"{_QUOTE_CONSTRAINT}"
                     "必须调用 submit_foreshadowing，不要输出普通文本。"
-                    "foreshadowing 数量控制在 6-16。"
+                    "foreshadowing 数量由用户需求决定，无特殊约束时按故事复杂度自行决定。"
                     "content 控制在 40 字以内。"
                     "每条伏笔需有 plant_node 和 payoff_node。"
                 ),
@@ -733,7 +745,7 @@ class WorkService:
                     "每条记录必须包含 character_name、timeline_id、link_type。"
                     "timeline_id 必须引用已有 timeline.id。"
                     "link_type 只能是: appear, lead, conflict, ally, foreshadow_trigger, foreshadow_payoff。"
-                    "character_links 数量控制在 8-24。"
+                    "character_links 数量由角色和剧情关联决定，无特殊约束时按实际关系自行生成。"
                     "summary 可为空，若填写控制在 30 字以内。"
                 ),
                 "submit_character_links",
