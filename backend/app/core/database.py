@@ -85,6 +85,13 @@ def _ensure_columns(engine) -> None:
             ))
             conn.commit()
 
+        # supervisor_sessions.interrupted
+        if not _column_exists("supervisor_sessions", "interrupted"):
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN interrupted BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
         # chapter_metadata（兼容历史库：若 create_all 时机错过，这里兜底创建）
         conn.execute(text(
             """

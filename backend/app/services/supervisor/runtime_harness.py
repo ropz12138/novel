@@ -174,7 +174,7 @@ def build_supervisor_runtime_context(
     next_task_info = ""
     if next_task:
         next_task_info = (
-            f"\n下一条可执行任务: T{next_task.task_id} - {next_task.task_description[:50]}"
+            f"\n下一条可执行任务: T{next_task.task_id} - {next_task.task_description}"
             f" (owner: {next_task.owner}, tool: {next_task.dispatch_tool or 'N/A'})"
         )
 

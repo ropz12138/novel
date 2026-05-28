@@ -478,7 +478,7 @@ def read_chat_history(limit: int, config: RunnableConfig, session_id: str | None
 
     parts = []
     for m in recent:
-        parts.append(f"[{m.role}] {m.content[:200]}")
+        parts.append(f"[{m.role}] {m.content}")
 
     emit("requirements_history_read", {"count": len(recent)})
     return "\n".join(parts)
@@ -645,10 +645,10 @@ async def _analyze_requirements_coroutine(
         })
 
     if questions:
-        return f"需求分析完成。发现 {len(questions)} 个需要澄清的问题。\n" + "\n".join(f"- {q}" for q in questions[:5])
+        return f"需求分析完成。发现 {len(questions)} 个需要澄清的问题。\n" + "\n".join(f"- {q}" for q in questions)
 
     task_lines = []
-    for pt in persisted_tasks[:8]:
+    for pt in persisted_tasks:
         task_lines.append(
             f"- [{pt['task_id']}] {pt['task']} (db_id={pt['db_id']}, 状态={pt['status']}, 派发={pt['dispatch_tool']})"
         )
@@ -714,7 +714,7 @@ def update_task_status(task_item_id: str, status: str, result_summary: str, conf
         "result_summary": result_summary or task.result_summary,
     })
 
-    return f"任务 {task.task_id}（{task.task_description[:50]}）状态已更新：{old_status} -> {status}"
+    return f"任务 {task.task_id}（{task.task_description}）状态已更新：{old_status} -> {status}"
 
 
 @tool(args_schema=UpdateTodolistReadinessInput)
@@ -865,7 +865,7 @@ def _guard_direct_dispatch_todolist(tool_name: str, config: RunnableConfig, db: 
     if blocked.status == "failed":
         return (
             f"工具策略拦截：当前会话存在失败任务 {blocked.task_id}"
-            f"（{blocked.task_description[:50]}）。"
+            f"（{blocked.task_description}）。"
             "请先向用户反馈失败原因，或重新调用 analyze_requirements 生成新的 todolist，"
             f"不要直接调用 {tool_name}。"
         )
@@ -873,14 +873,14 @@ def _guard_direct_dispatch_todolist(tool_name: str, config: RunnableConfig, db: 
     if blocked.status == "in_progress":
         return (
             f"工具策略拦截：当前会话存在执行中任务 {blocked.task_id}"
-            f"（{blocked.task_description[:50]}）。"
+            f"（{blocked.task_description}）。"
             "请等待 execute_todo_task 返回结果，"
             f"不要并行直接调用 {tool_name}。"
         )
 
     return (
         f"工具策略拦截：当前会话仍有待执行任务 {blocked.task_id}"
-        f"（{blocked.task_description[:50]}）。"
+        f"（{blocked.task_description}）。"
         f"请调用 execute_todo_task(task_item_id=\"{blocked.task_id}\")，"
         f"不要直接调用 {tool_name}。"
     )
@@ -977,7 +977,7 @@ async def _dispatch_outline_coroutine(message: str, config: RunnableConfig, work
         if result.get("error"):
             return f"编辑大纲失败：{result.get('message', result.get('error', '未知错误'))}"
 
-        _store_memory(memories, "outline", f"编辑大纲 work_id={work_id}：{result.get('message', '')[:300]}")
+        _store_memory(memories, "outline", f"编辑大纲 work_id={work_id}：{result.get('message', '')}")
 
         if auto_mode:
             return result.get("message", "大纲编辑已完成。")
@@ -1391,7 +1391,7 @@ async def _dispatch_evaluation_coroutine(
         return f"评估失败：{exc}"
 
     # 存入子 agent 记忆
-    summary = f"第{chapter_number}章「{title}」编辑评估：{editor_text[:500]}；读者评估：{reader_text[:500]}；同步性：{sync_text[:300]}"
+    summary = f"第{chapter_number}章「{title}」编辑评估：{editor_text}；读者评估：{reader_text}；同步性：{sync_text}"
     _store_memory(memories, "evaluation", summary)
 
     emit("evaluation_done", {
@@ -1404,9 +1404,9 @@ async def _dispatch_evaluation_coroutine(
 
     return (
         f"第{chapter_number}章「{title}」评估完成。\n"
-        f"【编辑视角】{editor_text[:800]}\n"
-        f"【读者视角】{reader_text[:800]}\n"
-        f"【同步性】{sync_text[:800]}"
+        f"【编辑视角】{editor_text}\n"
+        f"【读者视角】{reader_text}\n"
+        f"【同步性】{sync_text}"
     )
 
 
@@ -1451,7 +1451,7 @@ async def _dispatch_writing_expert_coroutine(
         logger.exception("dispatch_writing_expert failed: %s", exc)
         return f"写作专家建议生成失败：{exc}"
 
-    _store_memory(memories, "writing_expert", f"写作建议({problem_type})：{str(result.get('recommended_pick', {}))[:300]}")
+    _store_memory(memories, "writing_expert", f"写作建议({problem_type})：{str(result.get('recommended_pick', {}))}")
 
     recommended = result.get("recommended_pick", {})
     options = result.get("options", [])

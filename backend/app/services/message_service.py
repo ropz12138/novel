@@ -99,7 +99,7 @@ def get_session_title(db: Session, session_id: str) -> str:
         return "新对话"
     text = msg.content.replace("\n", " ")
     if len(text) > 50:
-        return text[:50] + "..."
+        return text
     return text
 
 

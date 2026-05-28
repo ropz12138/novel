@@ -8,13 +8,9 @@ from sqlalchemy.orm import Session
 from app.core.auth import get_current_user
 from app.core.database import get_db
 from app.controllers.work_controller import (
-    chat_edit,
-    chapter_chat_edit,
     delete_work,
     delete_last_chapter,
-    generate_chapter,
     get_chapter_intel,
-    generate_outline,
     get_chapter,
     get_work,
     list_chapters,
@@ -24,16 +20,10 @@ from app.controllers.work_controller import (
 )
 from app.models.work_model import User
 from app.schemas.work_schema import (
-    ChapterChatRequest,
-    ChapterChatResponse,
-    ChapterGenerateResponse,
     ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
     ChapterUpdateRequest,
-    ChatEditRequest,
-    ChatEditResponse,
-    OutlineGenerateResponse,
     OutlineQuickGenerateRequest,
     OutlineUpdateRequest,
     WorkOut,
@@ -44,15 +34,6 @@ router = APIRouter(prefix="/works", tags=["works"])
 
 def _sse_format(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
-
-
-@router.post("/generate-outline", response_model=OutlineGenerateResponse)
-def generate_outline_api(
-    payload: OutlineQuickGenerateRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return generate_outline(payload, db, user_id=current_user.id)
 
 
 @router.post("/generate-outline-stream")
@@ -125,16 +106,6 @@ def update_outline_api(
     return update_outline(work_id, payload, db, user_id=current_user.id)
 
 
-@router.post("/{work_id}/chat", response_model=ChatEditResponse)
-def chat_edit_api(
-    work_id: str,
-    payload: ChatEditRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return chat_edit(work_id, payload, db, user_id=current_user.id)
-
-
 @router.delete("/{work_id}", status_code=204)
 def delete_work_api(
     work_id: str,
@@ -180,27 +151,6 @@ def delete_last_chapter_api(
     current_user: User = Depends(get_current_user),
 ):
     return delete_last_chapter(work_id, db, user_id=current_user.id)
-
-
-@router.post("/{work_id}/chapters/{chapter_number}/generate", response_model=ChapterGenerateResponse)
-def generate_chapter_api(
-    work_id: str,
-    chapter_number: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return generate_chapter(work_id, chapter_number, db, user_id=current_user.id)
-
-
-@router.post("/{work_id}/chapters/{chapter_number}/chat", response_model=ChapterChatResponse)
-def chapter_chat_edit_api(
-    work_id: str,
-    chapter_number: int,
-    payload: ChapterChatRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return chapter_chat_edit(work_id, chapter_number, payload, db, user_id=current_user.id)
 
 
 @router.put("/{work_id}/chapters/{chapter_number}", response_model=ChapterOut)

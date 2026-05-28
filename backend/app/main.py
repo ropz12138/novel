@@ -8,14 +8,11 @@ from app.core.database import init_db
 from app.core.observability import setup_langsmith
 from app.routers import (
     auth_router,
-    agent_log_router,
-    agent_router,
     character_router,
     evaluation_router,
     session_router,
     supervisor_router,
     work_router,
-    writing_library_router,
 )
 
 logging.basicConfig(
@@ -49,13 +46,10 @@ app.add_middleware(
 
 app.include_router(auth_router.router, prefix="/api")
 app.include_router(work_router.router, prefix="/api")
-app.include_router(agent_router.router, prefix="/api")
 app.include_router(character_router.router, prefix="/api")
-app.include_router(agent_log_router.router, prefix="/api")
 app.include_router(supervisor_router.router, prefix="/api")
 app.include_router(session_router.router, prefix="/api")
 app.include_router(evaluation_router.router, prefix="/api")
-app.include_router(writing_library_router.router, prefix="/api")
 
 
 @app.get("/health")

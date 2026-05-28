@@ -218,8 +218,8 @@ class SupervisorAgent:
                     logger.debug(
                         "supervisor.agent_node chunk#%d content=%s tool_call_chunks=%s",
                         chunk_count,
-                        repr(chunk_content)[:300] if chunk_content else "(empty)",
-                        repr(chunk_tc)[:300] if chunk_tc else "(none)",
+                        repr(chunk_content) if chunk_content else "(empty)",
+                        repr(chunk_tc) if chunk_tc else "(none)",
                     )
 
             stream_elapsed_ms = (time.perf_counter() - t_stream) * 1000
@@ -243,7 +243,7 @@ class SupervisorAgent:
                 if agg_content_len == 0 and agg_tc == 0:
                     logger.warning(
                         "supervisor.agent_node empty_output aggregated_repr=%s",
-                        repr(aggregated)[:1000],
+                        repr(aggregated),
                     )
 
             if aggregated is None:
@@ -389,7 +389,7 @@ class SupervisorAgent:
                             tool_msgs = node_output.get("messages", [])
                             for tm in tool_msgs:
                                 content = tm.content if hasattr(tm, "content") else str(tm)
-                                self.emit("tool_result", {"content": str(content)[:500]})
+                                self.emit("tool_result", {"content": str(content)})
 
                             # tools 执行后检查是否需要等待用户
                             self.db.flush()
@@ -404,6 +404,17 @@ class SupervisorAgent:
                                 )
 
                     final_state = node_output
+
+                    # 中断检查：每个节点完成后检查是否被用户标记中断
+                    self.db.refresh(session)
+                    if session.interrupted:
+                        logger.info("supervisor._run_graph interrupted session_id=%s", session.id)
+                        session.status = "interrupted"
+                        session.stage = "done"
+                        self.db.flush()
+                        self.emit("supervisor_interrupted", {"message": "任务已被用户中断"})
+                        break
+
                     # 只在 agent 节点后退出，确保 Supervisor 生成最终回复
                     if pending_stop and node_name == "agent":
                         break
@@ -429,6 +440,12 @@ class SupervisorAgent:
                 last = final_messages[-1]
                 if isinstance(last, AIMessage):
                     assistant_content = last.content or ""
+
+            # 中断时跳过正常完成逻辑，直接返回
+            if session.interrupted:
+                logger.info("supervisor._run_graph returning_interrupted_state session_id=%s", session.id)
+                self.emit("supervisor_done", {"message": "（任务已被中断）"})
+                return {"message": "（任务已被中断）"}
 
             # 中间过程写入 messages 表（仅持久化本轮新增切片）
             self._save_intermediate_messages(
@@ -549,7 +566,7 @@ class SupervisorAgent:
                     db,
                     session_id=session.id,
                     role="tool_result",
-                    content=str(content)[:500],
+                    content=str(content),
                     work_id=self.work_id,
                     sort_order=next_order,
                     meta={
@@ -565,7 +582,7 @@ class SupervisorAgent:
             messages = node_output.get("messages", [])
             for msg in messages:
                 tool_name = getattr(msg, "name", "unknown")
-                content_preview = str(getattr(msg, "content", ""))[:200]
+                content_preview = str(getattr(msg, "content", ""))
                 logger.info(
                     "supervisor.tool_result tool=%s content_preview=%s",
                     tool_name, content_preview,

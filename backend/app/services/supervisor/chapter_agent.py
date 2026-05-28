@@ -244,7 +244,7 @@ class ChapterAgent:
                         self.emit("tool_result", {
                             "tool_name": getattr(tm, "name", "unknown"),
                             "tool_call_id": getattr(tm, "tool_call_id", ""),
-                            "content": str(content)[:500],
+                            "content": str(content),
                         })
                     continue
                 if not isinstance(node_output, dict):

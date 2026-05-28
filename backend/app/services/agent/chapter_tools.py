@@ -267,9 +267,8 @@ def query_previous_chapters(
 
         parts = [f"第{target_ch}章前文："]
         for ch in prev_chapters:
-            summary = ch.content[:800] + ("..." if len(ch.content) > 800 else "")
-            parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
-            emit("query_result", {"source": f"第{ch.chapter_number}章", "summary": summary[:200]})
+            parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{ch.content}")
+            emit("query_result", {"source": f"第{ch.chapter_number}章", "summary": ch.content})
         blocks.append("\n\n".join(parts))
 
     return "\n\n".join(blocks)
@@ -583,11 +582,13 @@ generate_chapter_content = StructuredTool.from_function(
     coroutine=_generate_chapter_content_coroutine,
     name="generate_chapter_content",
     description=(
-        "调用 LLM 生成章节正文，并自动保存到数据库（已保存状态）。"
-        "在调用前，应先用其他工具查询大纲、前文、角色等上下文信息。"
-        "传入所有收集到的上下文和用户要求，返回完整的章节正文。"
-        "重要约束：只能创建当前最大章节号+1的下一章（若尚无章节则为第1章），不允许跳章或重复创建。"
-        "如果目标章节已存在，请使用编辑工具，不要调用本工具。"
+        "【仅限创建新章节】调用 LLM 生成章节正文，并自动保存到数据库。"
+        "本工具只能用于创建全新的章节——即当前最大章节号+1 的下一章（若尚无章节则为第1章）。"
+        "严禁对已有章节调用本工具，否则会返回错误。"
+        "如果目标章节已存在（即使内容不满意、需要重写、或被截断），"
+        "必须使用 rewrite_chapter（全量重写）或 generate_patch_edit（局部修改）或 save_chapter（直接覆盖保存）。"
+        "调用前应先用 query_outline / query_chapter_outline / query_previous_chapters / query_characters 等工具收集上下文。"
+        "必须显式传入 story_info、chapter_outline、context_pack、previous_chapters，不可留空。"
     ),
     args_schema=GenerateChapterContentInput,
 )
@@ -677,7 +678,7 @@ async def _update_characters_after_chapter_coroutine(
         ai_msg = await chain.ainvoke({
             "chapter_number": str(chapter_number),
             "chapter_title": f"第{chapter_number}章",
-            "chapter_content": chapter_content[:3000],
+            "chapter_content": chapter_content,
             "characters": char_text,
         })
         raw_text = getattr(ai_msg, "content", str(ai_msg))

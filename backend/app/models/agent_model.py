@@ -60,5 +60,8 @@ class SupervisorSession(Base):
     # 当前执行中的子 Agent 会话信息
     active_child: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
+    # 用户主动中断标志：Supervisor 循环中每个节点后检查
+    interrupted: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)

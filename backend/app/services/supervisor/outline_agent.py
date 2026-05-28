@@ -251,7 +251,7 @@ class OutlineAgent:
                         tool_msgs = node_output.get("messages", [])
                         for tm in tool_msgs:
                             content = tm.content if hasattr(tm, "content") else str(tm)
-                            self.emit("tool_result", {"content": str(content)[:500]})
+                            self.emit("tool_result", {"content": str(content)})
                 final_state = node_output
 
             if auto_mode:

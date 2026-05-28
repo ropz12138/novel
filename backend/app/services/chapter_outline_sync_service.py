@@ -160,7 +160,7 @@ def _execute_submit_from_tool_call(ai_msg: Any) -> ChapterMetadataOutput:
         _submit_chapter_metadata_tool(**args)
         return ChapterMetadataOutput.model_validate(args)
 
-    preview = _message_text(ai_msg)[:500]
+    preview = _message_text(ai_msg)
     raise ValueError(
         "章节元数据生成失败：模型未调用 submit_chapter_metadata 工具。"
         f"模型输出预览：{preview}"
@@ -196,7 +196,7 @@ class ChapterOutlineSyncService:
         summary_lines: list[str] = []
         for ch in chapters:
             meta_summary = (meta_map.get(ch.chapter_number).summary if meta_map.get(ch.chapter_number) else "") or ""
-            summary = meta_summary.strip() or (ch.content or "").strip()[:120]
+            summary = meta_summary.strip() or (ch.content or "").strip()
             summary_lines.append(f"- 第{ch.chapter_number}章：{summary}")
 
         fact_lines: list[str] = []
@@ -208,7 +208,7 @@ class ChapterOutlineSyncService:
             .all()
         )
         for m in recent_meta:
-            for f in (m.facts or [])[:6]:
+            for f in (m.facts or []):
                 if isinstance(f, dict):
                     key = str(f.get("key", "")).strip()
                     val = str(f.get("value", "")).strip()
@@ -226,8 +226,7 @@ class ChapterOutlineSyncService:
             )
             for ch in selected:
                 excerpt = (ch.content or "").strip()
-                if len(excerpt) > 280:
-                    excerpt = excerpt[:280] + "..."
+                # 不截断，保留完整内容
                 excerpt_lines.append(f"- 第{ch.chapter_number}章原文片段：{excerpt}")
 
         outline = _as_dict(work.outline_tree) if work else {}

@@ -471,6 +471,13 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
         setRunning(false);
         break;
 
+      case "supervisor_interrupted":
+        finalizeLastRunningStep();
+        freezeDraft();
+        addMessage("system", "任务已被中断", { type: "interrupted" });
+        setRunning(false);
+        break;
+
       default:
         break;
     }
@@ -570,6 +577,23 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
   }, [running, input, addMessage, connectSSE, workId, autoMode]);
 
   // ── Confirm handlers ──
+
+  const handleInterrupt = useCallback(async () => {
+    if (!sessionId || !running) return;
+    try {
+      const res = await authFetch(`${API_BASE}/supervisor/interrupt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ session_id: sessionId }),
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        addMessage("system", `中断失败: ${data.detail || `HTTP ${res.status}`}`, { type: "error" });
+      }
+    } catch (err) {
+      addMessage("system", `中断请求失败: ${err.message}`, { type: "error" });
+    }
+  }, [sessionId, running, addMessage]);
 
   const handleConfirmEdit = useCallback(async (action, targetDiff = null) => {
     const diffTarget = targetDiff || editDiff;
@@ -821,6 +845,7 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
     freezeDraft,
     // actions
     handleSend,
+    handleInterrupt,
     handleConfirmEdit,
     handleConfirmOutline,
     handleSelectSession,

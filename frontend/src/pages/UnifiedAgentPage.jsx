@@ -4,11 +4,11 @@ import {
   ArrowLeft,
   BookOpen,
   ChevronDown,
-  Loader2,
   Send,
   Sparkles,
   Zap,
   Bot,
+  StopCircle,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
@@ -118,12 +118,6 @@ export function UnifiedAgentPage() {
             <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-600">
               <Zap className="h-3 w-3" />
               自动模式
-            </span>
-          )}
-          {chat.running && (
-            <span className="flex items-center gap-1.5 rounded-full bg-blue-50 px-2.5 py-1 text-xs text-blue-600">
-              <Loader2 className="h-3 w-3 animate-spin" />
-              处理中
             </span>
           )}
           {chat.sessionId && !chat.running && (
@@ -249,12 +243,12 @@ export function UnifiedAgentPage() {
               />
               <Button
                 size="icon"
-                className="h-11 w-11 shrink-0 rounded-full"
-                disabled={chat.running || !chat.input.trim()}
-                onClick={chat.handleSend}
-                aria-label="发送消息"
+                className={`h-11 w-11 shrink-0 rounded-full ${chat.running ? "bg-red-500 hover:bg-red-600" : ""}`}
+                disabled={!chat.running && !chat.input.trim()}
+                onClick={chat.running ? chat.handleInterrupt : chat.handleSend}
+                aria-label={chat.running ? "中断任务" : "发送消息"}
               >
-                {chat.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+                {chat.running ? <StopCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
               </Button>
             </div>
           </div>

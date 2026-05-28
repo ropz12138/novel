@@ -477,13 +477,13 @@ async def execute_todo_task(
     task_type = getattr(task, "task_type", "") or ""
     if task_type in ("clarify", "user_confirmation"):
         return (
-            f"任务 {task.task_id}（{task.task_description[:50]}）是用户澄清/确认任务，"
+            f"任务 {task.task_id}（{task.task_description}）是用户澄清/确认任务，"
             "不可自动执行。请等待用户补充信息，或重新生成可执行 todolist。"
         )
 
     # 2. 检查是否已在执行
     if task.status == "in_progress":
-        return f"任务 {task.task_id}（{task.task_description[:50]}）已在执行中，请勿重复执行。"
+        return f"任务 {task.task_id}（{task.task_description}）已在执行中，请勿重复执行。"
 
     # 3. 检查是否已是终态
     if task.status in ("completed", "skipped", "failed"):
@@ -564,16 +564,16 @@ async def execute_todo_task(
             final_status="failed",
             db=db,
             emit=emit,
-            result_summary=result_message[:200] if result_message else "",
-            error_message=result_message[:500] if result_message else "子 Agent 未完成任务",
+            result_summary=result_message if result_message else "",
+            error_message=result_message if result_message else "子 Agent 未完成任务",
         )
         set_task_status(
             task=task,
             status="failed",
             db=db,
             emit=emit,
-            result_summary=result_message[:200] if result_message else "",
-            error_message=result_message[:500] if result_message else "子 Agent 未完成任务",
+            result_summary=result_message if result_message else "",
+            error_message=result_message if result_message else "子 Agent 未完成任务",
         )
         return f"任务 {task.task_id} 执行失败：{result_message}"
 
@@ -584,7 +584,7 @@ async def execute_todo_task(
         if session and session.status == "waiting" and session.active_child:
             # 任务保持 in_progress，等待用户确认
             return (
-                f"任务 {task.task_id}（{task.task_description[:50]}）"
+                f"任务 {task.task_id}（{task.task_description}）"
                 f"已派发子 Agent，等待用户确认。"
             )
 
@@ -598,11 +598,12 @@ async def execute_todo_task(
     )
     set_task_status(
         task=task, status="completed", db=db, emit=emit,
-        result_summary=result_message[:200] if result_message else "",
+        result_summary=result_message if result_message else "",
     )
 
     return (
-        f"任务 {task.task_id}（{task.task_description[:50]}）执行完成。"
+        f"任务 {task.task_id}（{task.task_description}）执行完成。\n"
+        f"子 Agent 返回：{result_message}"
     )
 
 
@@ -845,7 +846,7 @@ async def _run_outline_task(
     _store_memory(
         memories,
         "outline",
-        f"编辑大纲 work_id={work_id}：{result.get('message', '')[:300]}",
+        f"编辑大纲 work_id={work_id}：{result.get('message', '')}",
     )
 
     if auto_mode:
@@ -943,11 +944,11 @@ async def _run_evaluation_task(
 
     summary = (
         f"「{title}」评估完成。"
-        f"【编辑视角】{editor_text[:800]}"
-        f"【读者视角】{reader_text[:800]}"
-        f"【同步性】{sync_text[:800]}"
+        f"【编辑视角】{editor_text}"
+        f"【读者视角】{reader_text}"
+        f"【同步性】{sync_text}"
     )
-    _store_memory(memories, "evaluation", summary[:1200])
+    _store_memory(memories, "evaluation", summary)
     emit(
         "evaluation_done",
         {

@@ -568,7 +568,7 @@ class WorkService:
                         tool_name,
                         i,
                         attempts,
-                        _llm_message_text(msg)[:500],
+                        _llm_message_text(msg),
                         getattr(msg, "tool_calls", None),
                         exc,
                     )
@@ -1420,7 +1420,7 @@ class WorkService:
         if prev_chapters:
             parts = []
             for ch in prev_chapters:
-                summary = ch.content[:800] + ("..." if len(ch.content) > 800 else "")
+                summary = ch.content
                 parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
             previous_text = "\n\n".join(parts)
         else:
@@ -1677,7 +1677,7 @@ class WorkService:
                       session_type="chapter_chat", role="assistant",
                       content=assistant_message, chapter_number=chapter_number,
                       meta={"proposed_title": proposed_title,
-                            "proposed_content_preview": (proposed_content or "")[:300]})
+                            "proposed_content_preview": (proposed_content or "")})
 
             return ChapterChatResponse(
                 assistant_message=assistant_message,

@@ -245,7 +245,7 @@ def apply_edits(original: str, edits: list[EditOperation]) -> PatchResult:
             failed_edits.append({
                 "index": i,
                 "type": edit.type,
-                "search": edit.search[:100] if edit.search else (edit.after[:100] if edit.after else ""),
+                "search": edit.search if edit.search else (edit.after if edit.after else ""),
                 "reason": "未找到匹配位置",
             })
 

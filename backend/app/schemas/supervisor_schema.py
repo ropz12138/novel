@@ -31,3 +31,8 @@ class SupervisorConfirmRequest(BaseModel):
     action: str = Field(description="accept / reject")
     # For edit_chapter: user may optionally provide modified new_content
     new_content: str | None = Field(default=None, description="用户修改后的正文（可选，不传则使用 Agent 生成的版本）")
+
+
+class SupervisorInterruptRequest(BaseModel):
+    """Interrupt a running supervisor session."""
+    session_id: str = Field(description="要中断的会话ID")

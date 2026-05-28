@@ -622,12 +622,26 @@ async def _sync_chapter_metadata_coroutine(
         "diff_summary": diff_result["summary"],
     })
 
-    return (
-        f"第{chapter_number}章元数据已同步。"
-        f"摘要：{(metadata_row.summary or '')[:100]}；"
-        f"关键情节 {len(metadata_row.key_plot_points or [])} 条；"
-        f"变更 {diff_result['summary']['total_changes']} 处。"
-    )
+    parts = [f"第{chapter_number}章元数据已同步。"]
+    parts.append(f"摘要：{metadata_row.summary or ''}")
+    if metadata_row.key_plot_points:
+        parts.append(f"关键情节：{'; '.join(metadata_row.key_plot_points)}")
+    if metadata_row.foreshadows:
+        foreshadow_items = []
+        for f in metadata_row.foreshadows:
+            if isinstance(f, dict):
+                foreshadow_items.append(f"{f.get('type', '')}: {f.get('content', '')}")
+        if foreshadow_items:
+            parts.append(f"伏笔：{'; '.join(foreshadow_items)}")
+    if metadata_row.facts:
+        fact_items = []
+        for f in metadata_row.facts:
+            if isinstance(f, dict):
+                fact_items.append(f"{f.get('key', '')}: {f.get('value', '')}")
+        if fact_items:
+            parts.append(f"事实：{'; '.join(fact_items)}")
+    parts.append(f"变更 {diff_result['summary']['total_changes']} 处。")
+    return "\n".join(parts)
 
 
 async def _rewrite_chapter_coroutine(
@@ -756,9 +770,12 @@ rewrite_chapter = StructuredTool.from_function(
     coroutine=_rewrite_chapter_coroutine,
     name="rewrite_chapter",
     description=(
-        "重写工具：根据编辑指令生成完整改写后的章节正文，并自动保存。"
-        "在使用前先调用 read_chapter 获取当前正文。"
-        "正文保存后，应紧接着调用 sync_chapter_metadata 同步元数据。"
+        "【全量重写已有章节】根据编辑指令，将整章正文完全重写并自动保存。"
+        "适用场景：大范围修改、整体风格调整、修复被截断/损坏的章节内容。"
+        "使用前必须先调用 read_chapter 获取当前完整正文，将完整正文作为 current_content 传入。"
+        "current_content 必须是完整的章节正文（不能只传片段），工具会用 LLM 重新生成整章内容。"
+        "编辑指令写入 edit_instruction，描述你希望如何修改。"
+        "正文保存后，必须紧接着调用 sync_chapter_metadata 同步元数据。"
     ),
     args_schema=RewriteChapterInput,
 )
@@ -769,8 +786,12 @@ generate_patch_edit = StructuredTool.from_function(
     coroutine=_generate_patch_edit_coroutine,
     name="generate_patch_edit",
     description=(
-        "根据编辑指令执行局部补丁编辑，并自动保存正文。"
-        "正文保存后，应紧接着调用 sync_chapter_metadata 同步元数据。"
+        "【局部精准编辑已有章节】根据编辑指令，生成 JSON 补丁（replace/insert/delete）来修改章节的特定段落，并自动保存。"
+        "适用场景：小范围精准修改，如替换一段对话、删除一个段落、插入一段描写。"
+        "使用前必须先调用 read_chapter 获取当前完整正文，将完整正文作为 current_content 传入。"
+        "current_content 必须是完整的章节正文（不能只传需要修改的片段），否则会导致章节内容被截断。"
+        "编辑指令写入 edit_instruction，描述你希望局部修改什么。"
+        "正文保存后，必须紧接着调用 sync_chapter_metadata 同步元数据。"
     ),
     args_schema=GeneratePatchEditInput,
 )

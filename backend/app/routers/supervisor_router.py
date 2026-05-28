@@ -14,7 +14,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.auth import get_current_user
 from app.core.database import SessionLocal, get_db
 from app.models.work_model import User, Work
-from app.schemas.supervisor_schema import SupervisorStartRequest, SupervisorResumeRequest, SupervisorConfirmRequest
+from app.schemas.supervisor_schema import SupervisorStartRequest, SupervisorResumeRequest, SupervisorConfirmRequest, SupervisorInterruptRequest
 from app.services.supervisor.supervisor_agent import SupervisorAgent
 from app.services.agent_log_service import log_event, new_session_id
 from app.services import message_service
@@ -414,27 +414,6 @@ async def resume_supervisor(
     )
 
 
-@router.get("/{session_id}/status")
-def get_supervisor_status(
-    session_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    """查询统筹 Agent 会话状态。"""
-    from app.models.agent_model import SupervisorSession
-    session = db.query(SupervisorSession).filter_by(id=session_id).first()
-    if not session:
-        return {"status": "not_found"}
-    msg_count = message_service.get_next_sort_order(db, session_id)
-    return {
-        "id": session.id,
-        "work_id": session.work_id,
-        "stage": session.stage,
-        "status": session.status,
-        "message_count": msg_count,
-    }
-
-
 @router.post("/confirm")
 def confirm_action(
     payload: SupervisorConfirmRequest,
@@ -615,6 +594,35 @@ def confirm_action(
             return {"status": "rejected", "type": "requirements_planner"}
 
     raise HTTPException(status_code=400, detail=f"不支持的操作类型: {action_type}")
+
+
+@router.post("/interrupt")
+def interrupt_session(
+    payload: SupervisorInterruptRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """中断正在运行的 Supervisor 会话。Agent 将在当前 LLM/工具调用完成后停止。"""
+    from app.models.agent_model import SupervisorSession
+
+    session = db.query(SupervisorSession).filter_by(id=payload.session_id).first()
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session.status not in ("running",):
+        raise HTTPException(status_code=400, detail="会话未在运行中，无法中断")
+
+    session.interrupted = True
+    db.commit()
+    log_event(
+        db,
+        work_id=session.work_id or "",
+        session_id=session.id,
+        session_type="supervisor",
+        role="system",
+        content="用户请求中断",
+        meta={"user_id": current_user.id},
+    )
+    return {"status": "ok", "detail": "中断请求已提交，Agent 将在当前步骤完成后停止"}
 
 
 def _launch_supervisor_task(

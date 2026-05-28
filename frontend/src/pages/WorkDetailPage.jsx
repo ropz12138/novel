@@ -1,6 +1,6 @@
 import { API_BASE } from "../lib/runtime-config";
 import { authFetch } from "../lib/authFetch";
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
   ArrowLeft,
@@ -19,6 +19,7 @@ import {
   Save,
   Send,
   Sparkles,
+  StopCircle,
   Trash2,
   Users,
   X,
@@ -632,6 +633,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
   const foreshadowing = tree?.foreshadowing || [];
   const isPulsing = (type, id) => pulseFocus?.type === type && String(pulseFocus?.id) === String(id);
   const nodeRefs = useRef(new Map());
+  const [expandedNodes, setExpandedNodes] = useState(new Set());
 
   // Build a set of all valid node IDs (timeline + branch) for orphan detection
   const allNodeIds = useMemo(() => {
@@ -667,6 +669,23 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
     }
   }, [pulseFocus]);
 
+  const toggleExpand = useCallback((type, id) => {
+    const key = `${type}:${String(id)}`;
+    setExpandedNodes((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const isExpanded = useCallback((type, id) => {
+    return expandedNodes.has(`${type}:${String(id)}`);
+  }, [expandedNodes]);
+
   if (!timeline.length) return <p className="text-sm text-slate-600">暂无大纲数据。</p>;
 
   return (
@@ -687,10 +706,13 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                 className={`rounded-lg border border-blue-200 bg-blue-50 p-3 transition ${
                   isPulsing("timeline", node.id) ? "animate-pulse ring-2 ring-blue-300 ring-offset-1" : ""
                 }`}
-                onClick={() => onSelectNode?.({ type: "timeline", id: node.id })}
+                onClick={() => {
+                  toggleExpand("timeline", node.id);
+                  onSelectNode?.({ type: "timeline", id: node.id });
+                }}
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <h4 className="truncate text-sm font-semibold text-slate-800">
+                  <h4 className={`${isExpanded("timeline", node.id) ? "" : "truncate"} text-sm font-semibold text-slate-800`}>
                     {node.id || `T${idx + 1}`} {node.development_node || "主线节点"}
                   </h4>
                   <div className="flex items-center gap-1">
@@ -718,7 +740,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                     </button>
                   </div>
                 </div>
-                <p className="line-clamp-2 text-xs text-slate-600">{node.summary || "（暂无摘要）"}</p>
+                <p className={`${isExpanded("timeline", node.id) ? "" : "line-clamp-2"} text-xs text-slate-600`}>{node.summary || "（暂无摘要）"}</p>
                 <p className="mt-1 text-[11px] text-slate-500">
                   {node.time_node || "未设时间"} · 第{node.chapter_start}-{node.chapter_end}章
                 </p>
@@ -739,11 +761,14 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                         className={`relative mb-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 transition ${
                           isPulsing("branch", b.id) ? "animate-pulse ring-2 ring-emerald-300 ring-offset-1" : ""
                         }`}
-                        onClick={() => onSelectNode?.({ type: "branch", id: b.id })}
+                        onClick={() => {
+                          toggleExpand("branch", b.id);
+                          onSelectNode?.({ type: "branch", id: b.id });
+                        }}
                       >
                         <div className="absolute -left-[13px] top-3 w-2 border-t border-slate-200" />
                         <div className="flex items-center justify-between gap-2">
-                          <div className="truncate text-xs font-semibold text-slate-800">
+                          <div className={`${isExpanded("branch", b.id) ? "" : "truncate"} text-xs font-semibold text-slate-800`}>
                             {b.id || `B${bIdx + 1}`} {b.name || "支线"}
                           </div>
                           <button
@@ -758,7 +783,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                             <Trash2 className="h-3 w-3" />
                           </button>
                         </div>
-                        <p className="line-clamp-1 text-[11px] text-slate-600">{b.summary || "（暂无支线摘要）"}</p>
+                        <p className={`${isExpanded("branch", b.id) ? "" : "line-clamp-1"} text-[11px] text-slate-600`}>{b.summary || "（暂无支线摘要）"}</p>
                         {branchPlanted.length > 0 && (
                           <div className="ml-2 mt-1 border-l border-emerald-300 pl-2">
                             {branchPlanted.map((f, fIdx) => (
@@ -774,12 +799,13 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                                 }`}
                                 onClick={(e) => {
                                   e.stopPropagation();
+                                  toggleExpand("foreshadowing", f.id);
                                   onSelectNode?.({ type: "foreshadowing", id: f.id });
                                 }}
                               >
                                 <div className="absolute -left-[9px] top-2.5 w-1.5 border-t border-slate-200" />
                                 <div className="flex items-center justify-between gap-1">
-                                  <div className="truncate text-[11px] font-semibold text-slate-800">
+                                  <div className={`${isExpanded("foreshadowing", f.id) ? "" : "truncate"} text-[11px] font-semibold text-slate-800`}>
                                     {f.id || `F${fIdx + 1}`} 伏笔
                                   </div>
                                   <button
@@ -794,7 +820,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                                     <Trash2 className="h-2.5 w-2.5" />
                                   </button>
                                 </div>
-                                <p className="line-clamp-1 text-[10px] text-slate-600">{f.content || "（暂无伏笔内容）"}</p>
+                                <p className={`${isExpanded("foreshadowing", f.id) ? "" : "line-clamp-1"} text-[10px] text-slate-600`}>{f.content || "（暂无伏笔内容）"}</p>
                                 <p className="text-[9px] text-slate-500">回收：{f.payoff_node || "未设"}</p>
                               </div>
                             ))}
@@ -814,11 +840,14 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                       className={`relative mb-2 rounded-md border border-amber-200 bg-amber-50 p-2 transition ${
                         isPulsing("foreshadowing", f.id) ? "animate-pulse ring-2 ring-amber-300 ring-offset-1" : ""
                       }`}
-                      onClick={() => onSelectNode?.({ type: "foreshadowing", id: f.id })}
+                      onClick={() => {
+                        toggleExpand("foreshadowing", f.id);
+                        onSelectNode?.({ type: "foreshadowing", id: f.id });
+                      }}
                     >
                       <div className="absolute -left-[13px] top-3 w-2 border-t border-slate-200" />
                       <div className="flex items-center justify-between gap-2">
-                        <div className="truncate text-xs font-semibold text-slate-800">
+                        <div className={`${isExpanded("foreshadowing", f.id) ? "" : "truncate"} text-xs font-semibold text-slate-800`}>
                           {f.id || `F${fIdx + 1}`} 伏笔
                         </div>
                         <button
@@ -833,7 +862,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                           <Trash2 className="h-3 w-3" />
                         </button>
                       </div>
-                      <p className="line-clamp-1 text-[11px] text-slate-600">{f.content || "（暂无伏笔内容）"}</p>
+                      <p className={`${isExpanded("foreshadowing", f.id) ? "" : "line-clamp-1"} text-[11px] text-slate-600`}>{f.content || "（暂无伏笔内容）"}</p>
                       <p className="text-[10px] text-slate-500">回收：{f.payoff_node || "未设"}</p>
                     </div>
                   ))}
@@ -856,10 +885,13 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                 className={`relative mb-2 rounded border border-amber-200 bg-amber-50 p-2 transition ${
                   isPulsing("foreshadowing", f.id) ? "animate-pulse ring-2 ring-amber-300 ring-offset-1" : ""
                 }`}
-                onClick={() => onSelectNode?.({ type: "foreshadowing", id: f.id })}
+                onClick={() => {
+                  toggleExpand("foreshadowing", f.id);
+                  onSelectNode?.({ type: "foreshadowing", id: f.id });
+                }}
               >
                 <div className="flex items-center justify-between gap-2">
-                  <div className="truncate text-xs font-semibold text-slate-800">
+                  <div className={`${isExpanded("foreshadowing", f.id) ? "" : "truncate"} text-xs font-semibold text-slate-800`}>
                     {f.id || `F${fIdx + 1}`} 伏笔
                   </div>
                   <button
@@ -874,7 +906,7 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                     <Trash2 className="h-3 w-3" />
                   </button>
                 </div>
-                <p className="line-clamp-1 text-[11px] text-slate-600">{f.content || "（暂无伏笔内容）"}</p>
+                <p className={`${isExpanded("foreshadowing", f.id) ? "" : "line-clamp-1"} text-[11px] text-slate-600`}>{f.content || "（暂无伏笔内容）"}</p>
                 <p className="text-[10px] text-amber-600">
                   埋设：{f.plant_node || "未设"} → 回收：{f.payoff_node || "未设"}
                 </p>
@@ -1115,12 +1147,12 @@ function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCha
           />
           <Button
             size="icon"
-            className="h-10 w-10 shrink-0 rounded-full"
-            onClick={chat.handleSend}
-            disabled={!chat.input.trim() || chat.running}
-            aria-label="发送消息"
+            className={`h-10 w-10 shrink-0 rounded-full ${chat.running ? "bg-red-500 hover:bg-red-600" : ""}`}
+            onClick={chat.running ? chat.handleInterrupt : chat.handleSend}
+            disabled={!chat.running && (!chat.input.trim())}
+            aria-label={chat.running ? "中断任务" : "发送消息"}
           >
-            {chat.running ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
+            {chat.running ? <StopCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </Button>
         </div>
       </div>

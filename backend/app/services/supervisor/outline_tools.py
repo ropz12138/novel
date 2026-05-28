@@ -8,10 +8,11 @@ from __future__ import annotations
 import copy
 import json
 import logging
+from typing import Any
 
 from langchain_core.runnables import RunnableConfig
 from langchain_core.tools import StructuredTool, tool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,33 @@ class ChildTodoItemInput(BaseModel):
 
 
 class CreateChildTodolistInput(BaseModel):
-    items: list[ChildTodoItemInput] = Field(description="当前父任务下的子任务列表")
+    """为当前 Supervisor 父任务创建子任务清单。
+
+    字段名必须是 items（不是 todos）。
+    值必须是对象数组（不是 JSON 字符串）。
+    """
+    items: list[ChildTodoItemInput] = Field(
+        description="当前父任务下的子任务列表。注意：字段名必须是 items，不能是 todos；值必须是对象数组，不能是 JSON 字符串。"
+    )
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_input(cls, data: Any) -> Any:
+        if not isinstance(data, dict):
+            return data
+        # 兼容模型传入 todos 而非 items
+        if "items" not in data and "todos" in data:
+            data["items"] = data.pop("todos")
+        # 兼容模型传入 JSON 字符串而非数组
+        raw = data.get("items")
+        if isinstance(raw, str):
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, list):
+                    data["items"] = parsed
+            except (json.JSONDecodeError, TypeError):
+                pass
+        return data
 
 
 class ReadChildTodolistInput(BaseModel):
@@ -306,7 +333,9 @@ def _apply_single_outline_field_replace(
 
 @tool(args_schema=CreateChildTodolistInput)
 def create_child_todolist(items: list[ChildTodoItemInput], config: RunnableConfig) -> str:
-    """为当前 Supervisor 父任务创建子任务清单。只维护当前任务内部进度。"""
+    """为当前 Supervisor 父任务创建子任务清单。只维护当前任务内部进度。
+    参数 items 必须是对象数组，字段名必须是 items（不能是 todos）。
+    """
     from app.services.supervisor.todo_harness import create_child_todolist as _create_child_todolist
 
     db = _get_db(config)
@@ -381,7 +410,7 @@ def read_outline(config: RunnableConfig, work_id: str | None = None) -> str:
     if story.get("synopsis"):
         parts.append(f"简介：{story['synopsis']}")
     if timeline:
-        parts.append(f"\n完整大纲：\n{json.dumps(outline, ensure_ascii=False, indent=2)[:3000]}")
+        parts.append(f"\n完整大纲：\n{json.dumps(outline, ensure_ascii=False, indent=2)}")
 
     emit("query_result", {"source": "大纲读取", "summary": f"时间线 {len(timeline)} 节点"})
     return "\n".join(parts)
@@ -528,7 +557,7 @@ def query_outline_related_chapters(
         text_hits = [kw for kw in keywords if kw and kw in searchable]
         if text_hits:
             score += min(3, len(text_hits))
-            reasons.append(f"命中元数据关键词: {', '.join(text_hits[:3])}")
+            reasons.append(f"命中元数据关键词: {', '.join(text_hits)}")
 
         if score > 0:
             matched[b.chapter_number] = {"score": score, "reasons": reasons}
@@ -549,7 +578,7 @@ def query_outline_related_chapters(
     chapter_map = {c.chapter_number: c for c in chapters}
 
     ranked = sorted(matched.items(), key=lambda x: (-x[1]["score"], x[0]))[:chapter_limit]
-    lines = [f"查询词：{', '.join(queries)}", f"命中大纲线索：{'; '.join(outline_hits[:8]) or '无'}", "关联章节："]
+    lines = [f"查询词：{', '.join(queries)}", f"命中大纲线索：{'; '.join(outline_hits) or '无'}", "关联章节："]
     for ch_no, meta in ranked:
         ch = chapter_map.get(ch_no)
         title = ch.title if ch else f"第{ch_no}章"

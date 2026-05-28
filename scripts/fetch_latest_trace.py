@@ -48,9 +48,9 @@ def get_headers():
 def query_root_runs(headers: dict) -> list[dict]:
     """查询最新的根 run（即一条完整对话的入口）"""
     now = datetime.now(timezone.utc)
-    start = now - timedelta(hours=2)  # 最近 2 小时
+    start = now - timedelta(hours=24)  # 最近 24 小时
 
-    # LangSmith API 的 runs/query 参数在新版中收紧了，优先使用官方 SDK。
+    # 使用官方 SDK 查询
     client = Client(api_key=os.environ.get("LANGSMITH_API_KEY"))
     runs = list(client.list_runs(
         project_name=PROJECT_NAME,
@@ -58,25 +58,7 @@ def query_root_runs(headers: dict) -> list[dict]:
         start_time=start,
         limit=3,
     ))
-    if runs:
-        return [_run_to_dict(r) for r in runs]
-
-    resp = requests.post(
-        f"{BASE_URL}/api/v1/runs/query",
-        headers=headers,
-        json={
-            "project_name": PROJECT_NAME,
-            "is_root": True,
-            "start_time": start.isoformat(),
-            "end_time": now.isoformat(),
-            "limit": 3,
-            "select": ["id", "trace_id", "name", "run_type", "start_time", "end_time", "status"],
-            "order": "desc",
-        },
-    )
-    resp.raise_for_status()
-    data = resp.json()
-    return data.get("runs", []) if isinstance(data, dict) else data
+    return [_run_to_dict(r) for r in runs]
 
 
 def query_trace_runs(headers: dict, trace_id: str) -> list[dict]:
@@ -87,41 +69,7 @@ def query_trace_runs(headers: dict, trace_id: str) -> list[dict]:
         trace_id=trace_id,
         limit=100,
     ))
-    if runs:
-        return [_run_to_dict(r) for r in runs]
-
-    all_runs = []
-    cursor = None
-
-    while True:
-        body = {
-            "trace_id": trace_id,
-            "select": [
-                "id", "trace_id", "parent_run_id", "name", "run_type",
-                "start_time", "end_time", "status",
-                "inputs", "outputs",
-            ],
-            "limit": 100,
-        }
-        if cursor:
-            body["cursor"] = cursor
-
-        resp = requests.post(
-            f"{BASE_URL}/api/v1/runs/query",
-            headers=headers,
-            json=body,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-
-        runs = data.get("runs", []) if isinstance(data, dict) else data
-        all_runs.extend(runs)
-
-        cursor = data.get("cursor") if isinstance(data, dict) else None
-        if not cursor or not runs:
-            break
-
-    return all_runs
+    return [_run_to_dict(r) for r in runs]
 
 
 def _run_to_dict(run) -> dict:

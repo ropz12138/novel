@@ -119,7 +119,7 @@ class WritingExpertService:
             .first()
         )
         stage_steps = card.execution_template.get("steps", []) if isinstance(card.execution_template, dict) else []
-        how_to_use = "；".join(stage_steps[:3]) if stage_steps else "按‘制造阻力-升级代价-留下后果’三步落地。"
+        how_to_use = "；".join(stage_steps) if stage_steps else "按‘制造阻力-升级代价-留下后果’三步落地。"
         if chapter_goal:
             how_to_use = f"围绕“{chapter_goal}”执行：{how_to_use}"
         if chapter_number is not None:
@@ -130,7 +130,7 @@ class WritingExpertService:
             "event_name": card.title,
             "how_to_use_in_this_chapter": how_to_use,
             "impact_on_plot": card.execution_template.get("plot_impact", "推进主线并强化冲突链"),
-            "risk_note": "；".join((card.risk_notes or [])[:2]) or "注意与当前人设和主线一致，避免硬转折。",
+            "risk_note": "；".join((card.risk_notes or [])) or "注意与当前人设和主线一致，避免硬转折。",
             "evidence_digest": evidence.excerpt_digest if evidence else "来自同题材高热样本的结构信号汇总。",
         }
 

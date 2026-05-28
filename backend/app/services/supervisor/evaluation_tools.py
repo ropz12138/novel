@@ -221,8 +221,7 @@ def read_previous_chapters_for_eval(
 
         parts = [f"第{target_ch}章前文："]
         for ch in prev_chapters:
-            summary = ch.content[:800] + ("..." if len(ch.content) > 800 else "")
-            parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
+            parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{ch.content}")
         blocks.append("\n\n".join(parts))
 
     return "\n\n".join(blocks)
@@ -370,7 +369,7 @@ async def _evaluate_chapter_outline_sync_coroutine(
         )
     content = str(content).strip()
 
-    emit("evaluation_sync_done", {"chapter_number": chapter_number, "raw": content[:2000]})
+    emit("evaluation_sync_done", {"chapter_number": chapter_number, "raw": content})
     return content
 
 
@@ -407,7 +406,7 @@ async def _evaluate_as_editor_coroutine(
         )
     content = str(content).strip()
 
-    emit("evaluation_editor_done", {"chapter_content_preview": content[:500]})
+    emit("evaluation_editor_done", {"chapter_content_preview": content})
     return content
 
 
@@ -444,7 +443,7 @@ async def _evaluate_as_reader_coroutine(
         )
     content = str(content).strip()
 
-    emit("evaluation_reader_done", {"chapter_content_preview": content[:500]})
+    emit("evaluation_reader_done", {"chapter_content_preview": content})
     return content
 
 
