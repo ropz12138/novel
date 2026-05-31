@@ -102,14 +102,14 @@ if [ ! -d ".venv" ]; then
 fi
 source .venv/bin/activate
 pip install -r requirements.txt 2>&1 | tail -3
-nohup uvicorn app.main:app --host 0.0.0.0 --port "$PROD_PORT" --workers 2 > "$RUN_DIR/backend-prod.log" 2>&1 &
+nohup uvicorn app.main:app --host 0.0.0.0 --port "$PROD_PORT" --workers 2 > /dev/null 2>&1 &
 echo $! > "$RUN_DIR/backend-prod.pid"
 
 # --- 启动成功校验 ---
 backend_pid="$(cat "$RUN_DIR/backend-prod.pid" 2>/dev/null || true)"
 started_ok=0
 for _ in $(seq 1 20); do
-  if grep -q "Application startup complete\|Uvicorn running on" "$RUN_DIR/backend-prod.log" 2>/dev/null; then
+  if [ -f "$RUN_DIR/backend-prod.log" ] && grep -q "Application startup complete\|Uvicorn running on" "$RUN_DIR/backend-prod.log" 2>/dev/null; then
     started_ok=1
     break
   fi

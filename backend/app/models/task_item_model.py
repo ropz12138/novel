@@ -36,6 +36,7 @@ class TaskItem(Base):
     dispatch_tool: Mapped[str] = mapped_column(String(80), nullable=False, default="")
     instruction: Mapped[str] = mapped_column(Text, nullable=False, default="")
     error_message: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    retry_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
@@ -56,4 +57,5 @@ class TaskItem(Base):
         kwargs.setdefault("dispatch_tool", "")
         kwargs.setdefault("instruction", "")
         kwargs.setdefault("error_message", "")
+        kwargs.setdefault("retry_count", 0)
         super().__init__(**kwargs)

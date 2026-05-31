@@ -448,7 +448,6 @@ class WorkService:
             request_timeout=(15, 180),
             max_retries=0,
         )
-        self.chat_model = base_model
 
         # 大纲生成使用默认模型（由 config.json 的 default_model 控制）
         outline_model_name = settings.default_model
@@ -461,6 +460,30 @@ class WorkService:
             request_timeout=(15, 180),
             max_retries=0,
         )
+
+        # 429 fallback
+        if settings.fallback_model:
+            from app.core.deepseek_llm import FallbackLLM
+            fb_conf = settings.get_model_config(settings.fallback_model)
+            fb = DeepSeekChatOpenAI(
+                model=settings.fallback_model,
+                api_key=fb_conf["api_key"],
+                base_url=fb_conf["base_url"],
+                temperature=0.7,
+                request_timeout=(15, 180),
+                max_retries=0,
+            )
+            base_model = FallbackLLM(base_model, fb)
+            outline_model = FallbackLLM(outline_model, DeepSeekChatOpenAI(
+                model=settings.fallback_model,
+                api_key=fb_conf["api_key"],
+                base_url=fb_conf["base_url"],
+                temperature=0.7,
+                request_timeout=(15, 180),
+                max_retries=0,
+            ))
+
+        self.chat_model = base_model
 
         self.outline_tool_llm = outline_model.bind_tools(
             [SUBMIT_OUTLINE_TOOL],

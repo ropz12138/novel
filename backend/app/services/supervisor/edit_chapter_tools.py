@@ -15,6 +15,11 @@ from sqlalchemy.orm import Session
 
 logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
+MAX_PATCH_ATTEMPTS = 3
+
+
+class PatchParseError(ValueError):
+    """补丁 JSON 解析失败（用于精确捕获并触发有限重试）。"""
 
 
 class ReadChapterInput(BaseModel):
@@ -90,7 +95,7 @@ def _get_emit(config: RunnableConfig):
 
 def _get_work_id(config: RunnableConfig) -> str:
     work_id = str(config.get("configurable", {}).get("work_id") or "")
-    if work_id:
+    if work_id is not None and work_id != "":
         return work_id
     configurable = config.get("configurable", {})
     session_id = configurable.get("supervisor_session_id")
@@ -688,17 +693,20 @@ def _parse_patch_json(raw: str) -> list[dict]:
     if json_match:
         text = json_match.group(1).strip()
 
-    data = json.loads(text)
+    try:
+        data = json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise PatchParseError(f"补丁 JSON 解析失败：{exc}") from exc
 
     if not isinstance(data, dict) or "edits" not in data:
-        raise ValueError("局部编辑输出必须是包含 edits 字段的 JSON 对象")
+        raise PatchParseError("局部编辑输出必须是包含 edits 字段的 JSON 对象")
 
     edit_ops = []
     for e in data.get("edits", []):
         if not isinstance(e, dict):
-            raise ValueError("edits 中的每个元素都必须是对象")
+            raise PatchParseError("edits 中的每个元素都必须是对象")
         if e.get("type") not in ("replace", "insert", "delete"):
-            raise ValueError("edit.type 只能是 replace、insert 或 delete")
+            raise PatchParseError("edit.type 只能是 replace、insert 或 delete")
         edit_ops.append(
             {
                 "type": e.get("type"),
@@ -708,8 +716,60 @@ def _parse_patch_json(raw: str) -> list[dict]:
             }
         )
     if not edit_ops:
-        raise ValueError("局部编辑输出 edits 为空")
+        raise PatchParseError("局部编辑输出 edits 为空")
     return edit_ops
+
+
+def _patch_retry_hint(*, raw_output: str, error: str) -> str:
+    return (
+        "\n\n上一轮补丁 JSON 解析失败，请重新输出完整且合法的 JSON。"
+        "只能输出一个 JSON 对象，格式为 {\"edits\": [...]}，不要输出解释文字。"
+        f"\n解析错误：{error}"
+        f"\n上一轮原始输出：\n{raw_output}"
+    )
+
+
+async def _stream_patch(chain, inputs: dict, emit) -> str:
+    raw_output = ""
+    async for chunk in chain.astream(inputs):
+        text = chunk.content if hasattr(chunk, "content") else str(chunk)
+        raw_output += text
+        emit("edit_chapter_stream", {"chunk": text})
+    return raw_output
+
+
+async def _generate_patch_ops_with_retry(
+    *,
+    chain,
+    base_inputs: dict,
+    emit,
+    max_attempts: int = MAX_PATCH_ATTEMPTS,
+) -> list[dict]:
+    last_error = ""
+    last_raw_output = ""
+    for attempt in range(1, max_attempts + 1):
+        inputs = dict(base_inputs)
+        if last_error:
+            inputs["user_message"] = (
+                str(inputs.get("user_message") or "")
+                + _patch_retry_hint(raw_output=last_raw_output, error=last_error)
+            )
+        raw_output = await _stream_patch(chain, inputs, emit)
+        try:
+            return _parse_patch_json(raw_output)
+        except PatchParseError as exc:
+            last_error = str(exc)
+            last_raw_output = raw_output
+            logger.warning(
+                "generate_patch_edit parse failed attempt=%d/%d: %s",
+                attempt,
+                max_attempts,
+                exc,
+            )
+            emit("edit_chapter_patch_retry", {"attempt": attempt, "error": last_error})
+            if attempt == max_attempts:
+                raise PatchParseError(f"补丁 JSON 解析重试 {max_attempts} 次仍失败：{last_error}") from exc
+    raise PatchParseError(f"补丁 JSON 解析重试 {max_attempts} 次仍失败：{last_error}")
 
 
 async def _generate_patch_edit_coroutine(
@@ -730,18 +790,16 @@ async def _generate_patch_edit_coroutine(
     llm = _get_llm(temperature=0.7)
     chain = prompt | llm
 
-    raw_output = ""
-    async for chunk in chain.astream({
-        "story_info": story_info or "（未提供）",
-        "chapter_outline": chapter_outline or "（未提供）",
-        "current_content": current_content,
-        "user_message": edit_instruction,
-    }):
-        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-        raw_output += text
-        emit("edit_chapter_stream", {"chunk": text})
-
-    edit_ops = _parse_patch_json(raw_output)
+    edit_ops = await _generate_patch_ops_with_retry(
+        chain=chain,
+        base_inputs={
+            "story_info": story_info or "（未提供）",
+            "chapter_outline": chapter_outline or "（未提供）",
+            "current_content": current_content,
+            "user_message": edit_instruction,
+        },
+        emit=emit,
+    )
     ops = [
         EditOperation(
             type=op["type"],

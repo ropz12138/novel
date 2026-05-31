@@ -150,11 +150,20 @@ class CharacterService:
 
         for key, value in filters.items():
             if key == "role_type":
-                q = q.filter(Character.role_type == value)
+                if isinstance(value, list):
+                    q = q.filter(Character.role_type.in_(value))
+                else:
+                    q = q.filter(Character.role_type == value)
             elif key == "gender":
-                q = q.filter(Character.gender == value)
+                if isinstance(value, list):
+                    q = q.filter(Character.gender.in_(value))
+                else:
+                    q = q.filter(Character.gender == value)
             elif key == "current_status":
-                q = q.filter(Character.current_status == value)
+                if isinstance(value, list):
+                    q = q.filter(Character.current_status.in_(value))
+                else:
+                    q = q.filter(Character.current_status == value)
             elif key == "first_chapter__lte":
                 q = q.filter(Character.first_chapter <= int(value))
             elif key == "first_chapter__gte":
@@ -168,7 +177,10 @@ class CharacterService:
                 if hasattr(Character, field_name):
                     q = q.filter(getattr(Character, field_name).ilike(f"%{value}%"))
             elif key == "name":
-                q = q.filter(Character.name == value)
+                if isinstance(value, list):
+                    q = q.filter(Character.name.in_(value))
+                else:
+                    q = q.filter(Character.name == value)
 
         chars = q.order_by(Character.name).all()
         return [
@@ -207,7 +219,10 @@ class CharacterService:
             elif key == "title__contains":
                 q = q.filter(Chapter.title.ilike(f"%{value}%"))
             elif key == "status":
-                q = q.filter(Chapter.status == value)
+                if isinstance(value, list):
+                    q = q.filter(Chapter.status.in_(value))
+                else:
+                    q = q.filter(Chapter.status == value)
 
         chapters = q.order_by(Chapter.chapter_number).all()
         return [

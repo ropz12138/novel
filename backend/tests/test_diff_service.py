@@ -564,9 +564,10 @@ class TestOutlineAgentTwoPhaseFlow:
         assert hasattr(OutlineAgent, "rollback_outline_edit")
 
     def test_outline_tools_count(self):
-        """大纲工具集应有 6 个工具（diff 已合并进 edit_outline）"""
-        from app.services.supervisor.outline_tools import OUTLINE_TOOLS
-        assert len(OUTLINE_TOOLS) == 6
+        """大纲工具集应有 10 个工具（包含 read_requirements_doc）"""
+        from app.services.supervisor.outline_tools import get_outline_tools
+        tools = get_outline_tools(auto_mode=True)
+        assert len(tools) == 10
 
 
 # ── 5. dispatch_outline 确认流程测试 ──

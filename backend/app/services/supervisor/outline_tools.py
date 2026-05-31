@@ -196,7 +196,7 @@ def _get_emit(config: RunnableConfig):
 def _get_work_id(config: RunnableConfig) -> str:
     configurable = config.get("configurable", {})
     work_id = configurable.get("work_id")
-    if work_id:
+    if work_id is not None and work_id != "":
         return work_id
     session_id = configurable.get("supervisor_session_id")
     if session_id:
@@ -1169,11 +1169,29 @@ def build_outline_tools(*, auto_mode: bool = True) -> list:
     手动模式（auto_mode=False）：不含 commit_or_rollback，LLM 只做 dry_run，
     变更暂存在数据库事务中，由用户在 UI 确认后 commit/rollback。
     """
+    from app.services.supervisor.tools import read_requirements_doc
+
     tools = list(_OUTLINE_BASE_TOOLS)
     if auto_mode:
         tools.append(commit_or_rollback)
+
+    # 追加需求文档读取工具
+    seen = {t.name for t in tools}
+    if read_requirements_doc.name not in seen:
+        tools.append(read_requirements_doc)
+
     return tools
 
 
-# 向后兼容：默认包含 commit_or_rollback（自动模式）
-OUTLINE_TOOLS = build_outline_tools(auto_mode=True)
+# 向后兼容：延迟初始化，避免循环导入
+_OUTLINE_TOOLS_CACHE = None
+
+def get_outline_tools(*, auto_mode: bool = True) -> list:
+    """获取大纲工具集（延迟初始化）"""
+    global _OUTLINE_TOOLS_CACHE
+    if _OUTLINE_TOOLS_CACHE is None:
+        _OUTLINE_TOOLS_CACHE = build_outline_tools(auto_mode=auto_mode)
+    return _OUTLINE_TOOLS_CACHE
+
+# 向后兼容
+OUTLINE_TOOLS = None  # 将在首次访问时通过 get_outline_tools() 初始化

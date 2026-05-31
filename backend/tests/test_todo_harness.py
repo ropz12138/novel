@@ -492,7 +492,7 @@ class TestExecuteTodoTaskFailure:
 
 
 class TestChildTaskIdAllocation:
-    def test_prefers_raw_child_task_id(self):
+    def test_allocates_dotted_child_task_id(self):
         from app.services.supervisor.todo_harness import _allocate_child_task_id
 
         used = set()
@@ -502,12 +502,12 @@ class TestChildTaskIdAllocation:
             index=1,
             used_ids=used,
         )
-        assert task_id == "T1"
+        assert task_id == "T1.1"
 
-    def test_fallback_and_deduplicate(self):
+    def test_deduplicates_dotted_child_task_id(self):
         from app.services.supervisor.todo_harness import _allocate_child_task_id
 
-        used = {"T1", "T1.1"}
+        used = {"T1.1"}
         task_id = _allocate_child_task_id(
             raw_task_id="T1",
             parent_task_id="T1",

@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 
 // ── Mocks ──
@@ -811,6 +811,147 @@ describe("useSupervisorChat", () => {
     });
   });
 
+  describe("SSE event: chapter_metadata_diff", () => {
+    it("maps diff_summary from d.diff_summary (not d.summary)", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("chapter_metadata_diff", {
+          chapter_number: 1,
+          summary: "这是一段文本摘要",
+          diff: { summary: { type: "modified", old: "旧", new: "新" } },
+          diff_summary: { total_added: 10, total_modified: 5, total_removed: 3, total_changes: 18 },
+        });
+      });
+
+      const msg = result.current.timeline.find(
+        (m) => m.type === "metadata_diff_card"
+      );
+      expect(msg).toBeDefined();
+      expect(msg.metadataDiffCard.chapter_number).toBe(1);
+      expect(msg.metadataDiffCard.diff_summary).toEqual({
+        total_added: 10,
+        total_modified: 5,
+        total_removed: 3,
+        total_changes: 18,
+      });
+    });
+  });
+
+  describe("SSE event: supervisor_done — todolist reconciliation", () => {
+    it("reconciles todolist with authoritative server state after stream ends", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+      const authoritativeTodolist = [
+        { db_id: "ti-1", task_id: "T1", task: "task 1", status: "completed", parent_id: "" },
+        { db_id: "ti-2", task_id: "T2", task: "task 2", status: "completed", parent_id: "" },
+        { db_id: "ti-3", task_id: "T2.1", task: "subtask 1", status: "completed", parent_id: "ti-2" },
+      ];
+      sessionApi.getSupervisorMessages.mockResolvedValue([
+        {
+          role: "assistant",
+          content: "",
+          meta: {
+            type: "requirements_todolist",
+            todoCard: {
+              intent_summary: "test",
+              todolist: authoritativeTodolist,
+              ready_to_execute: true,
+            },
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      // Set up session and stale todolist (T2 still pending)
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          intent_summary: "test",
+          todolist: [
+            { db_id: "ti-1", task_id: "T1", task: "task 1", status: "pending" },
+            { db_id: "ti-2", task_id: "T2", task: "task 2", status: "pending" },
+          ],
+          ready_to_execute: true,
+        });
+      });
+
+      // Verify initial state is stale
+      const msgBefore = result.current.timeline.find(
+        (m) => m.type === "requirements_todolist"
+      );
+      expect(msgBefore.todoCard.todolist[1].status).toBe("pending");
+
+      // Fire supervisor_done — triggers reconciliation
+      await act(async () => {
+        result.current._testOnSSE("supervisor_done", {});
+      });
+
+      // After reconciliation, todolist should reflect server state
+      await waitFor(() => {
+        const msgAfter = result.current.timeline.find(
+          (m) => m.type === "requirements_todolist"
+        );
+        expect(msgAfter.todoCard.todolist[1].status).toBe("completed");
+        expect(msgAfter.todoCard.todolist).toHaveLength(3);
+        expect(msgAfter.todoCard.todolist[2].task_id).toBe("T2.1");
+      });
+    });
+
+    it("does not crash if reconciliation fetch fails", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+      sessionApi.getSupervisorMessages.mockRejectedValue(new Error("network error"));
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          intent_summary: "test",
+          todolist: [
+            { db_id: "ti-1", task_id: "T1", task: "task 1", status: "pending" },
+          ],
+          ready_to_execute: false,
+        });
+      });
+
+      // Should not throw
+      await act(async () => {
+        result.current._testOnSSE("supervisor_done", {});
+      });
+
+      // Todolist should remain unchanged (graceful degradation)
+      const msg = result.current.timeline.find(
+        (m) => m.type === "requirements_todolist"
+      );
+      expect(msg.todoCard.todolist[0].status).toBe("pending");
+      expect(result.current.running).toBe(false);
+    });
+
+    it("skips reconciliation when no sessionId exists", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      // No session_created event — sessionId is null
+      await act(async () => {
+        result.current._testOnSSE("supervisor_done", {});
+      });
+
+      expect(sessionApi.getSupervisorMessages).not.toHaveBeenCalled();
+      expect(result.current.running).toBe(false);
+    });
+  });
+
   // ── resetState ──
 
   describe("resetState", () => {
@@ -877,6 +1018,167 @@ describe("useSupervisorChat", () => {
       expect(body.session_id).toBe("s1");
 
       expect(onChapterUpdated).toHaveBeenCalledWith(3);
+    });
+  });
+
+  // ── todolist_task_added ──
+
+  describe("todolist_task_added", () => {
+    it("appends new task to the todolist card", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          todolist: [
+            { db_id: "db1", task_id: "T1", task: "原任务", owner: "supervisor", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: [], done_criteria: "", task_type: "", dispatch_tool: "none", instruction: "原任务" },
+          ],
+          intent_summary: "test",
+        });
+      });
+
+      act(() => {
+        result.current._testOnSSE("todolist_task_added", {
+          db_id: "db2",
+          task_id: "T2",
+          task_description: "新任务",
+          owner: "chapter_agent",
+          dispatch_tool: "dispatch_chapter",
+          instruction: "执行新任务",
+          depends_on: "T1",
+          done_criteria: "完成标准",
+          sort_order: 1,
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
+      expect(msg.todoCard.todolist).toHaveLength(2);
+      const newTask = msg.todoCard.todolist[1];
+      expect(newTask.db_id).toBe("db2");
+      expect(newTask.task_id).toBe("T2");
+      expect(newTask.task).toBe("新任务");
+      expect(newTask.status).toBe("pending");
+      expect(newTask.depends_on).toEqual(["T1"]);
+    });
+  });
+
+  // ── todolist_task_edited ──
+
+  describe("todolist_task_edited", () => {
+    it("updates existing task fields", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          todolist: [
+            { db_id: "db1", task_id: "T1", task: "旧描述", owner: "supervisor", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: [], done_criteria: "", task_type: "", dispatch_tool: "none", instruction: "旧指令" },
+          ],
+          intent_summary: "test",
+        });
+      });
+
+      act(() => {
+        result.current._testOnSSE("todolist_task_edited", {
+          db_id: "db1",
+          task_description: "新描述",
+          instruction: "新指令",
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
+      expect(msg.todoCard.todolist[0].task).toBe("新描述");
+      expect(msg.todoCard.todolist[0].instruction).toBe("新指令");
+    });
+
+    it("preserves fields not included in the update", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          todolist: [
+            { db_id: "db1", task_id: "T1", task: "描述", owner: "chapter_agent", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: ["T0"], done_criteria: "标准", task_type: "", dispatch_tool: "dispatch_chapter", instruction: "指令" },
+          ],
+          intent_summary: "test",
+        });
+      });
+
+      act(() => {
+        result.current._testOnSSE("todolist_task_edited", {
+          db_id: "db1",
+          task_description: "新描述",
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
+      const t = msg.todoCard.todolist[0];
+      expect(t.task).toBe("新描述");
+      expect(t.owner).toBe("chapter_agent");
+      expect(t.instruction).toBe("指令");
+      expect(t.done_criteria).toBe("标准");
+    });
+  });
+
+  // ── todolist_task_deleted ──
+
+  describe("todolist_task_deleted", () => {
+    it("removes task from the todolist card", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          todolist: [
+            { db_id: "db1", task_id: "T1", task: "任务1", owner: "supervisor", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: [], done_criteria: "", task_type: "", dispatch_tool: "none", instruction: "任务1" },
+            { db_id: "db2", task_id: "T2", task: "任务2", owner: "supervisor", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: [], done_criteria: "", task_type: "", dispatch_tool: "none", instruction: "任务2" },
+          ],
+          intent_summary: "test",
+        });
+      });
+
+      act(() => {
+        result.current._testOnSSE("todolist_task_deleted", {
+          db_id: "db2",
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
+      expect(msg.todoCard.todolist).toHaveLength(1);
+      expect(msg.todoCard.todolist[0].db_id).toBe("db1");
+    });
+
+    it("does nothing when db_id does not match", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("session_created", { session_id: "s1" });
+        result.current._testOnSSE("todolist_generated", {
+          todolist: [
+            { db_id: "db1", task_id: "T1", task: "任务1", owner: "supervisor", status: "pending", depth: 0, parent_id: "", agent_scope: "supervisor", depends_on: [], done_criteria: "", task_type: "", dispatch_tool: "none", instruction: "任务1" },
+          ],
+          intent_summary: "test",
+        });
+      });
+
+      act(() => {
+        result.current._testOnSSE("todolist_task_deleted", {
+          db_id: "nonexistent",
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
+      expect(msg.todoCard.todolist).toHaveLength(1);
     });
   });
 });

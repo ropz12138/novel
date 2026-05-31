@@ -38,6 +38,9 @@ PERSISTABLE_EVENTS = frozenset({
     "task_status_updated",
     "todolist_readiness_updated",
     "supervisor_runtime_event",
+    "todolist_task_added",
+    "todolist_task_edited",
+    "todolist_task_deleted",
 })
 
 
@@ -293,6 +296,66 @@ def persist_event_message(db: Session, session_id: str, event: str, data: dict) 
 
         todo_card = existing_msg.meta.get("todoCard", {})
         todo_card["ready_to_execute"] = data.get("ready_to_execute", False)
+        flag_modified(existing_msg, "meta")
+        db.commit()
+        return True
+
+    if event in ("todolist_task_added", "todolist_task_edited", "todolist_task_deleted"):
+        # 原地更新最近一条 requirements_todolist message 中的 todolist
+        all_msgs = message_service.get_messages_by_session(db, session_id)
+        existing_msg = None
+        for m in reversed(all_msgs):
+            if (
+                m.role == "assistant"
+                and m.meta
+                and m.meta.get("type") == "requirements_todolist"
+                and m.meta.get("todoCard")
+            ):
+                existing_msg = m
+                break
+
+        if not existing_msg:
+            return False
+
+        todo_card = existing_msg.meta.get("todoCard", {})
+        todolist = todo_card.get("todolist", [])
+
+        if event == "todolist_task_added":
+            todolist.append({
+                "db_id": data.get("db_id"),
+                "task_id": data.get("task_id"),
+                "task": data.get("task_description"),
+                "owner": data.get("owner"),
+                "dispatch_tool": data.get("dispatch_tool"),
+                "instruction": data.get("instruction"),
+                "depends_on": [d.strip() for d in (data.get("depends_on") or "").split(",") if d.strip()],
+                "done_criteria": data.get("done_criteria", ""),
+                "status": "pending",
+                "depth": 0,
+                "parent_id": "",
+                "agent_scope": "supervisor",
+                "task_type": "",
+                "sort_order": data.get("sort_order", len(todolist)),
+            })
+
+        elif event == "todolist_task_edited":
+            target_id = data.get("db_id")
+            for t in todolist:
+                if t.get("db_id") == target_id:
+                    t["task"] = data.get("task_description", t.get("task"))
+                    t["owner"] = data.get("owner", t.get("owner"))
+                    t["dispatch_tool"] = data.get("dispatch_tool", t.get("dispatch_tool"))
+                    t["instruction"] = data.get("instruction", t.get("instruction"))
+                    t["done_criteria"] = data.get("done_criteria", t.get("done_criteria"))
+                    dep = data.get("depends_on")
+                    if dep is not None:
+                        t["depends_on"] = [d.strip() for d in dep.split(",") if d.strip()]
+                    break
+
+        elif event == "todolist_task_deleted":
+            target_id = data.get("db_id")
+            todolist[:] = [t for t in todolist if t.get("db_id") != target_id]
+
         flag_modified(existing_msg, "meta")
         db.commit()
         return True

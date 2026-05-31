@@ -18,7 +18,7 @@ import { normalizeTodoItem } from "../lib/sseEventHandlers";
  * @param {Function}    [options.callbacks.onChapterIntelUpdate]
  * @param {Function}    [options.callbacks.onWorkCreated]
  */
-export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
+export function useSupervisorChat({ workId, chapterNumber, autoMode, callbacks = {} }) {
   const {
     onOutlineUpdated,
     onChapterUpdated,
@@ -158,6 +158,7 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
         finalizeLastRunningStep();
         freezeDraft();
         lastQueryCategoryRef.current = null;
+        reconcileTodolist(activeSessionIdRef.current, setTimeline);
         setRunning(false);
         break;
 
@@ -346,6 +347,72 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
         break;
       }
 
+      case "todolist_task_added": {
+        const { db_id, task_id, task_description, owner, dispatch_tool, instruction, depends_on, done_criteria, sort_order } = d || {};
+        if (!db_id || !task_id) break;
+        setTimeline((prev) =>
+          prev.map((item) => {
+            if (item.type !== "requirements_todolist" || !item.todoCard?.todolist) return item;
+            const newTask = {
+              db_id,
+              task_id,
+              task: task_description,
+              owner: owner || "supervisor",
+              dispatch_tool: dispatch_tool || "none",
+              instruction: instruction || task_description,
+              depends_on: Array.isArray(depends_on) ? depends_on : (depends_on ? depends_on.split(",").map(s => s.trim()).filter(Boolean) : []),
+              done_criteria: done_criteria || "",
+              status: "pending",
+              depth: 0,
+              parent_id: "",
+              agent_scope: "supervisor",
+              task_type: "",
+              sort_order: sort_order ?? item.todoCard.todolist.length,
+            };
+            return { ...item, todoCard: { ...item.todoCard, todolist: [...item.todoCard.todolist, newTask] } };
+          })
+        );
+        break;
+      }
+
+      case "todolist_task_edited": {
+        const { db_id: editDbId } = d || {};
+        if (!editDbId) break;
+        setTimeline((prev) =>
+          prev.map((item) => {
+            if (item.type !== "requirements_todolist" || !item.todoCard?.todolist) return item;
+            const updatedTodolist = item.todoCard.todolist.map((t) => {
+              if (t.db_id !== editDbId) return t;
+              const updated = { ...t };
+              if (d.task_description !== undefined) updated.task = d.task_description;
+              if (d.owner !== undefined) updated.owner = d.owner;
+              if (d.dispatch_tool !== undefined) updated.dispatch_tool = d.dispatch_tool;
+              if (d.instruction !== undefined) updated.instruction = d.instruction;
+              if (d.done_criteria !== undefined) updated.done_criteria = d.done_criteria;
+              if (d.depends_on !== undefined) {
+                updated.depends_on = Array.isArray(d.depends_on) ? d.depends_on : d.depends_on.split(",").map(s => s.trim()).filter(Boolean);
+              }
+              return updated;
+            });
+            return { ...item, todoCard: { ...item.todoCard, todolist: updatedTodolist } };
+          })
+        );
+        break;
+      }
+
+      case "todolist_task_deleted": {
+        const { db_id: delDbId } = d || {};
+        if (!delDbId) break;
+        setTimeline((prev) =>
+          prev.map((item) => {
+            if (item.type !== "requirements_todolist" || !item.todoCard?.todolist) return item;
+            const filtered = item.todoCard.todolist.filter((t) => t.db_id !== delDbId);
+            return { ...item, todoCard: { ...item.todoCard, todolist: filtered } };
+          })
+        );
+        break;
+      }
+
       case "edit_chapter_hunk_diff": {
         addMessage("assistant", "", {
           type: "patch_diff_card",
@@ -393,7 +460,7 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
           metadataDiffCard: {
             chapter_number: d.chapter_number,
             diff: d.diff,
-            diff_summary: d.summary,
+            diff_summary: d.diff_summary,
           },
         });
         break;
@@ -564,8 +631,9 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
   const handleSend = useCallback(() => {
     if (running || !input.trim()) return;
 
-    const msg = input.trim();
-    addMessage("user", msg);
+    const raw = input.trim();
+    const msg = chapterNumber != null ? `[用户正在查看第${chapterNumber}章]\n${raw}` : raw;
+    addMessage("user", raw);
     setInput("");
 
     const sid = activeSessionIdRef.current;
@@ -574,7 +642,7 @@ export function useSupervisorChat({ workId, autoMode, callbacks = {} }) {
     } else {
       connectSSE(`${API_BASE}/supervisor/resume`, { session_id: sid, message: msg });
     }
-  }, [running, input, addMessage, connectSSE, workId, autoMode]);
+  }, [running, input, chapterNumber, addMessage, connectSSE, workId, autoMode]);
 
   // ── Confirm handlers ──
 
@@ -880,4 +948,41 @@ function extractQueryCategory(source) {
   if (/^第\d+章大纲/.test(source)) return "章节大纲";
   if (/^第\d+章$/.test(source)) return "前文";
   return source;
+}
+
+/**
+ * Fetch authoritative todolist from server and replace in-memory cards.
+ * Ensures the UI reflects final state even if SSE events were missed
+ * during long-running sessions.
+ */
+async function reconcileTodolist(sessionId, setTimeline) {
+  if (!sessionId) return;
+  try {
+    const { sessionApi } = await import("../lib/api.js");
+    const msgs = await sessionApi.getSupervisorMessages(sessionId);
+    if (!msgs || msgs.length === 0) return;
+
+    const serverCards = [];
+    for (const m of msgs) {
+      if (m.role !== "assistant" || !m.meta) continue;
+      if (m.meta.type === "requirements_todolist" && m.meta.todoCard?.todolist) {
+        serverCards.push(m.meta.todoCard);
+      } else if (m.meta.intent === "requirements_planner" && m.meta.requirements_plan?.todolist) {
+        serverCards.push(m.meta.requirements_plan);
+      }
+    }
+    if (serverCards.length === 0) return;
+
+    setTimeline((prev) =>
+      prev.map((item) => {
+        if (item.type !== "requirements_todolist" || !item.todoCard?.todolist) return item;
+        const match = serverCards.find(
+          (sc) => sc.todolist.length > 0 && item.todoCard.todolist.some((t) => t.db_id === sc.todolist[0].db_id)
+        );
+        return match ? { ...item, todoCard: match } : item;
+      })
+    );
+  } catch {
+    // Reconciliation is best-effort; do not disrupt the user on failure.
+  }
 }

@@ -12,6 +12,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronUp,
+  FileText,
   LayoutList,
   Loader2,
   PenLine,
@@ -35,6 +36,7 @@ import { buildGraphData } from "../lib/buildGraphData";
 import { sessionApi } from "../lib/api";
 import { CharacterDetailDrawer } from "../components/CharacterDetailDrawer";
 import { RelationGraphLoadingOverlay } from "../components/RelationGraphLoadingOverlay";
+import { RequirementsDocDrawer } from "../components/RequirementsDocDrawer";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "../components/supervisor/ChatTimeline";
 import { useSmartScroll } from "../hooks/useSmartScroll";
@@ -938,9 +940,10 @@ const mdComponents = {
     ),
 };
 
-function SupervisorChatPanel({ workId, onOutlineUpdated, onChapterUpdated, onCharactersUpdated, onChapterIntelUpdate }) {
+function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapterUpdated, onCharactersUpdated, onChapterIntelUpdate }) {
   const chat = useSupervisorChat({
     workId,
+    chapterNumber,
     autoMode: true,
     callbacks: {
       onOutlineUpdated,
@@ -1348,6 +1351,8 @@ export function WorkDetailPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [chatPanelWidth, setChatPanelWidth] = useState(440);
   const [chatResizing, setChatResizing] = useState(false);
+  const [reqDocOpen, setReqDocOpen] = useState(false);
+  const [reqDocContent, setReqDocContent] = useState("");
 
   const [titleDraft, setTitleDraft] = useState("");
   const [contentDraft, setContentDraft] = useState("");
@@ -1667,6 +1672,16 @@ export function WorkDetailPage() {
     } catch { /* ignore */ }
   };
 
+  const fetchRequirementsDoc = async () => {
+    try {
+      const res = await authFetch(`${API_BASE}/works/${workId}/requirements-doc`);
+      if (res.ok) {
+        const data = await res.json();
+        setReqDocContent(data.content || "");
+      }
+    } catch { /* ignore */ }
+  };
+
   const fetchChapterIntel = async (chapterNumber) => {
     if (!chapterNumber) return;
     try {
@@ -1881,6 +1896,18 @@ export function WorkDetailPage() {
             <Bot className="mr-1 h-4 w-4" />
             AI 助手
           </Button>
+
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              setReqDocOpen(true);
+              fetchRequirementsDoc();
+            }}
+          >
+            <FileText className="mr-1 h-4 w-4" />
+            需求文档
+          </Button>
         </div>
       </section>
 
@@ -2018,7 +2045,7 @@ export function WorkDetailPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm sm:flex-row sm:items-center sm:justify-between">
+                    <div className="sticky top-0 z-10 mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
                       <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
                         <Input
                           value={titleDraft}
@@ -2164,6 +2191,7 @@ export function WorkDetailPage() {
               />
               <SupervisorChatPanel
                 workId={workId}
+                chapterNumber={effectiveChapterNum}
                 onOutlineUpdated={(newTree) => setOutlineTree(newTree)}
                 onChapterUpdated={() => refreshChapters()}
                 onCharactersUpdated={() => refreshCharacters()}
@@ -2180,6 +2208,7 @@ export function WorkDetailPage() {
           <div className="min-h-[200px] flex-1 overflow-hidden">
             <SupervisorChatPanel
               workId={workId}
+              chapterNumber={effectiveChapterNum}
               onOutlineUpdated={(newTree) => setOutlineTree(newTree)}
               onChapterUpdated={() => refreshChapters()}
               onCharactersUpdated={() => refreshCharacters()}
@@ -2198,6 +2227,12 @@ export function WorkDetailPage() {
             setGraphFocus({ type: "timeline", id: link.timeline_id });
           }
         }}
+      />
+
+      <RequirementsDocDrawer
+        open={reqDocOpen}
+        onClose={() => setReqDocOpen(false)}
+        content={reqDocContent}
       />
     </main>
   );

@@ -9,7 +9,7 @@ import uuid
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
-from app.core.deepseek_llm import DeepSeekChatOpenAI
+from app.core.deepseek_llm import DeepSeekChatOpenAI, FallbackLLM
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph import MessagesState
 from langgraph.prebuilt import ToolNode
@@ -85,17 +85,21 @@ def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
 # ── LLM 工厂 ──
 
 
-def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str | None = None) -> DeepSeekChatOpenAI:
+def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str | None = None) -> DeepSeekChatOpenAI | FallbackLLM:
     """创建子 Agent 使用的 LLM 实例。
 
     Args:
         temperature: 生成温度
         streaming: 是否启用流式输出
         model_name: 模型名称，不传则使用 default_model
+
+    Returns:
+        当配置了 fallback_model 时返回 FallbackLLM（429 自动切换），
+        否则返回 DeepSeekChatOpenAI。
     """
     name = model_name or settings.default_model
     model_conf = settings.get_model_config(model_name)
-    return DeepSeekChatOpenAI(
+    primary = DeepSeekChatOpenAI(
         model=name,
         api_key=model_conf["api_key"],
         base_url=model_conf["base_url"],
@@ -104,6 +108,19 @@ def get_llm(temperature: float = 0.7, streaming: bool = True, *, model_name: str
         request_timeout=(15, 180),
         max_retries=0,
     )
+    if settings.fallback_model:
+        fb_conf = settings.get_model_config(settings.fallback_model)
+        fallback = DeepSeekChatOpenAI(
+            model=settings.fallback_model,
+            api_key=fb_conf["api_key"],
+            base_url=fb_conf["base_url"],
+            temperature=temperature,
+            streaming=streaming,
+            request_timeout=(15, 180),
+            max_retries=0,
+        )
+        return FallbackLLM(primary, fallback)
+    return primary
 
 
 # ── 条件边 ──

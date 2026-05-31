@@ -6,7 +6,6 @@ import {
   ChevronDown,
   Send,
   Sparkles,
-  Zap,
   Bot,
   StopCircle,
 } from "lucide-react";
@@ -41,11 +40,10 @@ export function UnifiedAgentPage() {
   const [workTitle, setWorkTitle] = useState(null);
   const [currentIntent, setCurrentIntent] = useState(null);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(false);
-  const [autoMode, setAutoMode] = useState(true);
 
   const chat = useSupervisorChat({
     workId,
-    autoMode,
+    autoMode: true,
     callbacks: {
       onWorkCreated: (data) => {
         setWorkId(data.work_id);
@@ -72,7 +70,6 @@ export function UnifiedAgentPage() {
     setWorkId(null);
     setWorkTitle(null);
     setCurrentIntent(null);
-    setAutoMode(true);
   };
 
   return (
@@ -100,26 +97,6 @@ export function UnifiedAgentPage() {
           {currentIntent && intentBadge(currentIntent)}
         </div>
         <div className="flex items-center gap-2">
-          {!chat.sessionId && (
-            <button
-              onClick={() => setAutoMode(!autoMode)}
-              className={`flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs transition-colors ${
-                autoMode
-                  ? "bg-amber-100 text-amber-700 hover:bg-amber-200"
-                  : "bg-slate-100 text-slate-500 hover:bg-slate-200"
-              }`}
-              title={autoMode ? "自动模式：编辑直接生效" : "手动模式：编辑需要确认"}
-            >
-              <Zap className="h-3 w-3" />
-              {autoMode ? "自动" : "手动"}
-            </button>
-          )}
-          {chat.sessionId && autoMode && !chat.running && (
-            <span className="flex items-center gap-1 rounded-full bg-amber-50 px-2 py-0.5 text-[10px] text-amber-600">
-              <Zap className="h-3 w-3" />
-              自动模式
-            </span>
-          )}
           {chat.sessionId && !chat.running && (
             <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-500" onClick={resetState}>
               新对话

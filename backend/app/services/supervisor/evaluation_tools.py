@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from pathlib import Path
 from typing import Any
@@ -61,6 +62,14 @@ class EvaluateChapterOutlineSyncInput(BaseModel):
     trigger: str = Field(default="run", description="触发参数，保持默认即可")
 
 
+class EvaluateChapterAllInput(BaseModel):
+    chapter_number: int = Field(description="要评估的章节号")
+    evaluations: list[str] = Field(
+        default=["editor", "reader", "sync"],
+        description="要并行执行的评估类型列表，可选值：editor（编辑视角）、reader（读者视角）、sync（大纲同步性）。默认全部执行。",
+    )
+
+
 # ── Helpers ──
 
 
@@ -88,7 +97,7 @@ def _get_work_chapter_from_config(config: RunnableConfig) -> tuple[str, int]:
 
 def _get_work_id(config: RunnableConfig) -> str:
     work_id = str(config.get("configurable", {}).get("work_id", "") or "")
-    if work_id:
+    if work_id is not None and work_id != "":
         return work_id
     configurable = config.get("configurable", {})
     session_id = configurable.get("supervisor_session_id")
@@ -475,6 +484,126 @@ evaluate_chapter_outline_sync = StructuredTool.from_function(
 )
 
 
+# ── 聚合评估工具：并行调用三个评估 ──
+
+
+async def _evaluate_chapter_all_coroutine(
+    chapter_number: int,
+    evaluations: list[str] | None = None,
+    config: RunnableConfig = None,
+) -> str:
+    """并行执行指定的评估任务，一次返回全部结果。"""
+    from app.models.work_model import Chapter, Character, Work
+    from app.services.work_service import WorkService
+
+    if evaluations is None:
+        evaluations = ["editor", "reader", "sync"]
+
+    VALID_EVALS = {"editor", "reader", "sync"}
+    invalid = [e for e in evaluations if e not in VALID_EVALS]
+    if invalid:
+        return f"无效的评估类型：{', '.join(invalid)}。合法值为：editor, reader, sync"
+    if not evaluations:
+        return "未指定任何评估类型。请在 evaluations 中传入至少一个：editor / reader / sync。"
+
+    db = _get_db(config)
+    work_id = _get_work_id(config)
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"评估失败：作品 {work_id} 不存在。"
+
+    chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+    if not chapter or not chapter.content:
+        return f"评估失败：第{chapter_number}章正文不存在。"
+
+    # 读取上下文（复用已有 helper）
+    chapter_outline = WorkService._find_chapter_outline(work.outline_tree, chapter_number) or ""
+    story_info = _outline_to_natural_text(work.outline_tree or {})
+    previous_chapters = _read_previous_chapters_text(db, work_id, chapter_number)
+
+    # 按需构建协程列表
+    tasks = []
+    eval_order = []  # 记录实际执行顺序，用于结果解析
+
+    if "editor" in evaluations:
+        tasks.append(_evaluate_as_editor_coroutine(
+            chapter_content=chapter.content,
+            story_info=story_info,
+            chapter_outline=chapter_outline,
+            previous_chapters=previous_chapters,
+            config=config,
+        ))
+        eval_order.append("editor")
+
+    if "reader" in evaluations:
+        tasks.append(_evaluate_as_reader_coroutine(
+            chapter_content=chapter.content,
+            story_info=story_info,
+            chapter_outline=chapter_outline,
+            previous_chapters=previous_chapters,
+            config=config,
+        ))
+        eval_order.append("reader")
+
+    if "sync" in evaluations:
+        tasks.append(_evaluate_chapter_outline_sync_coroutine(
+            chapter_number=chapter_number,
+            config=config,
+        ))
+        eval_order.append("sync")
+
+    # 并行执行
+    results = await asyncio.gather(*tasks)
+
+    # 组装结果
+    section_headers = {
+        "editor": "编辑视角评估",
+        "reader": "读者视角评估",
+        "sync": "大纲同步性评估",
+    }
+    parts = []
+    for eval_key, result in zip(eval_order, results):
+        parts.append(f"## {section_headers[eval_key]}\n\n{result}")
+    return "\n\n---\n\n".join(parts)
+
+
+def _read_previous_chapters_text(db, work_id: str, chapter_number: int, limit: int = 3) -> str:
+    """读取前几章正文，用于评估上下文。"""
+    from app.models.work_model import Chapter
+
+    prev_chapters = (
+        db.query(Chapter)
+        .filter_by(work_id=work_id)
+        .filter(Chapter.chapter_number < chapter_number)
+        .filter(Chapter.content != "")
+        .order_by(Chapter.chapter_number.desc())
+        .limit(limit)
+        .all()
+    )
+    prev_chapters.reverse()
+    if not prev_chapters:
+        return ""
+    parts = []
+    for ch in prev_chapters:
+        parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{ch.content}")
+    return "\n\n".join(parts)
+
+
+evaluate_chapter_all = StructuredTool.from_function(
+    func=None,
+    coroutine=_evaluate_chapter_all_coroutine,
+    name="evaluate_chapter_all",
+    description=(
+        "并行执行指定的评估任务（编辑视角 / 读者视角 / 大纲同步性），一次返回全部结果。"
+        "只需传入 chapter_number，工具内部自动读取正文、大纲、前文等上下文。"
+        "通过 evaluations 参数指定要执行哪些评估，默认全部执行。"
+        "推荐优先使用此工具代替分别调用 evaluate_as_editor / evaluate_as_reader / evaluate_chapter_outline_sync。"
+    ),
+    args_schema=EvaluateChapterAllInput,
+)
+
+
 # ── 导出工具列表 ──
 
 from app.services.supervisor.outline_tools import (  # noqa: E402
@@ -493,4 +622,5 @@ EVALUATION_TOOLS = [
     evaluate_as_editor,
     evaluate_as_reader,
     evaluate_chapter_outline_sync,
+    evaluate_chapter_all,
 ]

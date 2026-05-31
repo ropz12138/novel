@@ -1,4 +1,6 @@
 import logging
+from logging.handlers import TimedRotatingFileHandler
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,10 +17,24 @@ from app.routers import (
     work_router,
 )
 
+# 日志目录
+LOG_DIR = Path(__file__).resolve().parent.parent.parent / ".run"
+LOG_DIR.mkdir(exist_ok=True)
+
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S",
+    handlers=[
+        TimedRotatingFileHandler(
+            LOG_DIR / "backend-prod.log",
+            when="midnight",
+            interval=1,
+            backupCount=30,  # 保留 30 天
+            encoding="utf-8",
+        ),
+        logging.StreamHandler(),  # 同时输出到终端
+    ],
 )
 # 抑制第三方库的噪音日志
 logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)

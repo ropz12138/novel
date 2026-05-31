@@ -107,6 +107,16 @@ def _should_continue(state: EvaluationState) -> str:
     return END
 
 
+def _extract_section(text: str, header: str) -> str:
+    """从聚合评估结果中提取指定标题下的内容。"""
+    import re
+
+    # 匹配 "## header" 到下一个 "## " 或 "---" 或结尾
+    pattern = rf"## {re.escape(header)}\s*\n(.*?)(?=\n## |\n---|\Z)"
+    m = re.search(pattern, text, re.DOTALL)
+    return m.group(1).strip() if m else ""
+
+
 class EvaluationAgent:
     """章节评估 Agent — 使用 LangGraph StateGraph 编排"""
 
@@ -197,6 +207,12 @@ class EvaluationAgent:
                         reader_text = msg.content or ""
                     elif msg.name == "evaluate_chapter_outline_sync":
                         sync_text = msg.content or ""
+                    elif msg.name == "evaluate_chapter_all":
+                        # 解析聚合结果，提取三个评估部分
+                        content = msg.content or ""
+                        editor_text = _extract_section(content, "编辑视角评估")
+                        reader_text = _extract_section(content, "读者视角评估")
+                        sync_text = _extract_section(content, "大纲同步性评估")
 
         title = "章节评估"
         if chapter_number is not None:

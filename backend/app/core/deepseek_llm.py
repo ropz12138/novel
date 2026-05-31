@@ -10,6 +10,7 @@ DeepSeek Thinking Mode + Tool Calls 要求带 tool_calls 的 assistant 消息必
 from __future__ import annotations
 
 import json
+import logging
 import re
 from collections.abc import Mapping
 from typing import Any, Literal
@@ -17,6 +18,7 @@ from typing import Any, Literal
 import openai
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
+from langchain_core.runnables import Runnable, RunnableConfig
 from langchain_openai import ChatOpenAI
 from langchain_openai.chat_models.base import (
     _convert_delta_to_message_chunk,
@@ -25,6 +27,8 @@ from langchain_openai.chat_models.base import (
     _convert_message_to_dict,
     _create_usage_metadata,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _inject_reasoning_content_outbound(message_dict: dict[str, Any], message: BaseMessage) -> None:
@@ -147,6 +151,85 @@ def _escape_unescaped_quotes_in_json(raw: str) -> str:
         i += 1
 
     return ''.join(result)
+
+
+class FallbackLLM(Runnable):
+    """包装 DeepSeekChatOpenAI，遇到 429 时自动切换到备选模型重试。
+
+    继承 langchain_core.runnables.Runnable，可直接用于 LangGraph / bind_tools 等场景。
+    """
+
+    def __init__(self, primary: DeepSeekChatOpenAI, fallback: DeepSeekChatOpenAI):
+        self._primary = primary
+        self._fallback = fallback
+
+    # ── 委托属性 ──
+
+    def __getattr__(self, name: str):
+        return getattr(self._primary, name)
+
+    # ── bind_tools / with_structured_output ──
+
+    def bind_tools(self, tools, **kwargs):
+        return FallbackLLM(
+            self._primary.bind_tools(tools, **kwargs),
+            self._fallback.bind_tools(tools, **kwargs),
+        )
+
+    def with_structured_output(self, schema, **kwargs):
+        return FallbackLLM(
+            self._primary.with_structured_output(schema, **kwargs),
+            self._fallback.with_structured_output(schema, **kwargs),
+        )
+
+    # ── Runnable 抽象方法 ──
+
+    def invoke(self, input, config: RunnableConfig | None = None, **kwargs):
+        try:
+            return self._primary.invoke(input, config=config, **kwargs)
+        except Exception as e:
+            if self._is_rate_limit(e):
+                logger.warning("429 rate limit, falling back to %s", self._fallback.model_name)
+                return self._fallback.invoke(input, config=config, **kwargs)
+            raise
+
+    async def ainvoke(self, input, config: RunnableConfig | None = None, **kwargs):
+        try:
+            return await self._primary.ainvoke(input, config=config, **kwargs)
+        except Exception as e:
+            if self._is_rate_limit(e):
+                logger.warning("429 rate limit, falling back to %s", self._fallback.model_name)
+                return await self._fallback.ainvoke(input, config=config, **kwargs)
+            raise
+
+    # ── 流式调用 ──
+
+    def stream(self, input, config: RunnableConfig | None = None, **kwargs):
+        try:
+            yield from self._primary.stream(input, config=config, **kwargs)
+        except Exception as e:
+            if self._is_rate_limit(e):
+                logger.warning("429 rate limit in stream, falling back to %s", self._fallback.model_name)
+                yield from self._fallback.stream(input, config=config, **kwargs)
+            else:
+                raise
+
+    async def astream(self, input, config: RunnableConfig | None = None, **kwargs):
+        try:
+            async for chunk in self._primary.astream(input, config=config, **kwargs):
+                yield chunk
+        except Exception as e:
+            if self._is_rate_limit(e):
+                logger.warning("429 rate limit in stream, falling back to %s", self._fallback.model_name)
+                async for chunk in self._fallback.astream(input, config=config, **kwargs):
+                    yield chunk
+            else:
+                raise
+
+    @staticmethod
+    def _is_rate_limit(e: Exception) -> bool:
+        s = str(e).lower()
+        return "429" in s or "rate" in s or "too many requests" in s
 
 
 class DeepSeekChatOpenAI(ChatOpenAI):

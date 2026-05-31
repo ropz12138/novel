@@ -44,6 +44,11 @@ from app.services.supervisor.tools import count_chapter_words
 if count_chapter_words.name not in _SEEN:
     CHAPTER_AGENT_TOOLS.append(count_chapter_words)
 
+# 追加需求文档读取工具
+from app.services.supervisor.tools import read_requirements_doc
+if read_requirements_doc.name not in _SEEN:
+    CHAPTER_AGENT_TOOLS.append(read_requirements_doc)
+
 
 # ── 状态定义 ──
 

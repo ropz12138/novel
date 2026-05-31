@@ -1,0 +1,4 @@
+interface:
+  display_name: "Novel Agent E2E"
+  short_description: "Run and assess Novel agent creation flows end to end."
+  default_prompt: "Use this skill to run the Novel project agent creation flow like the frontend, inspect traces, and assess chapter quality."

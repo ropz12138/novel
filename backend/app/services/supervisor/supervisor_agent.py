@@ -104,6 +104,7 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
     template = (PROMPT_DIR / "system.txt").read_text(encoding="utf-8")
 
     work_context = "（未绑定作品）"
+    requirements_doc = "（暂无需求记录）"
     if work_id:
         from app.models.work_model import Character, Work
 
@@ -132,10 +133,13 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
             parts.append(f"预计总章节数: {chapters_count}")
 
             work_context = "\n".join(parts)
+
+            if work.requirements_doc:
+                requirements_doc = work.requirements_doc
         else:
             work_context = "（当前绑定作品不存在）"
 
-    return SystemMessage(content=template.format(work_context=work_context))
+    return SystemMessage(content=template.format(work_context=work_context, requirements_doc=requirements_doc))
 
 
 def _should_continue(state: SupervisorState) -> str:
@@ -168,7 +172,20 @@ class SupervisorAgent:
             base_url=model_conf["base_url"],
             temperature=0.7,
             streaming=True,
+            max_retries=0,
         )
+        if settings.fallback_model:
+            from app.core.deepseek_llm import FallbackLLM
+            fb_conf = settings.get_model_config(settings.fallback_model)
+            fallback = DeepSeekChatOpenAI(
+                model=settings.fallback_model,
+                api_key=fb_conf["api_key"],
+                base_url=fb_conf["base_url"],
+                temperature=0.7,
+                streaming=True,
+                max_retries=0,
+            )
+            llm = FallbackLLM(llm, fallback)
         llm_with_tools = llm.bind_tools(ALL_TOOLS)
 
         tool_node = ToolNode(ALL_TOOLS)

@@ -162,3 +162,23 @@ def update_chapter_api(
     current_user: User = Depends(get_current_user),
 ):
     return update_chapter(work_id, chapter_number, payload, db, user_id=current_user.id)
+
+
+@router.get("/{work_id}/requirements-doc")
+def get_requirements_doc_api(
+    work_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    from app.models.work_model import Work, User
+    from fastapi import HTTPException
+
+    user = db.query(User).filter_by(id=current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    work = db.query(Work).filter_by(id=work_id, user_id=current_user.id).first()
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+
+    return {"content": work.requirements_doc or ""}

@@ -21,9 +21,9 @@ class TestToolRegistration:
     """验证所有工具正确注册"""
 
     def test_all_tools_count(self):
-        """应该恰好注册 20 个工具（不含 dispatch_*）"""
+        """应该恰好注册 24 个工具（不含 dispatch_*）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 21
+        assert len(ALL_TOOLS) == 24
 
     def test_query_characters_registered(self):
         from app.services.supervisor.tools import query_characters

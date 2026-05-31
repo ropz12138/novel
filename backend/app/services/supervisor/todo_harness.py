@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Callable
@@ -47,6 +48,14 @@ DISPATCH_OWNER_MAP: dict[str, str] = {
     "dispatch_evaluation": "evaluation_agent",
 }
 
+AGENT_DISPATCH_MAP: dict[str, str] = {
+    "outline": "dispatch_outline",
+    "chapter": "dispatch_chapter",
+    "evaluation": "dispatch_evaluation",
+}
+
+MAX_TASK_RETRIES = 2
+
 
 def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
@@ -76,6 +85,7 @@ def serialize_task_item(task: TaskItem) -> dict:
         "instruction": getattr(task, "instruction", "") or "",
         "result_summary": task.result_summary or "",
         "error_message": getattr(task, "error_message", "") or "",
+        "retry_count": getattr(task, "retry_count", 0) or 0,
     }
 
 
@@ -123,6 +133,65 @@ def set_task_status(
         "result_summary": result_summary or task.result_summary,
         "error_message": error_message or getattr(task, "error_message", ""),
     })
+
+
+# ── 清理 ──
+
+
+def cleanup_session_todolist(
+    *,
+    session_id: str,
+    db: Session,
+) -> int:
+    """清理指定 session 中所有已有的 todolist 任务（父任务 + 子任务）。
+
+    在 analyze_requirements 创建新 todolist 前调用，防止同一 session 中
+    出现多组同名 task_id 的记录，导致依赖检查混乱。
+
+    返回删除的任务数量。
+    """
+    if not session_id:
+        return 0
+
+    # 查询所有父任务（depth=0, parent_id=None）
+    parent_tasks = (
+        db.query(TaskItem)
+        .filter_by(session_id=session_id)
+        .filter(
+            (TaskItem.depth == 0) | (TaskItem.depth.is_(None)),
+            (TaskItem.parent_id.is_(None)) | (TaskItem.parent_id == ""),
+        )
+        .all()
+    )
+
+    if not parent_tasks:
+        return 0
+
+    deleted = 0
+
+    # 先删除子任务
+    for parent in parent_tasks:
+        children = (
+            db.query(TaskItem)
+            .filter_by(session_id=session_id, parent_id=parent.id)
+            .all()
+        )
+        for child in children:
+            db.delete(child)
+            deleted += 1
+
+    # 再删除父任务
+    for parent in parent_tasks:
+        db.delete(parent)
+        deleted += 1
+
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+
+    return deleted
 
 
 # ── 查询 ──
@@ -262,17 +331,7 @@ def _allocate_child_task_id(
     index: int,
     used_ids: set[str],
 ) -> str:
-    """Allocate a stable child task id.
-
-    Prefer the sub-agent provided id (e.g. T1/T2) so later update_child_task_status
-    calls can reference the exact same identifier. Fall back to parent-scoped
-    numbering and ensure uniqueness.
-    """
-    candidate = (raw_task_id or "").strip() or f"{parent_task_id}.{index}"
-    if candidate not in used_ids:
-        used_ids.add(candidate)
-        return candidate
-
+    """Allocate a deterministic parent-scoped child task id."""
     base = f"{parent_task_id}.{index}"
     if base not in used_ids:
         used_ids.add(base)
@@ -309,9 +368,9 @@ def create_child_todolist(
     if existing:
         return f"父任务 {parent.task_id} 已存在 {len(existing)} 个子任务，请使用 read_child_todolist 查看或 update_child_task_status 更新。"
 
-    created: list[TaskItem] = []
+    normalized_items: list[tuple[int, dict, str]] = []
+    raw_id_to_new: dict[str, str] = {}
     used_ids = {str(t.task_id or "").strip() for t in existing}
-    agent_scope = parent.owner or "sub_agent"
     for idx, raw in enumerate(items, start=1):
         desc = str(raw.get("task") or raw.get("task_description") or "").strip()
         if not desc:
@@ -322,6 +381,25 @@ def create_child_todolist(
             index=idx,
             used_ids=used_ids,
         )
+        raw_id = str(raw.get("id") or "").strip()
+        if raw_id:
+            raw_id_to_new[raw_id] = child_task_id
+        raw_id_to_new.setdefault(f"T{idx}", child_task_id)
+        normalized_items.append((idx, raw, child_task_id))
+
+    created: list[TaskItem] = []
+    agent_scope = parent.owner or "sub_agent"
+    for idx, raw, child_task_id in normalized_items:
+        desc = str(raw.get("task") or raw.get("task_description") or "").strip()
+        raw_depends_on = raw.get("depends_on") or []
+        if isinstance(raw_depends_on, list):
+            depends_on = ",".join(raw_id_to_new.get(str(dep).strip(), str(dep).strip()) for dep in raw_depends_on if str(dep).strip())
+        else:
+            depends_on = ",".join(
+                raw_id_to_new.get(dep.strip(), dep.strip())
+                for dep in str(raw_depends_on or "").split(",")
+                if dep.strip()
+            )
         child = TaskItem(
             id=str(uuid.uuid4()),
             session_id=parent.session_id,
@@ -332,7 +410,7 @@ def create_child_todolist(
             task_description=desc,
             owner=agent_scope,
             status=str(raw.get("status") or "pending"),
-            depends_on=",".join(raw.get("depends_on") or []) if isinstance(raw.get("depends_on"), list) else str(raw.get("depends_on") or ""),
+            depends_on=depends_on,
             done_criteria=str(raw.get("done_criteria") or ""),
             task_type=str(raw.get("task_type") or "subtask"),
             dispatch_tool="none",
@@ -358,7 +436,13 @@ def create_child_todolist(
         "subtasks": subtasks,
         "todolist": _all_session_tasks(db=db, session_id=parent.session_id),
     })
-    return f"已为父任务 {parent.task_id} 创建 {len(created)} 个子任务。"
+    mapping_lines = [
+        f"{str(raw.get('id') or f'T{idx}').strip()} -> {child_id}"
+        for idx, raw, child_id in normalized_items
+        if str(raw.get("id") or f"T{idx}").strip() != child_id
+    ]
+    mapping_text = "\n编号映射：\n" + "\n".join(f"- {line}" for line in mapping_lines) if mapping_lines else ""
+    return f"已为父任务 {parent.task_id} 创建 {len(created)} 个子任务。{mapping_text}"
 
 
 def read_child_todolist(
@@ -411,6 +495,15 @@ def update_child_task_status(
             .first()
         )
     if not task:
+        legacy_match = re.fullmatch(r"T(\d+)", str(task_identifier or "").strip())
+        if legacy_match:
+            mapped_identifier = f"{parent.task_id}.{int(legacy_match.group(1))}"
+            task = (
+                db.query(TaskItem)
+                .filter_by(session_id=parent.session_id, parent_id=parent.id, task_id=mapped_identifier)
+                .first()
+            )
+    if not task:
         return f"更新子任务失败：父任务 {parent.task_id} 下不存在 {task_identifier}。"
 
     if status not in {"pending", "in_progress", "completed", "failed", "skipped"}:
@@ -455,6 +548,98 @@ def finalize_open_child_tasks(
         )
 
 
+def build_subtask_digest(*, parent: TaskItem, db: Session) -> str:
+    """把父任务下的子任务汇总成可读明细（做了什么 / 哪步失败）。"""
+    children = (
+        db.query(TaskItem)
+        .filter_by(session_id=parent.session_id, parent_id=parent.id)
+        .order_by(TaskItem.sort_order.asc(), TaskItem.created_at.asc())
+        .all()
+    )
+    if not isinstance(children, list) or not children:
+        return ""
+
+    marks = {
+        "completed": "✓",
+        "failed": "✗",
+        "skipped": "-",
+        "in_progress": "…",
+        "pending": "·",
+    }
+    lines = ["执行明细："]
+    for child in children:
+        detail = child.result_summary or child.error_message or child.task_description
+        lines.append(f"  {marks.get(child.status, '?')} [{child.task_id}] {detail}")
+    return "\n".join(lines)
+
+
+def _report_digest(dispatch_result: dict | None) -> str:
+    if not dispatch_result:
+        return ""
+    report = dispatch_result.get("report")
+    if isinstance(report, dict):
+        lines = ["子 Agent 汇报："]
+        summary = str(report.get("summary") or "").strip()
+        if summary:
+            lines.append(f"- 总结：{summary}")
+        for label, key in [
+            ("关键动作", "actions"),
+            ("产出物", "artifacts"),
+            ("遗留问题", "issues"),
+            ("后续建议", "next_suggestions"),
+        ]:
+            values = report.get(key)
+            if isinstance(values, list) and values:
+                lines.append(f"- {label}：" + "；".join(str(v) for v in values if str(v).strip()))
+        return "\n".join(lines)
+
+    payload = dispatch_result.get("payload")
+    if isinstance(payload, dict):
+        parts = []
+        for key in ("title", "work_id", "chapter_number", "editor", "reader", "sync"):
+            value = payload.get(key)
+            if value not in (None, "", [], {}):
+                parts.append(f"{key}={value}")
+        if parts:
+            return "结构化结果：" + "；".join(parts)
+    return ""
+
+
+def _compose_task_summary(
+    *,
+    result_message: str,
+    dispatch_result: dict | None,
+    subtask_digest: str,
+) -> str:
+    parts = [part for part in [result_message, _report_digest(dispatch_result), subtask_digest] if part]
+    return "\n".join(parts)
+
+
+def _clear_child_tasks_for_retry(*, parent: TaskItem, db: Session, emit: Callable[[str, dict], None]) -> int:
+    children = (
+        db.query(TaskItem)
+        .filter_by(session_id=parent.session_id, parent_id=parent.id)
+        .all()
+    )
+    if not isinstance(children, list) or not children:
+        return 0
+    deleted = 0
+    for child in children:
+        db.delete(child)
+        deleted += 1
+    try:
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    emit("subtasks_cleared_for_retry", {
+        "parent_task_item_id": parent.id,
+        "parent_task_id": parent.task_id,
+        "deleted": deleted,
+    })
+    return deleted
+
+
 # ── 执行 ──
 
 
@@ -464,6 +649,7 @@ async def execute_todo_task(
     db: Session,
     emit: Callable[[str, dict], None],
     config: RunnableConfig,
+    agent: str | None = None,
 ) -> str:
     """执行 todolist 中的一条任务
 
@@ -486,8 +672,24 @@ async def execute_todo_task(
         return f"任务 {task.task_id}（{task.task_description}）已在执行中，请勿重复执行。"
 
     # 3. 检查是否已是终态
-    if task.status in ("completed", "skipped", "failed"):
+    if task.status in ("completed", "skipped"):
         return f"任务 {task.task_id} 当前状态为 {task.status}，不可执行。"
+    if task.status == "failed":
+        retry_count = getattr(task, "retry_count", 0) or 0
+        if retry_count >= MAX_TASK_RETRIES:
+            return f"任务 {task.task_id} 已达重试上限（{MAX_TASK_RETRIES} 次），请重新规划。"
+        task.retry_count = retry_count + 1
+        task.status = "pending"
+        task.error_message = ""
+        task.started_at = None
+        task.completed_at = None
+        db.commit()
+        emit("task_retry", {
+            "task_item_id": task.id,
+            "task_id": task.task_id,
+            "retry_count": task.retry_count,
+        })
+        _clear_child_tasks_for_retry(parent=task, db=db, emit=emit)
 
     # 4. 校验依赖
     depends_on_raw = task.depends_on or ""
@@ -499,7 +701,14 @@ async def execute_todo_task(
             .filter(TaskItem.task_id.in_(deps))
             .all()
         )
-        dep_map = {t.task_id: t.status for t in dep_tasks}
+        # 构建 dep_map：当同一 session 中存在多条同名 task_id 时，
+        # 优先保留 completed 状态，避免旧 todolist 的 pending 记录覆盖已完成的记录。
+        dep_map: dict[str, str] = {}
+        STATUS_PRIORITY = {"completed": 3, "skipped": 2, "failed": 1, "in_progress": 0, "pending": -1}
+        for t in dep_tasks:
+            existing = dep_map.get(t.task_id)
+            if existing is None or STATUS_PRIORITY.get(t.status, -1) > STATUS_PRIORITY.get(existing, -1):
+                dep_map[t.task_id] = t.status
         unmet = [d for d in deps if dep_map.get(d) != "completed"]
         if unmet:
             return (
@@ -509,7 +718,13 @@ async def execute_todo_task(
             )
 
     # 5. 确定 dispatch_tool（优先用显式字段，其次用 owner/task_type/文本推断）
-    dispatch_tool = infer_dispatch_tool(task)
+    if agent:
+        agent_key = agent.strip().lower()
+        if agent_key not in AGENT_DISPATCH_MAP:
+            return "无效 agent：{agent}。合法值为 outline / chapter / evaluation。".format(agent=agent)
+        dispatch_tool = AGENT_DISPATCH_MAP[agent_key]
+    else:
+        dispatch_tool = infer_dispatch_tool(task)
     if dispatch_tool and dispatch_tool != "none":
         task.dispatch_tool = dispatch_tool
         if task.owner in ("user", "supervisor", "", None):
@@ -554,7 +769,11 @@ async def execute_todo_task(
             task=task, status="failed", db=db, emit=emit,
             error_message=str(exc),
         )
-        return f"任务 {task.task_id} 执行失败：{exc}"
+        digest = build_subtask_digest(parent=task, db=db)
+        if digest:
+            task.result_summary = digest
+            db.commit()
+        return f"任务 {task.task_id} 执行失败：{exc}" + (f"\n{digest}" if digest else "")
 
     dispatch_result = _parse_dispatch_result(result_text)
     result_message = _dispatch_result_message(dispatch_result, result_text)
@@ -567,15 +786,21 @@ async def execute_todo_task(
             result_summary=result_message if result_message else "",
             error_message=result_message if result_message else "子 Agent 未完成任务",
         )
+        subtask_digest = build_subtask_digest(parent=task, db=db)
+        summary = _compose_task_summary(
+            result_message=result_message if result_message else "子 Agent 未完成任务",
+            dispatch_result=dispatch_result,
+            subtask_digest=subtask_digest,
+        )
         set_task_status(
             task=task,
             status="failed",
             db=db,
             emit=emit,
-            result_summary=result_message if result_message else "",
+            result_summary=summary,
             error_message=result_message if result_message else "子 Agent 未完成任务",
         )
-        return f"任务 {task.task_id} 执行失败：{result_message}"
+        return f"任务 {task.task_id} 执行失败：{result_message}" + (f"\n{subtask_digest}" if subtask_digest else "")
 
     # 9. 检查 session 是否进入 waiting
     if session_id:
@@ -596,14 +821,22 @@ async def execute_todo_task(
         emit=emit,
         result_summary="父任务已完成，子任务自动收敛为完成。",
     )
+    subtask_digest = build_subtask_digest(parent=task, db=db)
+    summary = _compose_task_summary(
+        result_message=result_message if result_message else "",
+        dispatch_result=dispatch_result,
+        subtask_digest=subtask_digest,
+    )
     set_task_status(
         task=task, status="completed", db=db, emit=emit,
-        result_summary=result_message if result_message else "",
+        result_summary=summary,
     )
 
     return (
         f"任务 {task.task_id}（{task.task_description}）执行完成。\n"
         f"子 Agent 返回：{result_message}"
+        + (f"\n{_report_digest(dispatch_result)}" if _report_digest(dispatch_result) else "")
+        + (f"\n{subtask_digest}" if subtask_digest else "")
     )
 
 
@@ -697,6 +930,7 @@ def _agent_task_json(
     message: str,
     error: dict | None = None,
     payload: dict | None = None,
+    report: dict | None = None,
 ) -> str:
     return json.dumps(
         {
@@ -707,6 +941,7 @@ def _agent_task_json(
             "message": message,
             "error": error,
             "payload": payload or {},
+            "report": report,
         },
         ensure_ascii=False,
     )
@@ -807,6 +1042,14 @@ async def _run_outline_task(
             action="outline_create",
             message=message,
             payload=result,
+            report={
+                "status": "completed",
+                "summary": message,
+                "actions": ["创建作品大纲"],
+                "artifacts": [f"作品：{result.get('title', '')}", f"work_id={created_work_id}"],
+                "issues": [],
+                "next_suggestions": [],
+            },
         )
 
     auto_mode = bool(configurable.get("auto_mode", False))
@@ -858,6 +1101,14 @@ async def _run_outline_task(
             action="outline_edit",
             message=message,
             payload=result,
+            report={
+                "status": "completed",
+                "summary": message,
+                "actions": ["编辑大纲"],
+                "artifacts": [],
+                "issues": [],
+                "next_suggestions": [],
+            },
         )
 
     outline_summary = result.get("outline_summary", {})
@@ -889,6 +1140,14 @@ async def _run_outline_task(
         action="outline_edit",
         message=message,
         payload=result,
+        report={
+            "status": "waiting",
+            "summary": message,
+            "actions": ["生成大纲变更建议"],
+            "artifacts": [f"操作数：{len(ops)}"],
+            "issues": ["等待用户确认"],
+            "next_suggestions": ["用户确认后继续执行"],
+        },
     )
 
 
@@ -970,6 +1229,14 @@ async def _run_evaluation_task(
             "reader": reader_text,
             "sync": sync_text,
         },
+        report={
+            "status": "completed",
+            "summary": f"「{title}」评估完成。",
+            "actions": ["完成章节质量评估"],
+            "artifacts": [f"编辑视角：{editor_text}", f"读者视角：{reader_text}", f"同步性：{sync_text}"],
+            "issues": [],
+            "next_suggestions": [],
+        },
     )
 
 
@@ -1046,6 +1313,7 @@ async def _dispatch_by_tool(
             )
 
         message = str((result or {}).get("message") or "章节任务已完成。")
+        report = (result or {}).get("report")
         failed = _is_failed_dispatch_result(message)
         return json.dumps(
             {
@@ -1056,6 +1324,7 @@ async def _dispatch_by_tool(
                 "message": message,
                 "error": {"code": "CHAPTER_AGENT_REPORTED_FAILURE", "detail": message} if failed else None,
                 "payload": result or {},
+                "report": report if isinstance(report, dict) else None,
             },
             ensure_ascii=False,
         )

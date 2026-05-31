@@ -92,6 +92,13 @@ def _ensure_columns(engine) -> None:
             ))
             conn.commit()
 
+        # works.requirements_doc
+        if not _column_exists("works", "requirements_doc"):
+            conn.execute(text(
+                "ALTER TABLE works ADD COLUMN requirements_doc TEXT"
+            ))
+            conn.commit()
+
         # chapter_metadata（兼容历史库：若 create_all 时机错过，这里兜底创建）
         conn.execute(text(
             """
@@ -143,6 +150,7 @@ def _ensure_columns(engine) -> None:
             ("dispatch_tool", "VARCHAR(80) NOT NULL DEFAULT ''"),
             ("instruction", "TEXT NOT NULL DEFAULT ''"),
             ("error_message", "TEXT NOT NULL DEFAULT ''"),
+            ("retry_count", "INTEGER NOT NULL DEFAULT 0"),
             ("started_at", "TIMESTAMPTZ"),
             ("completed_at", "TIMESTAMPTZ"),
         ]:

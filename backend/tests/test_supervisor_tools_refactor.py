@@ -54,9 +54,9 @@ class TestToolsRegistration:
         return {t.name for t in ALL_TOOLS}
 
     def test_all_tools_count(self):
-        """应该恰好注册 20 个工具（不含 dispatch_*）"""
+        """应该恰好注册 23 个工具（不含 dispatch_*）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 21
+        assert len(ALL_TOOLS) == 23
 
     def test_tool_names_unique(self):
         """所有工具名不应重复"""

@@ -27,6 +27,7 @@ class TestTaskItemModel:
             "result_summary", "sort_order", "created_at", "updated_at",
             "task_type", "dispatch_tool", "instruction",
             "error_message", "started_at", "completed_at",
+            "agent_scope", "depth", "parent_id", "retry_count",
         }
         assert columns == expected
 

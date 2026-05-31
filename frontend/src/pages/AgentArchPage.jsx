@@ -1,18 +1,24 @@
-import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
-  ArrowLeft,
   ArrowDown,
-  ArrowRight,
+  ArrowLeft,
+  Bot,
   Brain,
-  Search,
-  PenTool,
-  Save,
-  Users,
-  MessageSquare,
-  Zap,
+  ClipboardList,
+  Cpu,
   Database,
+  FileSearch,
+  GitBranch,
+  Layers,
+  PenTool,
   Radio,
+  Route,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Users,
+  Workflow,
+  Wrench,
 } from "lucide-react";
 import { Button } from "../components/ui/button";
 import {
@@ -22,551 +28,704 @@ import {
   CardTitle,
 } from "../components/ui/card";
 
-const FLOW = [
-  { title: "Plan", desc: "规划节点 · LLM temp=0.6", color: "bg-blue-50 border-blue-200 text-blue-900" },
-  { title: "Thinking", desc: "构思/标题/大纲提案", color: "bg-blue-50 border-blue-200 text-blue-900" },
-  { title: "Query", desc: "按需或全量查询上下文", color: "bg-amber-50 border-amber-200 text-amber-900" },
-  { title: "Write", desc: "正文生成 · LLM temp=0.7", color: "bg-emerald-50 border-emerald-200 text-emerald-900" },
-  { title: "Save+Update", desc: "保存章节 + 更新角色", color: "bg-violet-50 border-violet-200 text-violet-900" },
+const supervisorTools = [
+  { name: "query_characters", desc: "结构化查询角色卡，支持按姓名、角色类型、状态等过滤。" },
+  { name: "query_chapters", desc: "查询章节号、标题、状态、字数和正文预览。" },
+  { name: "count_chapter_words", desc: "计算指定章节正文纯文字数。" },
+  { name: "query_chapter_meta", desc: "读取章节摘要、关键情节、伏笔、事实等元数据概览。" },
+  { name: "grep_chapter_meta", desc: "在章节元数据字段中按关键词检索。" },
+  { name: "grep", desc: "在角色设定和章节正文中搜索关键词上下文。" },
+  { name: "read_outline", desc: "读取作品当前完整大纲。" },
+  { name: "query_outline_related_chapters", desc: "按大纲节点或关键词级联查找关联章节。" },
+  { name: "read_chapter", desc: "读取指定章节范围的完整正文和基础信息。" },
+  { name: "query_characters_by_chapter", desc: "查询目标章节上下文内相关角色状态。" },
+  { name: "grep_in_chapter", desc: "在指定章节范围正文内检索关键词。" },
+  { name: "query_chapter_outline", desc: "读取指定章节范围对应的大纲节点。" },
+  { name: "query_previous_chapters", desc: "读取目标章节前文，用于续写或编辑上下文。" },
+  { name: "query_foreshadowing", desc: "查询作品伏笔及其埋设、回收位置。" },
+  { name: "read_work_context", desc: "读取作品标题、类型、卷、时间线数量等基础上下文。" },
+  { name: "read_chat_history", desc: "读取当前 Supervisor 会话最近对话。" },
+  { name: "analyze_requirements", desc: "分析用户需求，生成澄清问题和可持久化 todolist。" },
+  { name: "read_requirements_doc", desc: "读取当前作品长期需求文档。" },
+  { name: "update_requirements_doc", desc: "全量覆盖写入长期需求文档。" },
+  { name: "update_task_status", desc: "手动更新 task_items 中的任务状态。" },
+  { name: "update_todolist_readiness", desc: "标记任务清单是否已具备执行条件。" },
+  { name: "execute_todo_task", desc: "执行 todolist 单项任务，并自动路由到对应子 Agent。" },
+  { name: "read_todolist", desc: "读取当前会话任务清单、状态、依赖和执行信息。" },
 ];
 
-function FlowNode({ title, desc, color }) {
-  return (
-    <div className={`w-full rounded-lg border px-3 py-2 ${color}`}>
-      <p className="text-sm font-semibold">{title}</p>
-      <p className="mt-1 text-xs opacity-80">{desc}</p>
-    </div>
-  );
-}
+const childTodoTools = [
+  { name: "create_child_todolist", desc: "为当前父任务创建子任务清单。" },
+  { name: "read_child_todolist", desc: "读取当前父任务下的子任务进度。" },
+  { name: "update_child_task_status", desc: "更新子任务状态和执行摘要。" },
+];
 
-function ArchitectureFlow() {
-  return (
-    <div className="space-y-4">
-      <div className="rounded-xl border border-sky-200 bg-sky-50/70 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-sky-700">Supervisor 层</p>
-        <div className="mt-2 grid gap-2 md:grid-cols-[1fr_auto_1fr] md:items-center">
-          <div className="rounded-lg border border-sky-200 bg-white px-3 py-2">
-            <p className="text-sm font-semibold text-slate-800">Supervisor Agent</p>
-            <p className="mt-1 text-xs text-slate-600">LangGraph + Tool Calling</p>
-          </div>
-          <div className="flex justify-center text-sky-500">
-            <ArrowRight className="h-4 w-4 hidden md:block" />
-            <ArrowDown className="h-4 w-4 md:hidden" />
-          </div>
-          <div className="rounded-lg border border-slate-200 bg-white px-3 py-2">
-            <p className="text-sm font-semibold text-slate-800">路由决策</p>
-            <p className="mt-1 text-xs text-slate-600">`dispatch_chapter` / `dispatch_evaluation` / 其他工具</p>
-          </div>
-        </div>
-      </div>
-
-      <div className="rounded-xl border border-slate-200 bg-slate-50/60 p-4">
-        <p className="text-xs font-semibold uppercase tracking-wide text-slate-700">Chapter 子流程</p>
-        <div className="mt-3 grid gap-2">
-          {FLOW.map((step, idx) => (
-            <div key={step.title} className="flex flex-col items-center gap-2">
-              <FlowNode {...step} />
-              {idx < FLOW.length - 1 && <ArrowDown className="h-4 w-4 text-slate-400" />}
-            </div>
-          ))}
-        </div>
-
-        <div className="mt-4 grid gap-2 md:grid-cols-3">
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            Thinking 后需确认：`need_confirm(thinking/outline)`
-          </div>
-          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
-            章节评估：由 `dispatch_evaluation` 派发给 EvaluationAgent
-          </div>
-          <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-            Save 前需确认：`need_confirm(save)`
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/* ─── 阶段详情数据 ─── */
-const STAGES = [
+const agents = [
   {
-    id: "plan",
-    icon: Brain,
-    color: "blue",
-    bg: "bg-blue-50",
-    border: "border-blue-200",
-    iconColor: "text-blue-600",
-    badge: "bg-blue-100 text-blue-700",
-    title: "规划阶段 Plan",
-    node: "plan_node",
-    prompt: "agent_plan.txt",
-    llm: { model: "ChatOpenAI", temperature: 0.6, streaming: true },
-    description:
-      "根据作品信息、大纲和用户指令先给出本章写作规划，作为后续构思输入。",
-    inputs: [
-      "作品信息 & 大纲树",
-      "当前章节大纲",
-      "前三章内容（各800字摘要）",
-      "用户写作指令",
-    ],
-    outputs: ["写作规划（plan_text）"],
-    sseEvents: ["stage_start", "plan_stream", "plan_done"],
-  },
-  {
-    id: "thinking",
-    icon: Brain,
-    color: "blue",
-    bg: "bg-blue-50",
-    border: "border-blue-200",
-    iconColor: "text-blue-600",
-    badge: "bg-blue-100 text-blue-700",
-    title: "构思阶段 Thinking",
-    node: "thinking_node",
-    prompt: "agent_thinking.txt",
-    llm: { model: "ChatOpenAI", temperature: 0.8, streaming: true },
-    description:
-      "生成创意笔记、章节标题，并可选地提出大纲修改建议。使用高温度参数鼓励创意发散。",
-    inputs: [
-      "作品信息 & 大纲树",
-      "当前章节大纲",
-      "前三章内容（各800字摘要）",
-      "用户写作指令",
-      "规划结果（plan_text）",
-    ],
-    outputs: ["构思笔记（Markdown）", "章节标题", "大纲修改提案（可选）"],
-    sseEvents: [
-      "stage_start",
-      "thinking_stream",
-      "thinking_done",
-      "title_proposed",
-      "outline_proposal",
-      "need_confirm",
+    name: "OutlineAgent",
+    icon: GitBranch,
+    status: "todo harness: dispatch_outline",
+    purpose: "创建新大纲，或编辑已有大纲、角色、大纲关联章节。",
+    tools: [
+      ...childTodoTools,
+      { name: "read_outline", desc: "读取当前完整大纲，编辑前的基线数据。" },
+      { name: "query_outline_characters", desc: "查询作品角色设定，用于角色相关大纲修改。" },
+      { name: "query_outline_related_chapters", desc: "按大纲线索回查关联章节和元数据。" },
+      { name: "generate_outline", desc: "从创意和标签一次性生成并保存完整大纲。" },
+      { name: "edit_outline_by_suggestion", desc: "按自然语言建议执行大纲编辑，可 dry-run 或自动应用。" },
+      { name: "commit_or_rollback", desc: "自动模式下提交或回滚大纲事务。" },
+      { name: "read_requirements_doc", desc: "读取长期写作要求，约束大纲创建或修改。" },
     ],
   },
   {
-    id: "query",
-    icon: Search,
-    color: "amber",
-    bg: "bg-amber-50",
-    border: "border-amber-200",
-    iconColor: "text-amber-600",
-    badge: "bg-amber-100 text-amber-700",
-    title: "上下文收集 Query",
-    node: "query_node",
-    prompt: "无（纯数据库操作）",
-    llm: null,
-    description:
-      "根据 thinking 阶段产出的 needed_queries 进行按需查询；缺省时回退到全量查询。",
-    inputs: ["作品 ID", "当前章节号"],
-    outputs: ["上下文包（context_pack）"],
-    sseEvents: ["stage_start", "queries_needed", "query_result", "query_done"],
-    details: [
-      { icon: Database, label: "历史章节", desc: "所有已写章节，各600字摘要" },
-      { icon: Database, label: "故事设定", desc: "标题、类型、卷信息" },
-      { icon: Database, label: "伏笔管理", desc: "ID、内容、埋设/回收节点" },
-      { icon: Database, label: "角色信息", desc: "首次出场≤当前章节的角色" },
-    ],
-  },
-  {
-    id: "write",
+    name: "ChapterAgent",
     icon: PenTool,
-    color: "emerald",
-    bg: "bg-emerald-50",
-    border: "border-emerald-200",
-    iconColor: "text-emerald-600",
-    badge: "bg-emerald-100 text-emerald-700",
-    title: "写作阶段 Write",
-    node: "write_node",
-    prompt: "agent_write.txt",
-    llm: { model: "ChatOpenAI", temperature: 0.7, streaming: true },
-    description:
-      "根据构思笔记和上下文包流式生成正文。质量评估已拆为独立 EvaluationAgent，由 Supervisor 按需派发。",
-    inputs: [
-      "故事信息 & 大纲树",
-      "章节大纲 & 标题",
-      "构思笔记",
-      "上下文包",
-      "历史章节",
+    status: "todo harness: dispatch_chapter",
+    purpose: "统一处理新章节撰写和已有章节编辑。",
+    tools: [
+      ...childTodoTools,
+      { name: "query_outline", desc: "读取作品信息和大纲摘要。" },
+      { name: "query_chapter_outline", desc: "读取目标章节的大纲节点。" },
+      { name: "query_previous_chapters", desc: "读取前文作为续写上下文。" },
+      { name: "query_characters", desc: "读取全部角色设定和当前状态。" },
+      { name: "query_foreshadowing", desc: "读取伏笔信息，辅助埋设或回收。" },
+      { name: "generate_chapter_content", desc: "仅创建下一章正文，并自动保存和同步元数据。" },
+      { name: "save_chapter", desc: "保存或覆盖章节正文。" },
+      { name: "update_characters_after_chapter", desc: "根据已保存正文更新角色状态、目标和位置。" },
+      { name: "read_chapter", desc: "读取已有章节完整正文。" },
+      { name: "query_characters_by_chapter", desc: "查询目标章节相关角色上下文。" },
+      { name: "grep_in_chapter", desc: "在章节正文中按关键词定位片段。" },
+      { name: "query_chapter_meta", desc: "读取章节元数据概览。" },
+      { name: "grep_chapter_meta", desc: "在章节元数据中搜索关键词。" },
+      { name: "generate_patch_edit", desc: "生成局部 JSON 补丁并自动保存正文修改。" },
+      { name: "rewrite_chapter", desc: "全量重写已有章节并自动保存。" },
+      { name: "overwrite_chapter_title", desc: "只覆盖章节标题，不修改正文。" },
+      { name: "sync_chapter_metadata", desc: "按当前正文重新生成章节元数据。" },
+      { name: "count_chapter_words", desc: "统计指定章节字数。" },
+      { name: "read_requirements_doc", desc: "读取长期写作要求，约束章节生成和编辑。" },
     ],
-    outputs: ["章节正文"],
-    sseEvents: ["stage_start", "write_stream", "write_done"],
   },
   {
-    id: "save",
-    icon: Save,
-    color: "violet",
-    bg: "bg-violet-50",
-    border: "border-violet-200",
-    iconColor: "text-violet-600",
-    badge: "bg-violet-100 text-violet-700",
-    title: "保存 + 角色更新 Save & Update",
-    node: "save_node → update_characters_node",
-    prompt: "agent_update_characters.txt",
-    llm: { model: "ChatOpenAI", temperature: 0.3, streaming: false },
-    description:
-      "将章节持久化到数据库，然后分析章节内容更新角色状态（当前状况、目标、位置）。",
-    inputs: ["章节正文", "角色列表及当前状态"],
-    outputs: ["Chapter 记录", "角色状态更新"],
-    sseEvents: [
-      "stage_start",
-      "need_confirm",
-      "saved",
-      "characters_updated",
-      "done",
+    name: "EvaluationAgent",
+    icon: FileSearch,
+    status: "todo harness: dispatch_evaluation",
+    purpose: "从编辑、读者和大纲同步性角度评估章节质量。",
+    tools: [
+      ...childTodoTools,
+      { name: "read_chapter_for_eval", desc: "读取待评估章节正文。" },
+      { name: "read_chapter_outline_for_eval", desc: "读取待评估章节的大纲节点。" },
+      { name: "read_previous_chapters_for_eval", desc: "读取前文，用于连贯性判断。" },
+      { name: "evaluate_as_editor", desc: "以编辑视角给出质量问题和修改建议。" },
+      { name: "evaluate_as_reader", desc: "以读者视角评估可读性、爽点和期待感。" },
+      { name: "evaluate_chapter_outline_sync", desc: "评估正文、元数据和大纲是否同步。" },
+    ],
+  },
+  {
+    name: "WritingExpertAgent",
+    icon: Sparkles,
+    status: "已实现；dispatch_writing_expert 未挂入 ALL_TOOLS",
+    purpose: "针对冲突、钩子、节奏、人物张力、对话等问题提供微咨询。",
+    tools: [
+      { name: "query_writing_library", desc: "查询写作技巧库中匹配题材和问题类型的技巧。" },
+      { name: "generate_advice", desc: "生成候选建议、推荐方案和可交给 ChapterAgent 的改写指令。" },
     ],
   },
 ];
 
-/* ─── SSE 事件对照表 ─── */
-const SSE_EVENTS = [
-  { event: "session_created", desc: "会话已创建", when: "Supervisor start 时" },
-  { event: "supervisor_stream", desc: "统筹回复流式输出", when: "Supervisor LLM 输出块" },
-  { event: "tool_calls", desc: "工具调用计划", when: "Supervisor 决定调用工具时" },
-  { event: "tool_executed", desc: "工具节点执行", when: "LangGraph tools 节点处理后" },
-  { event: "supervisor_done", desc: "统筹回复完成", when: "Supervisor 当前轮结束" },
-  { event: "stage_start", desc: "阶段开始", when: "每个阶段启动时" },
-  { event: "plan_stream", desc: "规划流式输出", when: "Plan LLM 输出块" },
-  { event: "plan_done", desc: "规划完成", when: "Plan 结束" },
-  { event: "thinking_stream", desc: "构思流式输出", when: "Thinking LLM 输出块" },
-  { event: "thinking_done", desc: "构思完成", when: "Thinking 结束" },
-  { event: "title_proposed", desc: "标题提案", when: "章节标题生成后" },
-  { event: "outline_proposal", desc: "大纲修改提案", when: "提出大纲变更时" },
-  { event: "outline_updated", desc: "大纲已更新", when: "大纲修改应用后" },
-  { event: "queries_needed", desc: "按需查询指令", when: "Thinking 给出 needed_queries 时" },
-  { event: "query_result", desc: "查询结果", when: "每项上下文加载完成" },
-  { event: "query_done", desc: "查询完成", when: "所有上下文加载完毕" },
-  { event: "write_stream", desc: "写作流式输出", when: "Write LLM 输出块" },
-  { event: "write_done", desc: "写作完成", when: "章节正文生成完毕" },
-  { event: "evaluation_done", desc: "独立评估完成", when: "EvaluationAgent 输出编辑/读者视角结果后" },
-  { event: "need_confirm", desc: "等待确认", when: "需要用户决策时" },
-  { event: "saved", desc: "已保存", when: "章节写入数据库后" },
-  { event: "characters_updated", desc: "角色已更新", when: "角色状态更新后" },
-  { event: "done", desc: "流程完成", when: "全部阶段执行完毕" },
-  { event: "error", desc: "错误", when: "任意阶段出错时" },
+const directDispatchTools = [
+  { name: "dispatch_outline", desc: "兼容入口，派发大纲任务；当前主链路由 execute_todo_task 间接路由。" },
+  { name: "dispatch_chapter", desc: "兼容入口，派发章节撰写或编辑；todolist 场景禁止直接调用。" },
+  { name: "dispatch_evaluation", desc: "兼容入口，派发章节评估；当前主链路由 execute_todo_task 间接路由。" },
+  { name: "dispatch_writing_expert", desc: "写作专家派发入口已定义，但未加入 Supervisor 的 ALL_TOOLS。" },
 ];
 
-/* ─── 颜色映射 ─── */
-const COLOR_MAP = {
-  blue: { ring: "ring-blue-200", text: "text-blue-700", dot: "bg-blue-500" },
-  amber: { ring: "ring-amber-200", text: "text-amber-700", dot: "bg-amber-500" },
-  emerald: { ring: "ring-emerald-200", text: "text-emerald-700", dot: "bg-emerald-500" },
-  violet: { ring: "ring-violet-200", text: "text-violet-700", dot: "bg-violet-500" },
+const toolCategories = [
+  {
+    name: "查询/读取",
+    desc: "只读上下文检索，供 Supervisor 或子 Agent 决策前收集资料。",
+    tools: [
+      "query_characters",
+      "query_chapters",
+      "read_outline",
+      "read_chapter",
+      "query_chapter_outline",
+      "query_previous_chapters",
+      "query_foreshadowing",
+      "query_chapter_meta",
+      "grep",
+      "grep_in_chapter",
+      "grep_chapter_meta",
+    ],
+  },
+  {
+    name: "需求/任务管理",
+    desc: "把用户需求转成可执行任务，并维护任务清单状态。",
+    tools: [
+      "analyze_requirements",
+      "read_todolist",
+      "execute_todo_task",
+      "update_task_status",
+      "update_todolist_readiness",
+      "create_child_todolist",
+      "read_child_todolist",
+      "update_child_task_status",
+    ],
+  },
+  {
+    name: "大纲生成/编辑",
+    desc: "创建作品大纲、编辑大纲字段、角色和事务提交。",
+    tools: [
+      "generate_outline",
+      "edit_outline_by_suggestion",
+      "query_outline_characters",
+      "query_outline_related_chapters",
+      "commit_or_rollback",
+    ],
+  },
+  {
+    name: "章节生成/编辑",
+    desc: "生成新章、覆盖保存、局部编辑、全量重写和标题修改。",
+    tools: [
+      "generate_chapter_content",
+      "save_chapter",
+      "generate_patch_edit",
+      "rewrite_chapter",
+      "overwrite_chapter_title",
+      "sync_chapter_metadata",
+      "update_characters_after_chapter",
+      "count_chapter_words",
+    ],
+  },
+  {
+    name: "评估/咨询",
+    desc: "评估章节质量、正文与大纲同步性，以及提供写作技巧建议。",
+    tools: [
+      "evaluate_as_editor",
+      "evaluate_as_reader",
+      "evaluate_chapter_outline_sync",
+      "query_writing_library",
+      "generate_advice",
+    ],
+  },
+  {
+    name: "长期记忆/偏好",
+    desc: "读取和更新作品级长期需求文档。",
+    tools: ["read_requirements_doc", "update_requirements_doc"],
+  },
+];
+
+const stats = [
+  { label: "Supervisor 工具", value: supervisorTools.length, icon: Wrench },
+  { label: "主链路子 Agent", value: 3, icon: Bot },
+  { label: "已实现子 Agent", value: agents.length, icon: Brain },
+  { label: "执行入口", value: "execute_todo_task", icon: ClipboardList },
+];
+
+function ToolList({ tools }) {
+  return (
+    <ul className="mt-3 grid gap-2 md:grid-cols-2">
+      {tools.map((tool) => (
+        <li
+          key={tool.name}
+          className="rounded-md border border-slate-200 bg-white px-3 py-2"
+        >
+          <code className="text-xs font-semibold text-slate-900">{tool.name}</code>
+          <p className="mt-1 text-xs leading-5 text-slate-600">{tool.desc}</p>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function AgentNode({ agent }) {
+  const Icon = agent.icon;
+
+  return (
+    <li className="relative pl-6 before:absolute before:left-0 before:top-0 before:h-full before:border-l before:border-slate-200">
+      <div className="absolute left-0 top-6 h-px w-4 bg-slate-200" />
+      <Card className="border-slate-200 bg-white">
+        <CardHeader className="pb-3">
+          <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+            <div className="flex items-start gap-3">
+              <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-slate-900 text-white">
+                <Icon className="h-5 w-5" />
+              </span>
+              <div>
+                <CardTitle className="text-base text-slate-900">{agent.name}</CardTitle>
+                <p className="mt-1 text-sm text-slate-600">{agent.purpose}</p>
+              </div>
+            </div>
+            <span className="w-fit rounded-md border border-slate-200 bg-slate-50 px-2 py-1 text-xs text-slate-600">
+              {agent.status}
+            </span>
+          </div>
+        </CardHeader>
+        <CardContent>
+          <ToolList tools={agent.tools} />
+        </CardContent>
+      </Card>
+    </li>
+  );
+}
+
+function CategoryCard({ category }) {
+  return (
+    <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+      <p className="text-sm font-semibold text-slate-900">{category.name}</p>
+      <p className="mt-1 text-xs leading-5 text-slate-600">{category.desc}</p>
+      <div className="mt-3 flex flex-wrap gap-1.5">
+        {category.tools.map((tool) => (
+          <code
+            key={tool}
+            className="rounded border border-slate-200 bg-white px-1.5 py-1 text-[11px] text-slate-700"
+          >
+            {tool}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function FlowArrow({ label, accent = false }) {
+  const lineColor = accent ? "bg-indigo-300" : "bg-slate-300";
+  const iconColor = accent ? "text-indigo-400" : "text-slate-400";
+  return (
+    <div className="flex flex-col items-center py-1.5">
+      <div className={`h-4 w-px ${lineColor}`} />
+      {label ? (
+        <span
+          className={`my-0.5 rounded-full border px-2 py-0.5 text-[11px] ${
+            accent
+              ? "border-indigo-200 bg-indigo-50 text-indigo-700"
+              : "border-slate-200 bg-white text-slate-500"
+          }`}
+        >
+          {label}
+        </span>
+      ) : null}
+      <div className={`h-4 w-px ${lineColor}`} />
+      <ArrowDown className={`h-4 w-4 ${iconColor}`} />
+    </div>
+  );
+}
+
+const diagramTagStyles = {
+  outline: "border-emerald-200 bg-emerald-50 text-emerald-700",
+  chapter: "border-sky-200 bg-sky-50 text-sky-700",
+  evaluation: "border-amber-200 bg-amber-50 text-amber-700",
+  expert: "border-slate-200 bg-slate-100 text-slate-500",
 };
 
-/* ─── 组件 ─── */
-export function AgentArchPage() {
-  const [activeStage, setActiveStage] = useState(null);
+function DiagramAgentNode({ agent, dispatch, tagKey, muted = false }) {
+  const Icon = agent.icon;
+  return (
+    <div
+      className={`flex h-full flex-col rounded-lg border p-3 shadow-sm ${
+        muted ? "border-dashed border-slate-300 bg-slate-50" : "border-slate-200 bg-white"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        <span
+          className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-white ${
+            muted ? "bg-slate-400" : "bg-slate-900"
+          }`}
+        >
+          <Icon className="h-4 w-4" />
+        </span>
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-900">{agent.name}</p>
+          {dispatch ? (
+            <code className={`mt-0.5 inline-block rounded border px-1 text-[10px] ${diagramTagStyles[tagKey]}`}>
+              {dispatch}
+            </code>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-2 text-[11px] leading-4 text-slate-500">{agent.purpose}</p>
+      <div className="mt-2 flex flex-wrap gap-1">
+        {agent.tools.map((tool) => (
+          <code
+            key={tool.name}
+            title={tool.desc}
+            className="cursor-help rounded border border-slate-200 bg-slate-50 px-1.5 py-0.5 text-[10px] text-slate-600"
+          >
+            {tool.name}
+          </code>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const supervisorEntryTools = [
+  { name: "analyze_requirements", desc: "把用户需求拆成可执行的 todolist。" },
+  { name: "execute_todo_task", desc: "执行单项任务并经 harness 路由到子 Agent。" },
+  { name: "read_todolist", desc: "读取任务清单与状态。" },
+  { name: "update_task_status", desc: "更新任务状态。" },
+];
+
+function ArchDiagram() {
+  const mainAgents = [
+    { agent: agents[0], dispatch: "dispatch_outline", tagKey: "outline" },
+    { agent: agents[1], dispatch: "dispatch_chapter", tagKey: "chapter" },
+    { agent: agents[2], dispatch: "dispatch_evaluation", tagKey: "evaluation" },
+  ];
 
   return (
-    <main className="min-h-screen bg-[radial-gradient(circle_at_top_right,_#dbeafe_0%,_#f8fafc_35%,_#e2e8f0_100%)] p-4 md:p-8">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6">
-        {/* ─── 顶栏 ─── */}
-        <section className="rounded-2xl border border-slate-200 bg-white/80 p-6 shadow-sm backdrop-blur md:p-8">
-          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-            <div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="sm" asChild className="gap-1 text-slate-500">
-                  <Link to="/dashboard">
-                    <ArrowLeft className="h-4 w-4" /> 返回
-                  </Link>
-                </Button>
-              </div>
-              <p className="mt-3 text-sm font-medium uppercase tracking-[0.2em] text-sky-600">
-                Architecture
-              </p>
-              <h1 className="mt-2 text-3xl font-semibold text-slate-900 md:text-4xl">
-                Agent 写作架构
-              </h1>
-              <p className="mt-3 max-w-2xl text-sm text-slate-600 md:text-base">
-                当前实现为 Supervisor 统筹层 + Chapter 子流程。子流程包含 Plan / Thinking / Query /
-                Write / Evaluate / Save 六阶段，并在关键节点保留人工确认。
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="flex items-center gap-1.5 rounded-full bg-blue-100 px-3 py-1 text-xs font-medium text-blue-700">
-                <Zap className="h-3 w-3" /> LangChain + SSE
-              </span>
-              <span className="flex items-center gap-1.5 rounded-full bg-emerald-100 px-3 py-1 text-xs font-medium text-emerald-700">
-                <Radio className="h-3 w-3" /> 流式输出
-              </span>
-            </div>
-          </div>
-        </section>
-
-        {/* ─── React 流程图组件 ─── */}
-        <Card className="border-slate-200/80 bg-white/85">
-          <CardHeader>
-            <CardTitle className="text-lg">工作流程图</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <ArchitectureFlow />
-          </CardContent>
-        </Card>
-
-        {/* ─── 图例 ─── */}
-        <div className="flex flex-wrap items-center justify-center gap-4 rounded-xl border border-slate-200 bg-white/80 px-6 py-3 text-xs">
-          <span className="font-medium text-slate-500">图例：</span>
-          {[
-            { color: "bg-sky-50 border-sky-200", text: "Supervisor" },
-            { color: "bg-blue-50 border-blue-200", text: "规划/构思" },
-            { color: "bg-amber-50 border-amber-200", text: "查询" },
-            { color: "bg-emerald-50 border-emerald-200", text: "写作" },
-            { color: "bg-amber-50 border-amber-200", text: "评估" },
-            { color: "bg-violet-50 border-violet-200", text: "保存/更新" },
-            { color: "bg-red-50 border-red-200", text: "人工确认" },
-          ].map((item) => (
-            <span
-              key={item.text}
-              className={`flex items-center gap-1.5 rounded-md border px-2 py-1 ${item.color}`}
-            >
-              {item.text}
-            </span>
-          ))}
+    <Card className="border-slate-200 bg-white">
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Workflow className="h-5 w-5 text-slate-600" />
+          <CardTitle className="text-lg">整体架构图</CardTitle>
         </div>
+        <p className="text-sm text-slate-500">
+          自上而下的执行链路：用户 → Supervisor → Harness 控制层 → 子 Agent。子 Agent 工具悬停可见功能说明。
+        </p>
+      </CardHeader>
+      <CardContent>
+        <div className="overflow-x-auto">
+          <div className="mx-auto flex min-w-[680px] flex-col items-center">
+            {/* 用户层 */}
+            <div className="flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-4 py-2">
+              <Users className="h-4 w-4 text-slate-500" />
+              <span className="text-sm font-medium text-slate-700">用户 / 前端对话（SSE 流式）</span>
+            </div>
 
-        {/* ─── 阶段详情卡片 ─── */}
-        <section>
-          <h2 className="mb-4 text-xl font-semibold text-slate-800">阶段详情</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            {STAGES.map((stage) => {
-              const Icon = stage.icon;
-              const colors = COLOR_MAP[stage.color];
-              const isActive = activeStage === stage.id;
+            <FlowArrow label="用户消息" />
 
-              return (
-                <Card
-                  key={stage.id}
-                  className={`cursor-pointer border-slate-200/80 bg-white/85 transition-all hover:-translate-y-0.5 hover:shadow-md ${
-                    isActive ? `ring-2 ${colors.ring}` : ""
-                  }`}
-                  onClick={() => setActiveStage(isActive ? null : stage.id)}
-                >
-                  <CardHeader className="pb-3">
-                    <div className="flex items-center gap-3">
-                      <div
-                        className={`flex h-10 w-10 items-center justify-center rounded-lg ${stage.bg}`}
+            {/* Supervisor 层 */}
+            <div className="w-full rounded-xl border border-indigo-200 bg-indigo-50/60 p-4">
+              <div className="flex flex-col gap-1 md:flex-row md:items-center md:justify-between">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-10 w-10 items-center justify-center rounded-md bg-indigo-700 text-white">
+                    <Bot className="h-5 w-5" />
+                  </span>
+                  <div>
+                    <p className="text-base font-semibold text-indigo-950">SupervisorAgent</p>
+                    <p className="text-xs text-indigo-700">
+                      LangGraph 循环：agent 节点决定 tool calls → tools 节点执行 → 直到无工具调用
+                    </p>
+                  </div>
+                </div>
+                <span className="w-fit rounded-md border border-indigo-200 bg-white px-2 py-1 text-[11px] text-indigo-700">
+                  绑定 {supervisorTools.length} 个工具
+                </span>
+              </div>
+
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                <div className="rounded-md border border-indigo-200 bg-white p-2">
+                  <p className="text-[11px] font-semibold text-indigo-900">工具类别（按用途）</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {toolCategories.map((c) => (
+                      <span
+                        key={c.name}
+                        title={c.desc}
+                        className="cursor-help rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700"
                       >
-                        <Icon className={`h-5 w-5 ${stage.iconColor}`} />
-                      </div>
-                      <div>
-                        <CardTitle className="text-base">{stage.title}</CardTitle>
-                        <p className="mt-0.5 font-mono text-xs text-slate-400">
-                          {stage.node}
-                        </p>
-                      </div>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    <p className="text-sm text-slate-600">{stage.description}</p>
-
-                    {/* LLM 信息 */}
-                    <div className="flex flex-wrap gap-2">
-                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${stage.badge}`}>
-                        {stage.prompt}
+                        {c.name}
                       </span>
-                      {stage.llm && (
-                        <>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                            temp={stage.llm.temperature}
-                          </span>
-                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                            {stage.llm.streaming ? "流式" : "非流式"}
-                          </span>
-                        </>
-                      )}
-                      {!stage.llm && (
-                        <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-medium text-slate-600">
-                          无 LLM 调用
-                        </span>
-                      )}
-                    </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="rounded-md border border-indigo-200 bg-white p-2">
+                  <p className="text-[11px] font-semibold text-indigo-900">核心执行入口</p>
+                  <div className="mt-1.5 flex flex-wrap gap-1">
+                    {supervisorEntryTools.map((t) => (
+                      <code
+                        key={t.name}
+                        title={t.desc}
+                        className="cursor-help rounded border border-indigo-200 bg-indigo-50 px-1.5 py-0.5 text-[10px] text-indigo-700"
+                      >
+                        {t.name}
+                      </code>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            </div>
 
-                    {/* 展开详情 */}
-                    {isActive && (
-                      <div className="mt-3 space-y-3 border-t border-slate-100 pt-3">
-                        {/* 输入 */}
-                        <div>
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            输入
-                          </p>
-                          <ul className="space-y-0.5">
-                            {stage.inputs.map((item) => (
-                              <li
-                                key={item}
-                                className="flex items-center gap-1.5 text-xs text-slate-600"
-                              >
-                                <span className={`h-1.5 w-1.5 rounded-full ${colors.dot}`} />
-                                {item}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        {/* 输出 */}
-                        <div>
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            输出
-                          </p>
-                          <ul className="space-y-0.5">
-                            {stage.outputs.map((item) => (
-                              <li
-                                key={item}
-                                className="flex items-center gap-1.5 text-xs text-slate-600"
-                              >
-                                <CheckCircle className={`h-3 w-3 ${colors.text}`} />
-                                {item}
-                              </li>
-                            ))}
-                          </ul>
-                        </div>
-                        {/* Query 阶段的额外详情 */}
-                        {stage.details && (
-                          <div>
-                            <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                              数据来源
-                            </p>
-                            <div className="grid grid-cols-2 gap-2">
-                              {stage.details.map((d) => {
-                                const DetailIcon = d.icon;
-                                return (
-                                  <div
-                                    key={d.label}
-                                    className="flex items-start gap-2 rounded-md bg-slate-50 p-2"
-                                  >
-                                    <DetailIcon className="mt-0.5 h-3.5 w-3.5 text-slate-400" />
-                                    <div>
-                                      <p className="text-xs font-medium text-slate-700">
-                                        {d.label}
-                                      </p>
-                                      <p className="text-[10px] text-slate-500">
-                                        {d.desc}
-                                      </p>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          </div>
-                        )}
-                        {/* SSE 事件 */}
-                        <div>
-                          <p className="mb-1 text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            SSE 事件
-                          </p>
-                          <div className="flex flex-wrap gap-1">
-                            {stage.sseEvents.map((evt) => (
-                              <span
-                                key={evt}
-                                className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[10px] text-slate-500"
-                              >
-                                {evt}
-                              </span>
-                            ))}
-                          </div>
-                        </div>
-                      </div>
-                    )}
-                  </CardContent>
-                </Card>
-              );
-            })}
+            <FlowArrow label="execute_todo_task 进入执行层" accent />
+
+            {/* Harness 层 */}
+            <div className="w-full rounded-xl border-2 border-indigo-300 bg-indigo-50 p-4">
+              <div className="mb-2 flex items-center justify-center gap-2">
+                <Route className="h-4 w-4 text-indigo-700" />
+                <p className="text-sm font-semibold text-indigo-950">
+                  Harness 控制层 · Supervisor 与子 Agent 之间的必经关卡
+                </p>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2">
+                <div className="rounded-md border border-indigo-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <ClipboardList className="h-4 w-4 text-indigo-700" />
+                    <p className="text-sm font-semibold text-indigo-900">todo_harness.py（执行控制）</p>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-4 text-indigo-700">
+                    解析任务 → 校验依赖 → 锁定状态（pending/in_progress/completed/failed） → 推断 dispatch_tool →
+                    路由子 Agent → 结果写回 task_items。
+                  </p>
+                </div>
+                <div className="rounded-md border border-indigo-200 bg-white p-3">
+                  <div className="flex items-center gap-2">
+                    <Cpu className="h-4 w-4 text-indigo-700" />
+                    <p className="text-sm font-semibold text-indigo-900">runtime_harness.py（运行时控制）</p>
+                  </div>
+                  <p className="mt-1 text-[11px] leading-4 text-indigo-700">
+                    生命周期(before/after/on_error) · 上下文注入 · 工具策略校验 · active_child 管理 · 恢复 · 可观测性。
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            {/* 三路 dispatch 箭头 */}
+            <div className="grid w-full grid-cols-3 gap-2">
+              {mainAgents.map(({ dispatch, tagKey }) => (
+                <div key={dispatch} className="flex flex-col items-center py-1.5">
+                  <div className="h-4 w-px bg-indigo-300" />
+                  <code className={`my-0.5 rounded border px-1.5 py-0.5 text-[10px] ${diagramTagStyles[tagKey]}`}>
+                    {dispatch}
+                  </code>
+                  <div className="h-4 w-px bg-indigo-300" />
+                  <ArrowDown className="h-4 w-4 text-indigo-400" />
+                </div>
+              ))}
+            </div>
+
+            {/* 子 Agent 层 */}
+            <div className="grid w-full gap-3 md:grid-cols-3">
+              {mainAgents.map(({ agent, dispatch, tagKey }) => (
+                <DiagramAgentNode key={agent.name} agent={agent} dispatch={dispatch} tagKey={tagKey} />
+              ))}
+            </div>
+
+            {/* 未接入子 Agent */}
+            <div className="mt-3 w-full">
+              <div className="mb-1 flex items-center gap-2">
+                <div className="h-px flex-1 bg-slate-200" />
+                <span className="text-[11px] text-slate-400">已实现 · 未挂入 ALL_TOOLS（当前不可达）</span>
+                <div className="h-px flex-1 bg-slate-200" />
+              </div>
+              <DiagramAgentNode agent={agents[3]} dispatch="dispatch_writing_expert" tagKey="expert" muted />
+            </div>
           </div>
-        </section>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
 
-        {/* ─── SSE 事件对照表 ─── */}
-        <Card className="border-slate-200/80 bg-white/85">
-          <CardHeader>
-            <div className="flex items-center gap-2">
-              <MessageSquare className="h-5 w-5 text-slate-500" />
-              <CardTitle className="text-lg">SSE 事件对照表</CardTitle>
+export function AgentArchPage() {
+  return (
+    <main className="min-h-screen bg-slate-50 p-4 md:p-8">
+      <div className="mx-auto flex w-full max-w-7xl flex-col gap-5">
+        <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm md:p-6">
+          <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+            <div>
+              <Button variant="ghost" size="sm" asChild className="mb-3 gap-1 text-slate-500">
+                <Link to="/dashboard">
+                  <ArrowLeft className="h-4 w-4" /> 返回
+                </Link>
+              </Button>
+              <p className="text-sm font-medium uppercase tracking-[0.18em] text-slate-500">
+                Agent Architecture
+              </p>
+              <h1 className="mt-2 text-3xl font-semibold text-slate-950 md:text-4xl">
+                Supervisor Agent 架构
+              </h1>
+              <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-600">
+                当前实现是 Supervisor 绑定查询、需求分析、任务状态和 todolist 工具；执行型任务先生成
+                todolist，再由 <code className="rounded bg-slate-100 px-1">execute_todo_task</code> 通过
+                harness 路由到子 Agent。
+              </p>
             </div>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-100">
-                    <th className="pb-2 pr-4 text-left font-semibold text-slate-600">
-                      事件名
-                    </th>
-                    <th className="pb-2 pr-4 text-left font-semibold text-slate-600">
-                      说明
-                    </th>
-                    <th className="pb-2 text-left font-semibold text-slate-600">
-                      触发时机
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {SSE_EVENTS.map((evt, i) => (
-                    <tr
-                      key={evt.event}
-                      className={i % 2 === 0 ? "bg-slate-50/50" : ""}
-                    >
-                      <td className="py-1.5 pr-4">
-                        <code className="rounded bg-slate-100 px-1.5 py-0.5 text-xs text-violet-700">
-                          {evt.event}
-                        </code>
-                      </td>
-                      <td className="py-1.5 pr-4 text-slate-600">{evt.desc}</td>
-                      <td className="py-1.5 text-slate-500">{evt.when}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* ─── 技术栈 ─── */}
-        <Card className="border-slate-200/80 bg-white/85">
-          <CardHeader>
-            <CardTitle className="text-lg">技术栈</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="grid gap-3 sm:grid-cols-2 md:grid-cols-4">
-              {[
-                {
-                  icon: Brain,
-                  label: "LLM 编排",
-                  value: "LangChain + ChatOpenAI",
-                  desc: "PromptTemplate + astream",
-                },
-                {
-                  icon: Radio,
-                  label: "实时通信",
-                  value: "SSE (Server-Sent Events)",
-                  desc: "asyncio.Queue + StreamingResponse",
-                },
-                {
-                  icon: Database,
-                  label: "状态持久化",
-                  value: "PostgreSQL + SQLAlchemy",
-                  desc: "AgentState JSONB checkpoint",
-                },
-                {
-                  icon: Users,
-                  label: "人工审核",
-                  value: "Human-in-the-Loop",
-                  desc: "confirm / reject / guide 三态",
-                },
-              ].map((item) => {
-                const TechIcon = item.icon;
+            <div className="grid grid-cols-2 gap-2 md:w-[420px]">
+              {stats.map((item) => {
+                const Icon = item.icon;
                 return (
-                  <div
-                    key={item.label}
-                    className="rounded-lg border border-slate-100 bg-slate-50/50 p-4"
-                  >
-                    <TechIcon className="h-5 w-5 text-slate-500" />
-                    <p className="mt-2 text-xs font-medium uppercase tracking-wider text-slate-400">
-                      {item.label}
-                    </p>
-                    <p className="mt-1 text-sm font-semibold text-slate-800">
-                      {item.value}
-                    </p>
-                    <p className="mt-0.5 text-xs text-slate-500">{item.desc}</p>
+                  <div key={item.label} className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                    <Icon className="h-4 w-4 text-slate-500" />
+                    <p className="mt-2 text-xs text-slate-500">{item.label}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{item.value}</p>
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </section>
+
+        <ArchDiagram />
+
+        <div className="grid gap-5 lg:grid-cols-[0.9fr_1.1fr]">
+          <Card className="border-slate-200 bg-white">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Route className="h-5 w-5 text-slate-600" />
+                <CardTitle className="text-lg">Harness 的位置</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-3 text-sm text-slate-700">
+                <div className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <p className="font-semibold text-slate-900">SupervisorAgent</p>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    面向用户对话，负责理解需求、查询上下文、生成 todolist，并调用执行入口。
+                  </p>
+                </div>
+                <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                  <p className="font-semibold text-indigo-950">todo_harness.py（执行控制）</p>
+                  <p className="mt-1 text-xs leading-5 text-indigo-800">
+                    位于 Supervisor 和子 Agent 之间，是任务执行控制层：校验依赖、锁定状态、推断 dispatch_tool、
+                    调用对应子 Agent，并把结果写回 task_items。
+                  </p>
+                </div>
+                <div className="rounded-md border border-indigo-200 bg-indigo-50 p-3">
+                  <p className="font-semibold text-indigo-950">runtime_harness.py（运行时控制）</p>
+                  <p className="mt-1 text-xs leading-5 text-indigo-800">
+                    包裹整次运行：生命周期(before/after/on_error)、上下文注入、工具策略校验、active_child 管理、
+                    会话恢复与可观测性。
+                  </p>
+                </div>
+                <div className="grid gap-2 md:grid-cols-3">
+                  {["OutlineAgent", "ChapterAgent", "EvaluationAgent"].map((name) => (
+                    <div key={name} className="rounded-md border border-slate-200 bg-white p-3 text-xs font-semibold text-slate-800">
+                      {name}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Layers className="h-5 w-5 text-slate-600" />
+                <CardTitle className="text-lg">工具分类</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="grid gap-3 md:grid-cols-2">
+                {toolCategories.map((category) => (
+                  <CategoryCard key={category.name} category={category} />
+                ))}
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="border-slate-200 bg-white">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <ShieldCheck className="h-5 w-5 text-slate-600" />
+              <CardTitle className="text-lg">Supervisor 直接可用工具</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <ToolList tools={supervisorTools} />
+          </CardContent>
+        </Card>
+
+        <Card className="border-slate-200 bg-white">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <GitBranch className="h-5 w-5 text-slate-600" />
+              <CardTitle className="text-lg">子 Agent 树</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="rounded-md border border-slate-200 bg-slate-50 p-4">
+              <div className="flex items-start gap-3">
+                <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-indigo-700 text-white">
+                  <Bot className="h-5 w-5" />
+                </span>
+                <div>
+                  <p className="text-base font-semibold text-slate-950">SupervisorAgent</p>
+                  <p className="mt-1 text-sm leading-6 text-slate-600">
+                    LangGraph 循环：agent 节点决定 tool calls，tools 节点执行，直到不再调用工具。
+                  </p>
+                </div>
+              </div>
+              <div className="relative mt-5 pl-6 before:absolute before:left-0 before:top-0 before:h-full before:border-l before:border-indigo-200">
+                <div className="absolute left-0 top-6 h-px w-4 bg-indigo-200" />
+                <div className="rounded-md border border-indigo-200 bg-indigo-50 px-3 py-2">
+                  <p className="text-sm font-semibold text-indigo-950">todo_harness 执行层</p>
+                  <p className="mt-1 text-xs leading-5 text-indigo-800">
+                    由 <code>execute_todo_task</code> 进入，负责依赖校验、状态流转、任务路由和结果落库；子 Agent 不直接暴露给用户。
+                  </p>
+                </div>
+              </div>
+              <ul className="mt-5 space-y-4">
+                {agents.map((agent) => (
+                  <AgentNode key={agent.name} agent={agent} />
+                ))}
+              </ul>
+            </div>
+          </CardContent>
+        </Card>
+
+        <div className="grid gap-5 lg:grid-cols-[1.2fr_0.8fr]">
+          <Card className="border-slate-200 bg-white">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-5 w-5 text-slate-600" />
+                <CardTitle className="text-lg">执行路由</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ol className="space-y-3 text-sm text-slate-700">
+                <li className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <span className="font-semibold">1. analyze_requirements</span>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    将用户请求转成 task_items，推断 owner、task_type 和 dispatch_tool。
+                  </p>
+                </li>
+                <li className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <span className="font-semibold">2. execute_todo_task</span>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    校验依赖，维护 pending / in_progress / completed / failed 状态。
+                  </p>
+                </li>
+                <li className="rounded-md border border-slate-200 bg-slate-50 p-3">
+                  <span className="font-semibold">3. todo_harness 内部路由</span>
+                  <p className="mt-1 text-xs leading-5 text-slate-600">
+                    dispatch_outline 到 OutlineAgent，dispatch_chapter 到 ChapterAgent，dispatch_evaluation 到 EvaluationAgent。
+                  </p>
+                </li>
+              </ol>
+            </CardContent>
+          </Card>
+
+          <Card className="border-slate-200 bg-white">
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Radio className="h-5 w-5 text-slate-600" />
+                <CardTitle className="text-lg">兼容/未暴露入口</CardTitle>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <ToolList tools={directDispatchTools} />
+            </CardContent>
+          </Card>
+        </div>
+
+        <Card className="border-slate-200 bg-white">
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Database className="h-5 w-5 text-slate-600" />
+              <CardTitle className="text-lg">代码来源</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid gap-2 text-xs text-slate-600 md:grid-cols-2">
+              <div className="rounded-md bg-slate-50 p-3">
+                <Search className="mb-2 h-4 w-4 text-slate-500" />
+                Supervisor 工具：<code>backend/app/services/supervisor/tools.py</code>
+              </div>
+              <div className="rounded-md bg-slate-50 p-3">
+                <Search className="mb-2 h-4 w-4 text-slate-500" />
+                子 Agent 工具：<code>outline_tools.py</code>、<code>chapter_tools.py</code>、<code>edit_chapter_tools.py</code>、<code>evaluation_tools.py</code>
+              </div>
             </div>
           </CardContent>
         </Card>

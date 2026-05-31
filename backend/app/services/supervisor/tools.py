@@ -45,6 +45,27 @@ logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 
 
+def _remap_top_level_task_ids(todolist: list) -> tuple[dict[str, str], list[list[str]]]:
+    """Assign deterministic T1/T2 ids and remap depends_on references."""
+    old_id_to_new: dict[str, str] = {}
+    for idx, task in enumerate(todolist):
+        new_id = f"T{idx + 1}"
+        raw_id = str(getattr(task, "id", "") or "").strip()
+        if raw_id:
+            old_id_to_new[raw_id] = new_id
+        old_id_to_new.setdefault(new_id, new_id)
+
+    remapped_depends_on: list[list[str]] = []
+    for task in todolist:
+        deps = []
+        for dep in getattr(task, "depends_on", []) or []:
+            dep_text = str(dep).strip()
+            if dep_text:
+                deps.append(old_id_to_new.get(dep_text, dep_text))
+        remapped_depends_on.append(deps)
+    return old_id_to_new, remapped_depends_on
+
+
 # ── Tool input schemas ──
 
 
@@ -105,6 +126,14 @@ class DispatchEvaluationInput(BaseModel):
     )
 
 
+class ReadRequirementsDocInput(BaseModel):
+    pass
+
+
+class UpdateRequirementsDocInput(BaseModel):
+    content: str = Field(description="完整的需求文档内容（全量覆盖）")
+
+
 class ReadWorkContextInput(BaseModel):
     pass
 
@@ -129,6 +158,16 @@ class UpdateTaskStatusInput(BaseModel):
 
 class UpdateTodolistReadinessInput(BaseModel):
     ready_to_execute: bool = Field(description="信息是否充分可执行。true=可执行，false=待澄清")
+
+
+class EditTodolistInput(BaseModel):
+    action: str = Field(description="操作类型：add / update / delete")
+    task_id: str | None = Field(default=None, description="目标任务编号（update/delete 必填，如 T3）")
+    task_description: str | None = Field(default=None, description="任务描述（add 必填；update 可选）")
+    agent: str | None = Field(default=None, description="子 Agent：outline / chapter / evaluation（可选，add 默认自动推断）")
+    instruction: str | None = Field(default=None, description="子 Agent 收到的指令（可选）")
+    done_criteria: str | None = Field(default=None, description="完成标准（可选）")
+    depends_on: str | None = Field(default=None, description="依赖的任务编号，逗号分隔（可选）")
 
 
 class DispatchWritingExpertInput(BaseModel):
@@ -177,6 +216,23 @@ def _get_session_id(config: RunnableConfig) -> str:
     if not session_id:
         raise ValueError("当前没有活跃的会话。")
     return str(session_id)
+
+
+def _get_work_id(config: RunnableConfig) -> str:
+    """从 config 中获取 work_id，支持从 session 中回退查找。"""
+    work_id = str((config or {}).get("configurable", {}).get("work_id") or "")
+    if work_id:
+        return work_id
+    configurable = (config or {}).get("configurable", {})
+    session_id = configurable.get("supervisor_session_id")
+    if session_id:
+        db = configurable.get("db")
+        if db:
+            from app.models.agent_model import SupervisorSession
+            session = db.query(SupervisorSession).filter_by(id=session_id).first()
+            if session and session.work_id:
+                return str(session.work_id)
+    return ""
 
 
 def _resolve_bound_work_id(
@@ -484,6 +540,48 @@ def read_chat_history(limit: int, config: RunnableConfig, session_id: str | None
     return "\n".join(parts)
 
 
+@tool(args_schema=ReadRequirementsDocInput)
+def read_requirements_doc(config: RunnableConfig) -> str:
+    """读取当前作品的用户需求文档，全量返回内容，禁止截断。"""
+    from app.models.work_model import Work
+
+    db = _get_db(config)
+    work_id = _get_work_id(config)
+    if not work_id:
+        return "错误：当前会话未绑定作品，无法读取需求文档。"
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"错误：作品 {work_id} 不存在。"
+
+    if not work.requirements_doc:
+        return "（暂无需求记录）"
+
+    return work.requirements_doc
+
+
+@tool(args_schema=UpdateRequirementsDocInput)
+def update_requirements_doc(content: str, config: RunnableConfig) -> str:
+    """当用户明确提出写作需求、偏好、风格要求、约束条件等长期有效的指导信息时，调用此工具更新需求文档。全量覆盖写入。"""
+    from app.models.work_model import Work
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    work_id = _get_work_id(config)
+    if not work_id:
+        return "错误：当前会话未绑定作品，无法更新需求文档。"
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"错误：作品 {work_id} 不存在。"
+
+    work.requirements_doc = content
+    db.commit()
+
+    emit("requirements_doc_updated", {"work_id": work_id})
+    return "需求文档已更新。"
+
+
 async def _analyze_requirements_coroutine(
     message: str,
     work_context: str = "",
@@ -575,7 +673,14 @@ async def _analyze_requirements_coroutine(
             return "dispatch_outline"
         return ""
 
-    # 持久化任务到 task_items 表
+    # 清理同一 session 中的旧 todolist（含子任务），防止重复调用导致 task_id 冲突
+    if session_id and todolist:
+        from app.services.supervisor.todo_harness import cleanup_session_todolist
+        cleanup_session_todolist(session_id=session_id, db=db)
+
+    # 持久化任务到 task_items 表。任务编号由程序统一分配，LLM 返回的 id 仅用于依赖重映射。
+    old_id_to_new, remapped_depends_on_by_index = _remap_top_level_task_ids(todolist)
+
     persisted_tasks = []
     for idx, t in enumerate(todolist):
         import uuid
@@ -588,6 +693,7 @@ async def _analyze_requirements_coroutine(
             effective_owner = DISPATCH_OWNER_MAP.get(effective_dispatch_tool, effective_owner)
         # 兼容：LLM 未返回 instruction 时使用 task 描述
         effective_instruction = t.instruction or t.task or message
+        remapped_depends_on = remapped_depends_on_by_index[idx]
 
         task_item = TaskItem(
             id=str(uuid.uuid4()),
@@ -595,11 +701,11 @@ async def _analyze_requirements_coroutine(
             parent_id=None,
             depth=0,
             agent_scope="supervisor",
-            task_id=t.id or f"T{idx + 1}",
+            task_id=f"T{idx + 1}",
             task_description=t.task,
             owner=effective_owner,
             status=t.status or "pending",
-            depends_on=",".join(t.depends_on) if t.depends_on else "",
+            depends_on=",".join(remapped_depends_on) if remapped_depends_on else "",
             done_criteria=t.done_criteria or "",
             sort_order=idx,
             task_type=t.task_type or "",
@@ -616,7 +722,7 @@ async def _analyze_requirements_coroutine(
             "parent_id": "",
             "depth": 0,
             "agent_scope": "supervisor",
-            "depends_on": t.depends_on,
+            "depends_on": remapped_depends_on,
             "done_criteria": task_item.done_criteria,
             "task_type": task_item.task_type,
             "dispatch_tool": task_item.dispatch_tool,
@@ -749,6 +855,226 @@ def update_todolist_readiness(ready_to_execute: bool, config: RunnableConfig, se
     return f"任务清单状态已更新：{old_label} -> {label}"
 
 
+@tool(args_schema=EditTodolistInput)
+def edit_todolist(
+    action: str,
+    config: RunnableConfig,
+    task_id: str | None = None,
+    task_description: str | None = None,
+    agent: str | None = None,
+    instruction: str | None = None,
+    done_criteria: str | None = None,
+    depends_on: str | None = None,
+) -> str:
+    """对后续（pending）顶层任务进行增/改/删操作。用于执行过程中根据子 Agent 反馈动态调整后续计划。"""
+    from app.models.task_item_model import TaskItem
+    import uuid as _uuid
+
+    VALID_ACTIONS = {"add", "update", "delete"}
+    if action not in VALID_ACTIONS:
+        return f"无效操作：{action}。合法值为：{', '.join(sorted(VALID_ACTIONS))}"
+
+    AGENT_TOOL_MAP = {
+        "outline": "dispatch_outline",
+        "chapter": "dispatch_chapter",
+        "evaluation": "dispatch_evaluation",
+    }
+    _dispatch_owner_map = {
+        "dispatch_outline": "outline_agent",
+        "dispatch_chapter": "chapter_agent",
+        "dispatch_evaluation": "evaluation_agent",
+    }
+    if agent and agent not in AGENT_TOOL_MAP:
+        return f"无效 agent：{agent}。合法值为：{', '.join(AGENT_TOOL_MAP.keys())}"
+
+    db = _get_db(config)
+    emit = _get_emit(config)
+    session_id = _get_session_id(config)
+
+    # Query all tasks for this session
+    all_session_tasks = (
+        db.query(TaskItem)
+        .filter_by(session_id=session_id)
+        .order_by(TaskItem.sort_order)
+        .all()
+    )
+    # Top-level tasks for iteration
+    top_tasks = [t for t in all_session_tasks if t.depth == 0]
+
+    def _find_by_task_id(tid: str) -> TaskItem | None:
+        for t in all_session_tasks:
+            if t.task_id == tid:
+                return t
+        return None
+
+    def _next_task_id() -> str:
+        max_num = 0
+        for t in top_tasks:
+            try:
+                num = int(t.task_id.replace("T", ""))
+                if num > max_num:
+                    max_num = num
+            except ValueError:
+                continue
+        return f"T{max_num + 1}"
+
+    def _validate_depends(dep_str: str) -> str | None:
+        """Validate depends_on references; return error msg or None."""
+        if not dep_str:
+            return None
+        existing_ids = {t.task_id for t in top_tasks}
+        for ref in dep_str.split(","):
+            ref = ref.strip()
+            if ref and ref not in existing_ids:
+                return f"依赖的任务 {ref} 不存在于当前 todolist 中。"
+        return None
+
+    # ── ADD ──
+    if action == "add":
+        if not task_description:
+            return "添加任务需要提供 task_description。"
+
+        if depends_on:
+            err = _validate_depends(depends_on)
+            if err:
+                return err
+
+        new_id = _next_task_id()
+        dispatch_tool = AGENT_TOOL_MAP.get(agent, "") if agent else ""
+        owner = _dispatch_owner_map.get(dispatch_tool, "supervisor") if dispatch_tool else "supervisor"
+
+        task_item = TaskItem(
+            id=str(_uuid.uuid4()),
+            session_id=session_id or "",
+            parent_id=None,
+            depth=0,
+            agent_scope="supervisor",
+            task_id=new_id,
+            task_description=task_description,
+            owner=owner,
+            status="pending",
+            depends_on=depends_on or "",
+            done_criteria=done_criteria or "",
+            sort_order=len(top_tasks),
+            task_type="",
+            dispatch_tool=dispatch_tool or "none",
+            instruction=instruction or task_description,
+        )
+        db.add(task_item)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        emit("todolist_task_added", {
+            "task_id": new_id,
+            "db_id": task_item.id,
+            "task_description": task_description,
+            "owner": owner,
+            "dispatch_tool": dispatch_tool,
+            "instruction": instruction or task_description,
+            "depends_on": depends_on or "",
+            "done_criteria": done_criteria or "",
+            "sort_order": task_item.sort_order,
+        })
+
+        return f"已添加任务 {new_id}：{task_description}"
+
+    # ── UPDATE ──
+    if action == "update":
+        if not task_id:
+            return "更新任务需要提供 task_id。"
+
+        task = _find_by_task_id(task_id)
+        if not task:
+            return f"任务 {task_id} 不存在。"
+
+        if task.depth != 0:
+            return f"任务 {task_id} 是子任务，不支持直接编辑。仅可编辑顶层任务。"
+
+        if task.status != "pending":
+            return f"任务 {task_id} 当前状态为 {task.status}，不可编辑。仅 pending 状态的任务可修改。"
+
+        if depends_on:
+            err = _validate_depends(depends_on)
+            if err:
+                return err
+
+        if task_description is not None:
+            task.task_description = task_description
+        if instruction is not None:
+            task.instruction = instruction
+        if done_criteria is not None:
+            task.done_criteria = done_criteria
+        if depends_on is not None:
+            task.depends_on = depends_on
+        if agent is not None:
+            task.dispatch_tool = AGENT_TOOL_MAP[agent]
+            task.owner = _dispatch_owner_map.get(task.dispatch_tool, task.owner)
+
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        emit("todolist_task_edited", {
+            "task_id": task.task_id,
+            "db_id": task.id,
+            "task_description": task.task_description,
+            "owner": task.owner,
+            "dispatch_tool": task.dispatch_tool,
+            "instruction": task.instruction,
+            "depends_on": task.depends_on,
+            "done_criteria": task.done_criteria,
+        })
+
+        return f"已更新任务 {task_id}。"
+
+    # ── DELETE ──
+    if action == "delete":
+        if not task_id:
+            return "删除任务需要提供 task_id。"
+
+        task = _find_by_task_id(task_id)
+        if not task:
+            return f"任务 {task_id} 不存在。"
+
+        if task.depth != 0:
+            return f"任务 {task_id} 是子任务，不支持直接删除。仅可删除顶层任务。"
+
+        if task.status != "pending":
+            return f"任务 {task_id} 当前状态为 {task.status}，不可删除。仅 pending 状态的任务可删除。"
+
+        # Check if any other pending task depends on this one
+        dependents = [
+            t for t in top_tasks
+            if t.task_id != task_id
+            and t.depends_on
+            and task_id in [d.strip() for d in t.depends_on.split(",")]
+        ]
+        if dependents:
+            dep_ids = ", ".join(t.task_id for t in dependents)
+            return f"任务 {task_id} 被以下任务依赖，无法删除：{dep_ids}。请先移除依赖关系或删除依赖方。"
+
+        emit("todolist_task_deleted", {
+            "task_id": task.task_id,
+            "db_id": task.id,
+        })
+
+        db.delete(task)
+        try:
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise
+
+        return f"已删除任务 {task_id}。"
+
+    return f"未知操作：{action}"
+
+
 # ── Todo Execution Harness 工具 ──
 
 
@@ -757,13 +1083,21 @@ class ExecuteTodoTaskInput(BaseModel):
         description="要执行的任务编号（如 T1、T2）或数据库ID（db_id）。"
         "analyze_requirements 返回结果中包含此信息。"
     )
+    agent: str | None = Field(
+        default=None,
+        description="可选：显式指定子 Agent，取值 outline / chapter / evaluation；不传则按任务自动推断。",
+    )
 
 
 class ReadTodolistInput(BaseModel):
     pass  # session_id 从 config 自动获取，LLM 无需传参
 
 
-async def _execute_todo_task_coroutine(task_item_id: str, config: RunnableConfig) -> str:
+async def _execute_todo_task_coroutine(
+    task_item_id: str,
+    config: RunnableConfig,
+    agent: str | None = None,
+) -> str:
     """执行 todolist 中的一条任务"""
     from app.services.supervisor.todo_harness import execute_todo_task
 
@@ -774,6 +1108,7 @@ async def _execute_todo_task_coroutine(task_item_id: str, config: RunnableConfig
         db=db,
         emit=emit,
         config=config,
+        agent=agent,
     )
 
 
@@ -787,6 +1122,7 @@ execute_todo_task_tool = StructuredTool.from_function(
         "执行 todolist 任务时必须使用本工具；Supervisor 不再暴露 dispatch_* 入口工具。"
         "该工具会自动校验依赖、更新状态并发射事件，无需手动调用 update_task_status。"
         "参数 task_item_id 可以是任务编号（如 T1、T2，推荐）或数据库ID（如 abc-def-...）。"
+        "可选参数 agent 可显式指定 outline / chapter / evaluation；不传时按任务自动推断。"
         "analyze_requirements 返回值中包含了每个任务的编号，直接使用即可。"
     ),
     args_schema=ExecuteTodoTaskInput,
@@ -1545,9 +1881,13 @@ ALL_TOOLS = [
     read_work_context,
     read_chat_history,
     analyze_requirements,
+    # 需求文档工具
+    read_requirements_doc,
+    update_requirements_doc,
     # 状态机工具
     update_task_status,
     update_todolist_readiness,
+    edit_todolist,
     # Todo Execution Harness 工具
     execute_todo_task_tool,
     read_todolist,

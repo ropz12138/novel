@@ -94,7 +94,7 @@ def _get_db_lock(config: RunnableConfig):
 
 def _get_work_id(config: RunnableConfig) -> str:
     work_id = str(config.get("configurable", {}).get("work_id") or "")
-    if work_id:
+    if work_id is not None and work_id != "":
         return work_id
     configurable = config.get("configurable", {})
     session_id = configurable.get("supervisor_session_id")

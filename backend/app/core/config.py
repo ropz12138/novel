@@ -85,6 +85,13 @@ class Settings:
                 f"可用模型: {list(self._models.keys())}"
             )
 
+        self.fallback_model: str = config.get("fallback_model", "")
+        if self.fallback_model and self.fallback_model not in self._models:
+            raise ValueError(
+                f"fallback_model '{self.fallback_model}' 在 llm 配置列表中未找到。"
+                f"可用模型: {list(self._models.keys())}"
+            )
+
     def get_model_config(self, model_name: str | None = None) -> dict:
         """获取指定模型的配置。
 

@@ -76,7 +76,6 @@ function TodoTaskNode({ task, fallbackId, level = 0 }) {
             <p>依赖：{task.depends_on.join(", ")}</p>
           )}
           {task.done_criteria && <p>验收：{task.done_criteria}</p>}
-          {task.result_summary && <p className="text-emerald-600">结果：{task.result_summary}</p>}
           {task.error_message && <p className="text-red-600">错误：{task.error_message}</p>}
         </div>
       </div>
