@@ -9,12 +9,16 @@ class SupervisorStartRequest(BaseModel):
     message: str = Field(description="用户消息")
     work_id: str | None = Field(default=None, description="关联作品ID（可选）")
     auto_mode: bool = Field(default=True, description="自动模式：所有编辑操作直接执行，不等待确认")
+    enable_todolist: bool = Field(default=False, description="启用任务清单编排")
+    enable_evaluation: bool = Field(default=False, description="启用章节评估子 Agent")
 
 
 class SupervisorResumeRequest(BaseModel):
     """Resume an existing supervisor session."""
     session_id: str = Field(description="会话ID")
     message: str = Field(description="用户消息")
+    enable_todolist: bool | None = Field(default=None, description="启用任务清单编排（不传则保持会话原值）")
+    enable_evaluation: bool | None = Field(default=None, description="启用章节评估子 Agent（不传则保持会话原值）")
 
 
 class IntentResult(BaseModel):

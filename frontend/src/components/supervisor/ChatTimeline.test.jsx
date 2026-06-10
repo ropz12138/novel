@@ -8,6 +8,7 @@ function renderTimeline(overrides = {}) {
   const props = {
     timeline: [],
     assistantDraft: "",
+    assistantReasoningDraft: "",
     editDiff: null,
     outlineDiff: null,
     characterDiff: null,
@@ -39,6 +40,18 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("Hello AI")).toBeDefined();
+  });
+
+  it("preserves line breaks in user messages", () => {
+    renderTimeline({
+      timeline: [
+        { kind: "message", id: 1, role: "user", content: "第一行\n第二行", timestamp: Date.now() },
+      ],
+    });
+
+    const bubble = document.querySelector(".whitespace-pre-wrap");
+    expect(bubble).toBeTruthy();
+    expect(bubble.textContent).toBe("第一行\n第二行");
   });
 
   it("renders assistant messages with markdown", () => {
@@ -96,6 +109,28 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("stream content here")).toBeDefined();
+  });
+
+  it("renders step with reasoning stream before content stream", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "step",
+          id: 1,
+          label: "写第1章",
+          status: "running",
+          reasoningStream: "分析补丁",
+          stream: '{"edits":',
+          panelOpen: true,
+          timestamp: Date.now(),
+        },
+      ],
+      running: true,
+    });
+
+    const reasoning = screen.getByText("分析补丁");
+    const content = screen.getByText('{"edits":');
+    expect(reasoning.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("hides stream content when panelOpen is false", () => {
@@ -276,6 +311,29 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("streaming text...")).toBeDefined();
+  });
+
+  it("renders reasoning draft with label and max-height container while thinking only", () => {
+    renderTimeline({
+      assistantReasoningDraft: "分析用户意图中...",
+      assistantDraft: "",
+      running: true,
+    });
+
+    expect(screen.getByText("思考过程")).toBeDefined();
+    expect(screen.getByText("分析用户意图中...")).toBeDefined();
+  });
+
+  it("collapses reasoning draft once content draft starts streaming", () => {
+    renderTimeline({
+      assistantReasoningDraft: "思考中...",
+      assistantDraft: "正式回复",
+      running: true,
+    });
+
+    expect(screen.queryByText("思考过程")).toBeNull();
+    expect(screen.queryByText("思考中...")).toBeNull();
+    expect(screen.getByText("正式回复")).toBeDefined();
   });
 
   // ── Floating outline/character diff panel ──

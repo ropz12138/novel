@@ -76,7 +76,7 @@ class TestToolInputSchemas:
         from app.services.outline_tools import AddCharacterInput
         s = AddCharacterInput(name="Bob")
         assert s.role_type == "配角"
-        assert s.first_chapter == 1
+        assert s.first_appearance_stage == "M1"
 
     def test_delete_character_schema(self):
         from app.services.outline_tools import DeleteCharacterInput
@@ -279,7 +279,7 @@ class TestAddCharacter:
             {"name": "Bob", "role_type": "主角", "gender": "男", "age": "20",
              "appearance": "帅气", "personality": "开朗", "background": "大学生",
              "skills": "无", "current_status": "存活", "current_goal": "拯救世界",
-             "first_chapter": 1, "notes": ""},
+             "first_appearance_stage": "M1", "notes": ""},
             config=config,
         )
         assert "已添加角色" in result
@@ -294,7 +294,7 @@ class TestAddCharacter:
         result = add_character.invoke(
             {"name": "Bob", "role_type": "主角", "gender": "", "age": "",
              "appearance": "", "personality": "", "background": "", "skills": "",
-             "current_status": "存活", "current_goal": "", "first_chapter": 1, "notes": ""},
+             "current_status": "存活", "current_goal": "", "first_appearance_stage": "M1", "notes": ""},
             config=config,
         )
         assert "已存在" in result

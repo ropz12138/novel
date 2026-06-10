@@ -9,6 +9,7 @@ import uuid
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage
+from langchain_core.runnables import RunnableConfig
 from app.core.deepseek_llm import DeepSeekChatOpenAI, FallbackLLM
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph import MessagesState
@@ -16,8 +17,40 @@ from langgraph.prebuilt import ToolNode
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.services.stream_trace import gap_log, gap_trace_from_config
 
 logger = logging.getLogger(__name__)
+
+
+# ── Thinking Mode（tool-calling Agent 节点启用 reasoning 流） ──
+
+AGENT_THINKING_EXTRA_BODY = {"thinking": {"type": "enabled"}}
+
+
+def bind_agent_llm_with_tools(llm, tools):
+    """绑定工具并启用 Thinking Mode（覆盖 DeepSeek 默认 disabled）。"""
+    return llm.bind_tools(tools, extra_body=AGENT_THINKING_EXTRA_BODY)
+
+
+async def astream_agent_llm_to_message(
+    llm_with_tools,
+    messages: list[BaseMessage],
+    *,
+    emit: Callable[[str, dict], None] | None = None,
+    stream_event: str = "thinking_stream",
+) -> AIMessage:
+    """Agent 节点 LLM 流式调用：推送 reasoning/content 并返回完整 AIMessage。"""
+    aggregated: AIMessageChunk | None = None
+
+    async for chunk in llm_with_tools.astream(messages):
+        aggregated = chunk if aggregated is None else aggregated + chunk
+        if emit:
+            emit_llm_stream_deltas(emit, stream_event, chunk)
+
+    if aggregated is None:
+        raise RuntimeError("Agent LLM 未返回任何流式分片")
+
+    return chunk_to_ai_message(aggregated)
 
 
 # ── 流式处理工具函数 ──
@@ -46,6 +79,73 @@ def stream_text_delta(chunk: AIMessageChunk) -> str:
                 parts.append(str(getattr(part, "text", "") or ""))
         return "".join(parts)
     return str(c)
+
+
+def stream_reasoning_delta(chunk: AIMessageChunk) -> str:
+    """从 LLM 流式 chunk 取出 reasoning_content 增量。"""
+    if chunk is None:
+        return ""
+    rc = getattr(chunk, "additional_kwargs", {}).get("reasoning_content")
+    if rc is None or rc == "":
+        return ""
+    return str(rc)
+
+
+def emit_llm_stream_deltas(
+    emit: Callable[[str, dict], None],
+    stream_event: str,
+    chunk: AIMessageChunk,
+) -> None:
+    """将单个 chunk 的 reasoning/content 增量推送到 SSE（先 reasoning 后 content）。"""
+    reasoning_delta = stream_reasoning_delta(chunk)
+    if reasoning_delta:
+        emit(stream_event, {"chunk": reasoning_delta, "phase": "reasoning"})
+    content_delta = stream_text_delta(chunk)
+    if content_delta:
+        emit(stream_event, {"chunk": content_delta, "phase": "content"})
+
+
+async def stream_chain_with_reasoning(
+    chain,
+    inputs: dict,
+    emit: Callable[[str, dict], None],
+    stream_event: str,
+    *,
+    config: RunnableConfig | None = None,
+    trace_label: str | None = None,
+    should_abort: Callable[[], bool] | None = None,
+) -> str:
+    """流式执行 prompt|llm chain，推送 reasoning/content 并返回完整正文。"""
+    from app.services.supervisor.session_interrupt import SessionInterruptedError
+
+    trace_t0, trace_session_id = gap_trace_from_config(config)
+    if trace_label:
+        gap_log(
+            "llm_chain_stream_begin",
+            session_id=trace_session_id,
+            t0=trace_t0,
+            label=trace_label,
+            stream_event=stream_event,
+        )
+    raw_output = ""
+    first_chunk_logged = False
+    async for chunk in chain.astream(inputs):
+        if should_abort and should_abort():
+            raise SessionInterruptedError("任务已被用户中断")
+        if trace_label and not first_chunk_logged:
+            first_chunk_logged = True
+            gap_log(
+                "llm_chain_first_chunk",
+                session_id=trace_session_id,
+                t0=trace_t0,
+                label=trace_label,
+                stream_event=stream_event,
+            )
+        emit_llm_stream_deltas(emit, stream_event, chunk)
+        content_delta = stream_text_delta(chunk)
+        if content_delta:
+            raw_output += content_delta
+    return raw_output
 
 
 def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
@@ -79,6 +179,9 @@ def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
     _id = getattr(full, "id", None)
     if _id:
         kwargs["id"] = _id
+    rc = getattr(full, "additional_kwargs", {}).get("reasoning_content")
+    if rc:
+        kwargs["additional_kwargs"] = {"reasoning_content": rc}
     return AIMessage(**kwargs)
 
 
@@ -191,9 +294,8 @@ async def run_agent_stream(
     async for chunk in llm_with_tools.astream(messages):
         aggregated = chunk if aggregated is None else aggregated + chunk
 
-        delta = stream_text_delta(chunk)
-        if delta and emit:
-            emit(stream_event, {"chunk": delta})
+        if emit:
+            emit_llm_stream_deltas(emit, stream_event, chunk)
 
     if aggregated is None:
         raise RuntimeError("子 Agent LLM 未返回任何流式分片")

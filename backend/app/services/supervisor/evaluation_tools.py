@@ -238,8 +238,8 @@ def read_previous_chapters_for_eval(
 
 def _outline_to_natural_text(outline: dict) -> str:
     story = outline.get("story", {}) if isinstance(outline, dict) else {}
-    timeline = outline.get("timeline", []) if isinstance(outline, dict) else []
-    branches = outline.get("branches", []) if isinstance(outline, dict) else []
+    macro_phases = outline.get("outline", {}).get("macro_phases", []) if isinstance(outline, dict) else []
+    meso_stages = outline.get("meso", {}).get("meso_stages", []) if isinstance(outline, dict) else []
     foreshadowing = outline.get("foreshadowing", []) if isinstance(outline, dict) else []
 
     lines: list[str] = []
@@ -249,18 +249,20 @@ def _outline_to_natural_text(outline: dict) -> str:
     lines.append(f"卷：{story.get('volume', '')}")
     lines.append(f"简介：{story.get('synopsis', '')}")
 
-    lines.append("\n【主线时间线】")
-    for n in timeline:
+    lines.append("\n【大纲（宏观阶段）】")
+    for p in macro_phases:
+        cr = p.get("chapter_range", [0, 0])
         lines.append(
-            f"- {n.get('id', '')} | 章节 {n.get('chapter_start', '')}-{n.get('chapter_end', '')} | "
-            f"{n.get('development_node', '')} | 摘要：{n.get('summary', '')}"
+            f"- {p.get('id', '')} | 章节 {cr[0]}-{cr[1]} | "
+            f"{p.get('name', '')} | 目标：{p.get('goal', '')}"
         )
 
-    lines.append("\n【分支剧情】")
-    for b in branches:
+    lines.append("\n【中纲（故事阶段）】")
+    for s in meso_stages:
+        cr = s.get("chapter_range", [0, 0])
         lines.append(
-            f"- {b.get('id', '')} | 章节 {b.get('chapter_start', '')}-{b.get('chapter_end', '')} | "
-            f"{b.get('name', '')} | 摘要：{b.get('summary', '') or b.get('description', '')}"
+            f"- {s.get('id', '')} | 章节 {cr[0]}-{cr[1]} | "
+            f"{s.get('name', '')}（{s.get('type', '')}）| 冲突：{s.get('conflict', '')}"
         )
 
     lines.append("\n【伏笔】")
@@ -279,7 +281,7 @@ def _characters_to_natural_text(characters: list[Any]) -> str:
     for c in characters:
         lines.append(
             f"- {c.name}（{c.role_type}）：性格={c.personality or ''}；背景={c.background or ''}；"
-            f"状态={c.current_status or ''}；目标={c.current_goal or ''}；首次出场={c.first_chapter or ''}"
+            f"状态={c.current_status or ''}；目标={c.current_goal or ''}；首次出场阶段={c.first_appearance_stage or ''}"
         )
     return "\n".join(lines)
 
@@ -292,7 +294,6 @@ def _metadata_to_natural_text(md: Any) -> str:
     lines.append(f"关键情节点：{'; '.join(md.key_plot_points or [])}")
     lines.append(f"大纲关联：{'; '.join(str(x) for x in (md.outline_links or []))}")
     lines.append(f"涉及角色：{'; '.join(str(x) for x in (md.involved_characters or []))}")
-    lines.append(f"伏笔：{'; '.join(str(x) for x in (md.foreshadows or []))}")
     lines.append(f"事实：{'; '.join(str(x) for x in (md.facts or []))}")
     return "\n".join(lines)
 
@@ -343,7 +344,7 @@ async def _evaluate_chapter_outline_sync_coroutine(
     characters = (
         db.query(Character)
         .filter_by(work_id=work_id)
-        .order_by(Character.first_chapter.asc(), Character.created_at.asc())
+        .order_by(Character.first_appearance_stage.asc(), Character.created_at.asc())
         .all()
     )
 
@@ -606,16 +607,9 @@ evaluate_chapter_all = StructuredTool.from_function(
 
 # ── 导出工具列表 ──
 
-from app.services.supervisor.outline_tools import (  # noqa: E402
-    create_child_todolist,
-    read_child_todolist,
-    update_child_task_status,
-)
+from app.services.supervisor.outline_tools import CHILD_TODO_TOOLS  # noqa: E402
 
-EVALUATION_TOOLS = [
-    create_child_todolist,
-    read_child_todolist,
-    update_child_task_status,
+_EVALUATION_CORE_TOOLS = [
     read_chapter_for_eval,
     read_chapter_outline_for_eval,
     read_previous_chapters_for_eval,
@@ -623,4 +617,9 @@ EVALUATION_TOOLS = [
     evaluate_as_reader,
     evaluate_chapter_outline_sync,
     evaluate_chapter_all,
+]
+
+EVALUATION_TOOLS = [
+    *CHILD_TODO_TOOLS,
+    *_EVALUATION_CORE_TOOLS,
 ]

@@ -1,0 +1,4 @@
+1. 如果当前任务较复杂，先用 **create_child_todolist** 创建 2-6 个内部子任务
+2. 开始/完成关键步骤时用 **update_child_task_status** 更新对应子任务
+3. 用 **generate_outline** 创建大纲（含角色卡，勿在工具外自行写角色设定）
+4. 完成后把剩余子任务更新为 completed 或 failed

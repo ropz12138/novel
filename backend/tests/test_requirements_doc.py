@@ -192,8 +192,8 @@ class TestUpdateRequirementsDoc:
 
         assert any(e[0] == "requirements_doc_updated" for e in emitted)
 
-    def test_returns_error_when_work_not_found(self):
-        """作品不存在时应返回错误信息"""
+    def test_returns_prompt_when_work_not_found(self):
+        """作品不存在时应提示 agent 先创建大纲"""
         from unittest.mock import MagicMock
         from app.services.supervisor.tools import update_requirements_doc
 
@@ -203,10 +203,10 @@ class TestUpdateRequirementsDoc:
         config = {"configurable": {"db": mock_db, "work_id": "nonexistent", "emit": lambda e, d: None}}
 
         result = update_requirements_doc.func(content="新内容", config=config)
-        assert "不存在" in result
+        assert "dispatch_outline" in result
 
-    def test_returns_error_when_no_work_id(self):
-        """未绑定作品时应返回错误信息"""
+    def test_returns_prompt_when_no_work_id(self):
+        """未绑定作品时应提示 agent 先创建大纲"""
         from unittest.mock import MagicMock
         from app.services.supervisor.tools import update_requirements_doc
 
@@ -215,7 +215,7 @@ class TestUpdateRequirementsDoc:
         config = {"configurable": {"db": mock_db, "work_id": "", "emit": lambda e, d: None}}
 
         result = update_requirements_doc.func(content="新内容", config=config)
-        assert "未绑定" in result or "不存在" in result
+        assert "dispatch_outline" in result
 
 
 # ── Schema 验证 ──

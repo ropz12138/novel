@@ -37,6 +37,8 @@ def _session_to_out(session, db) -> dict:
         "stage": session.stage,
         "status": session.status,
         "auto_mode": session.auto_mode or False,
+        "enable_todolist": bool(session.enable_todolist),
+        "enable_evaluation": bool(session.enable_evaluation),
         "created_at": session.created_at.isoformat() if session.created_at else None,
         "updated_at": session.updated_at.isoformat() if session.updated_at else None,
     }

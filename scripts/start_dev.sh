@@ -39,13 +39,32 @@ cleanup_old() {
   fi
 }
 
-# --- 等待 HTTP 健康检查 ---
+# --- 等待 HTTP 健康检查（GET）---
 wait_http_ok() {
   local name="$1" url="$2" timeout_s="$3"
   local start_ts now elapsed
   start_ts="$(date +%s)"
   while true; do
     if curl --noproxy '*' -fsS -m 2 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    now="$(date +%s)"
+    elapsed=$((now - start_ts))
+    if [ "$elapsed" -ge "$timeout_s" ]; then
+      echo "$name 健康检查失败: $url 超时 ${timeout_s}s"
+      return 1
+    fi
+    sleep 0.5
+  done
+}
+
+# --- 等待 POST 健康检查（后端 /health）---
+wait_http_post_ok() {
+  local name="$1" url="$2" timeout_s="$3"
+  local start_ts now elapsed
+  start_ts="$(date +%s)"
+  while true; do
+    if curl --noproxy '*' -fsS -m 2 -X POST -H "Content-Type: application/json" -d '{}' "$url" >/dev/null 2>&1; then
       return 0
     fi
     now="$(date +%s)"
@@ -195,7 +214,7 @@ start_backend() {
 
 start_backend
 sleep 0.5
-if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
+if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_post_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
   echo "backend 首次启动失败，尝试重启一次..."
   if pid_alive "$RUN_DIR/backend-dev.pid"; then
     kill_tree "$(cat "$RUN_DIR/backend-dev.pid")"
@@ -203,7 +222,7 @@ if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://12
   fi
   start_backend
   sleep 0.5
-  if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
+  if ! pid_alive "$RUN_DIR/backend-dev.pid" || ! wait_http_post_ok "backend" "http://127.0.0.1:$DEV_PORT/health" 20; then
     echo "backend 启动失败，最近日志："
     tail -n 120 "$RUN_DIR/backend-dev.log" || true
     deactivate

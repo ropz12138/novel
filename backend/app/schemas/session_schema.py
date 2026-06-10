@@ -12,5 +12,7 @@ class SupervisorSessionOut(BaseModel):
     stage: str
     status: str
     auto_mode: bool = False
+    enable_todolist: bool = False
+    enable_evaluation: bool = False
     created_at: datetime | str | None = None
     updated_at: datetime | str | None = None

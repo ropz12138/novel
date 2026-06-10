@@ -1,7 +1,7 @@
 import asyncio
 import json
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -11,21 +11,30 @@ from app.controllers.work_controller import (
     delete_work,
     delete_last_chapter,
     get_chapter_intel,
-    get_chapter,
     get_work,
     list_chapters,
     list_works,
     update_chapter,
     update_outline,
+    update_requirements_doc,
+    update_meso_doc,
+    update_micro_doc,
 )
-from app.models.work_model import User
+from app.models.work_model import User, Work
+from app.schemas.rpc_schema import (
+    ChapterNumberRequest,
+    ChapterUpdateRpcRequest,
+    OkResponse,
+    OutlineDocUpdateRpcRequest,
+    RequirementsDocUpdateRpcRequest,
+    WorkIdRequest,
+    WorkOutlineUpdateRpcRequest,
+)
 from app.schemas.work_schema import (
     ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
-    ChapterUpdateRequest,
     OutlineQuickGenerateRequest,
-    OutlineUpdateRequest,
     WorkOut,
 )
 
@@ -79,7 +88,7 @@ async def generate_outline_stream_api(
     )
 
 
-@router.get("", response_model=list[WorkOut])
+@router.post("/list", response_model=list[WorkOut])
 def list_works_api(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
@@ -87,98 +96,173 @@ def list_works_api(
     return list_works(db, user_id=current_user.id)
 
 
-@router.get("/{work_id}", response_model=WorkOut)
+@router.post("/get", response_model=WorkOut)
 def get_work_api(
-    work_id: str,
+    payload: WorkIdRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return get_work(work_id, db, user_id=current_user.id)
+    return get_work(payload.work_id, db, user_id=current_user.id)
 
 
-@router.put("/{work_id}/outline", response_model=WorkOut)
+@router.post("/update-outline", response_model=WorkOut)
 def update_outline_api(
-    work_id: str,
-    payload: OutlineUpdateRequest,
+    payload: WorkOutlineUpdateRpcRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return update_outline(work_id, payload, db, user_id=current_user.id)
+    from app.schemas.work_schema import OutlineUpdateRequest
+
+    return update_outline(
+        payload.work_id,
+        OutlineUpdateRequest(outline_tree=payload.outline_tree),
+        db,
+        user_id=current_user.id,
+    )
 
 
-@router.delete("/{work_id}", status_code=204)
+@router.post("/delete", response_model=OkResponse)
 def delete_work_api(
-    work_id: str,
+    payload: WorkIdRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    delete_work(work_id, db, user_id=current_user.id)
+    delete_work(payload.work_id, db, user_id=current_user.id)
+    return OkResponse()
 
 
-@router.get("/{work_id}/chapters", response_model=list[ChapterOut])
+@router.post("/chapters/list", response_model=list[ChapterOut])
 def list_chapters_api(
-    work_id: str,
+    payload: WorkIdRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return list_chapters(work_id, db, user_id=current_user.id)
+    return list_chapters(payload.work_id, db, user_id=current_user.id)
 
 
-@router.get("/{work_id}/chapters/{chapter_number}", response_model=ChapterOut)
-def get_chapter_api(
-    work_id: str,
-    chapter_number: int,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user),
-):
-    return get_chapter(work_id, chapter_number, db, user_id=current_user.id)
-
-
-@router.get("/{work_id}/chapters/{chapter_number}/intel", response_model=ChapterIntelOut)
+@router.post("/chapters/intel", response_model=ChapterIntelOut)
 def get_chapter_intel_api(
-    work_id: str,
-    chapter_number: int,
+    payload: ChapterNumberRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return get_chapter_intel(work_id, chapter_number, db, user_id=current_user.id)
+    return get_chapter_intel(payload.work_id, payload.chapter_number, db, user_id=current_user.id)
 
 
-@router.delete("/{work_id}/chapters/last", response_model=ChapterDeleteLastResponse)
+@router.post("/chapters/delete-last", response_model=ChapterDeleteLastResponse)
 def delete_last_chapter_api(
-    work_id: str,
+    payload: WorkIdRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return delete_last_chapter(work_id, db, user_id=current_user.id)
+    return delete_last_chapter(payload.work_id, db, user_id=current_user.id)
 
 
-@router.put("/{work_id}/chapters/{chapter_number}", response_model=ChapterOut)
+@router.post("/chapters/update", response_model=ChapterOut)
 def update_chapter_api(
-    work_id: str,
-    chapter_number: int,
-    payload: ChapterUpdateRequest,
+    payload: ChapterUpdateRpcRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    return update_chapter(work_id, chapter_number, payload, db, user_id=current_user.id)
+    from app.schemas.work_schema import ChapterUpdateRequest
+
+    return update_chapter(
+        payload.work_id,
+        payload.chapter_number,
+        ChapterUpdateRequest(title=payload.title, content=payload.content),
+        db,
+        user_id=current_user.id,
+    )
 
 
-@router.get("/{work_id}/requirements-doc")
+@router.post("/requirements-doc/get")
 def get_requirements_doc_api(
-    work_id: str,
+    payload: WorkIdRequest,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    from app.models.work_model import Work, User
-    from fastapi import HTTPException
-
     user = db.query(User).filter_by(id=current_user.id).first()
     if not user:
         raise HTTPException(status_code=401, detail="未登录")
 
-    work = db.query(Work).filter_by(id=work_id, user_id=current_user.id).first()
+    work = db.query(Work).filter_by(id=payload.work_id, user_id=current_user.id).first()
     if not work:
         raise HTTPException(status_code=404, detail="作品不存在")
 
     return {"content": work.requirements_doc or ""}
+
+
+@router.post("/requirements-doc/update")
+def update_requirements_doc_api(
+    payload: RequirementsDocUpdateRpcRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return update_requirements_doc(
+        payload.work_id,
+        payload.content,
+        db,
+        user_id=current_user.id,
+    )
+
+
+@router.post("/meso-doc/get")
+def get_meso_doc_api(
+    payload: WorkIdRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user = db.query(User).filter_by(id=current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    work = db.query(Work).filter_by(id=payload.work_id, user_id=current_user.id).first()
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+
+    return {"content": work.meso_doc or ""}
+
+
+@router.post("/meso-doc/update")
+def update_meso_doc_api(
+    payload: OutlineDocUpdateRpcRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return update_meso_doc(
+        payload.work_id,
+        payload.content,
+        db,
+        user_id=current_user.id,
+    )
+
+
+@router.post("/micro-doc/get")
+def get_micro_doc_api(
+    payload: WorkIdRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    user = db.query(User).filter_by(id=current_user.id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="未登录")
+
+    work = db.query(Work).filter_by(id=payload.work_id, user_id=current_user.id).first()
+    if not work:
+        raise HTTPException(status_code=404, detail="作品不存在")
+
+    return {"content": work.micro_doc or ""}
+
+
+@router.post("/micro-doc/update")
+def update_micro_doc_api(
+    payload: OutlineDocUpdateRpcRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    return update_micro_doc(
+        payload.work_id,
+        payload.content,
+        db,
+        user_id=current_user.id,
+    )

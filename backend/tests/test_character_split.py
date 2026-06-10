@@ -28,14 +28,14 @@ class TestCharacterBriefSchema:
             role_type="主角",
             gender="男",
             age="16",
-            first_chapter=1,
+            first_appearance_stage="M1",
             brief="天赋异禀的少年，立志振兴家族",
         )
         assert b.name == "林动"
         assert b.role_type == "主角"
         assert b.gender == "男"
         assert b.age == "16"
-        assert b.first_chapter == 1
+        assert b.first_appearance_stage == "M1"
         assert b.brief == "天赋异禀的少年，立志振兴家族"
 
     def test_defaults(self):
@@ -45,14 +45,14 @@ class TestCharacterBriefSchema:
         assert b.role_type == "配角"
         assert b.gender == ""
         assert b.age == ""
-        assert b.first_chapter == 1
+        assert b.first_appearance_stage == "M1"
         assert b.brief == ""
 
     def test_brief_has_expected_fields(self):
         from app.schemas.work_schema import CharacterBrief
 
         fields = CharacterBrief.model_fields
-        expected = {"name", "role_type", "gender", "age", "first_chapter", "brief"}
+        expected = {"name", "role_type", "gender", "age", "first_appearance_stage", "brief"}
         assert set(fields.keys()) == expected
 
 
@@ -90,7 +90,7 @@ class TestCharacterDetailSchema:
         from app.schemas.work_schema import CharacterDetail
 
         fields = CharacterDetail.model_fields
-        expected = {"name", "appearance", "personality", "background", "skills", "current_status", "current_goal"}
+        expected = {"name", "appearance", "personality", "background", "skills", "current_status", "current_goal", "first_appearance_stage"}
         assert set(fields.keys()) == expected
 
 
@@ -159,15 +159,15 @@ class TestMergeBriefsAndDetails:
                 "skills": detail.get("skills", ""),
                 "current_status": detail.get("current_status", "存活"),
                 "current_goal": detail.get("current_goal", ""),
-                "first_chapter": brief.get("first_chapter", 1),
+                "first_appearance_stage": brief.get("first_appearance_stage", "M1"),
             })
         return characters
 
     def test_merge_matches_by_name(self):
         """brief + detail 按 name 匹配合并"""
         briefs = [
-            {"name": "林动", "role_type": "主角", "gender": "男", "age": "16", "first_chapter": 1},
-            {"name": "绫清竹", "role_type": "配角", "gender": "女", "age": "18", "first_chapter": 3},
+            {"name": "林动", "role_type": "主角", "gender": "男", "age": "16", "first_appearance_stage": "M1"},
+            {"name": "绫清竹", "role_type": "配角", "gender": "女", "age": "18", "first_appearance_stage": "M3"},
         ]
         details = [
             {"name": "林动", "appearance": "英俊", "personality": "坚韧"},
@@ -186,7 +186,7 @@ class TestMergeBriefsAndDetails:
     def test_brief_without_detail_fills_defaults(self):
         """brief 中没有对应 detail 时，详情字段用空字符串填充"""
         briefs = [
-            {"name": "林动", "role_type": "主角", "first_chapter": 1},
+            {"name": "林动", "role_type": "主角", "first_appearance_stage": "M1"},
         ]
         details = []
 
@@ -203,7 +203,7 @@ class TestMergeBriefsAndDetails:
     def test_detail_with_unknown_name_ignored(self):
         """detail 中出现 brief 不存在的 name 时，被忽略"""
         briefs = [
-            {"name": "林动", "role_type": "主角", "first_chapter": 1},
+            {"name": "林动", "role_type": "主角", "first_appearance_stage": "M1"},
         ]
         details = [
             {"name": "林动", "appearance": "英俊"},
@@ -219,7 +219,7 @@ class TestMergeBriefsAndDetails:
         """合并结果包含 CharacterInfo 的全部 11 个字段"""
         from app.schemas.work_schema import CharacterInfo
 
-        briefs = [{"name": "林动", "role_type": "主角", "first_chapter": 1}]
+        briefs = [{"name": "林动", "role_type": "主角", "first_appearance_stage": "M1"}]
         details = [{"name": "林动", "appearance": "英俊"}]
 
         result = self._merge(briefs, details)
@@ -324,9 +324,9 @@ class TestCharacterSplitIntegration:
 
         # 模拟 LLM 第1步返回的骨架
         mock_briefs = [
-            {"name": "林动", "role_type": "主角", "gender": "男", "age": "16", "first_chapter": 1, "brief": "天赋少年"},
-            {"name": "绫清竹", "role_type": "配角", "gender": "女", "age": "18", "first_chapter": 3, "brief": "冰山美人"},
-            {"name": "异魔王", "role_type": "反派", "gender": "男", "age": "未知", "first_chapter": 5, "brief": "终极反派"},
+            {"name": "林动", "role_type": "主角", "gender": "男", "age": "16", "first_appearance_stage": "M1", "brief": "天赋少年"},
+            {"name": "绫清竹", "role_type": "配角", "gender": "女", "age": "18", "first_appearance_stage": "M3", "brief": "冰山美人"},
+            {"name": "异魔王", "role_type": "反派", "gender": "男", "age": "未知", "first_appearance_stage": "M5", "brief": "终极反派"},
         ]
 
         # 模拟 LLM 第2步返回的详情（一批）
@@ -338,7 +338,7 @@ class TestCharacterSplitIntegration:
 
         # 验证 schema 能正确解析
         briefs_input = _SubmitCharacterBriefsInput(
-            briefs=[{"name": b["name"], "role_type": b["role_type"], "gender": b["gender"], "age": b["age"], "first_chapter": b["first_chapter"], "brief": b["brief"]} for b in mock_briefs],
+            briefs=[{"name": b["name"], "role_type": b["role_type"], "gender": b["gender"], "age": b["age"], "first_appearance_stage": b["first_appearance_stage"], "brief": b["brief"]} for b in mock_briefs],
         )
         assert len(briefs_input.briefs) == 3
 
@@ -363,7 +363,7 @@ class TestCharacterSplitIntegration:
                 "skills": detail.get("skills", ""),
                 "current_status": detail.get("current_status", "存活"),
                 "current_goal": detail.get("current_goal", ""),
-                "first_chapter": brief.get("first_chapter", 1),
+                "first_appearance_stage": brief.get("first_appearance_stage", "M1"),
             })
 
         # 验证合并结果与 CharacterInfo 完全兼容
@@ -378,7 +378,7 @@ class TestCharacterSplitIntegration:
         assert mc["role_type"] == "主角"
         assert mc["appearance"] == "英俊"
         assert mc["background"] == "落魄家族"
-        assert mc["first_chapter"] == 1
+        assert mc["first_appearance_stage"] == "M1"
 
         # 验证反派字段正确
         villain = characters[2]
@@ -404,7 +404,7 @@ class TestCharacterSplitIntegration:
                 "skills": "符文术",
                 "current_status": "修炼中",
                 "current_goal": "振兴林家",
-                "first_chapter": 1,
+                "first_appearance_stage": "M1",
             },
         ]
 
@@ -412,7 +412,7 @@ class TestCharacterSplitIntegration:
         for c in merged_characters:
             info = CharacterInfo(**c)
             assert info.name == "林动"
-            assert info.first_chapter == 1
+            assert info.first_appearance_stage == "M1"
             assert info.appearance == "英俊"
 
     @pytest.mark.asyncio

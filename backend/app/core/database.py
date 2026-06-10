@@ -71,6 +71,20 @@ def _ensure_columns(engine) -> None:
             ))
             conn.commit()
 
+        # supervisor_sessions.enable_todolist
+        if not _column_exists("supervisor_sessions", "enable_todolist"):
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN enable_todolist BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
+        # supervisor_sessions.enable_evaluation
+        if not _column_exists("supervisor_sessions", "enable_evaluation"):
+            conn.execute(text(
+                "ALTER TABLE supervisor_sessions ADD COLUMN enable_evaluation BOOLEAN NOT NULL DEFAULT FALSE"
+            ))
+            conn.commit()
+
         # supervisor_sessions.ready_to_execute
         if not _column_exists("supervisor_sessions", "ready_to_execute"):
             conn.execute(text(
@@ -99,6 +113,20 @@ def _ensure_columns(engine) -> None:
             ))
             conn.commit()
 
+        # works.meso_doc
+        if not _column_exists("works", "meso_doc"):
+            conn.execute(text(
+                "ALTER TABLE works ADD COLUMN meso_doc TEXT"
+            ))
+            conn.commit()
+
+        # works.micro_doc
+        if not _column_exists("works", "micro_doc"):
+            conn.execute(text(
+                "ALTER TABLE works ADD COLUMN micro_doc TEXT"
+            ))
+            conn.commit()
+
         # chapter_metadata（兼容历史库：若 create_all 时机错过，这里兜底创建）
         conn.execute(text(
             """
@@ -110,7 +138,6 @@ def _ensure_columns(engine) -> None:
                 key_plot_points JSONB NOT NULL DEFAULT '[]'::jsonb,
                 outline_links JSONB NOT NULL DEFAULT '[]'::jsonb,
                 involved_characters JSONB NOT NULL DEFAULT '[]'::jsonb,
-                foreshadows JSONB NOT NULL DEFAULT '[]'::jsonb,
                 facts JSONB NOT NULL DEFAULT '[]'::jsonb,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -119,6 +146,13 @@ def _ensure_columns(engine) -> None:
             """
         ))
         conn.commit()
+
+        # chapter_metadata: 移除已废弃的 foreshadows 列（历史库兼容）
+        if _column_exists("chapter_metadata", "foreshadows"):
+            conn.execute(text(
+                "ALTER TABLE chapter_metadata DROP COLUMN foreshadows"
+            ))
+            conn.commit()
 
         # task_items（任务清单状态机）
         conn.execute(text(

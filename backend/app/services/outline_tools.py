@@ -59,7 +59,7 @@ class UpdateStoryInput(BaseModel):
 
 class UpdateCharacterInput(BaseModel):
     name: str = Field(description="角色名（必须与角色库中已有角色完全匹配）")
-    fields: dict = Field(description="要修改的字段字典。可修改：name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, last_location, first_chapter, notes")
+    fields: dict = Field(description="要修改的字段字典。可修改：name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, last_location, first_appearance_stage, notes")
 
 
 class AddCharacterInput(BaseModel):
@@ -73,7 +73,7 @@ class AddCharacterInput(BaseModel):
     skills: str = Field(default="", description="能力/技能")
     current_status: str = Field(default="存活", description="当前状态")
     current_goal: str = Field(default="", description="当前目的/动机")
-    first_chapter: int = Field(default=1, description="首次出场章节")
+    first_appearance_stage: str = Field(default="M1", description="首次出场阶段（中纲阶段ID）")
     notes: str = Field(default="", description="补充备注")
 
 
@@ -113,7 +113,7 @@ def _sync_outline_characters_from_db(config: RunnableConfig) -> None:
     chars = (
         db.query(Character)
         .filter_by(work_id=work_id)
-        .order_by(Character.first_chapter.asc(), Character.created_at.asc())
+        .order_by(Character.first_appearance_stage.asc(), Character.created_at.asc())
         .all()
     )
     outline_chars = [
@@ -128,7 +128,7 @@ def _sync_outline_characters_from_db(config: RunnableConfig) -> None:
             "skills": c.skills or "",
             "current_status": c.current_status or "",
             "current_goal": c.current_goal or "",
-            "first_chapter": c.first_chapter or 1,
+            "first_appearance_stage": c.first_appearance_stage or "M1",
         }
         for c in chars
     ]
@@ -153,53 +153,62 @@ def _sync_outline_characters_from_db(config: RunnableConfig) -> None:
 @tool(args_schema=AddTimelineNodeInput)
 def add_timeline_node(order: float, development_node: str, summary: str, time_node: str,
                       chapter_start: int, chapter_end: int, config: RunnableConfig) -> str:
-    """新增一个主线节点到大纲中。"""
+    """新增一个宏观阶段到大纲中。"""
     outline = _get_outline(config)
-    timeline = outline.get("timeline", [])
-    new_id = f"N{len(timeline) + 1}"
-    timeline.append({
+    if "outline" not in outline or not isinstance(outline["outline"], dict):
+        outline["outline"] = {"macro_phases": [], "core_characters": [], "ending": {}}
+    macro_phases = outline["outline"].get("macro_phases", [])
+    new_id = f"P{len(macro_phases) + 1}"
+    macro_phases.append({
         "id": new_id,
         "order": int(round(order)),
-        "development_node": development_node,
-        "summary": summary,
-        "time_node": time_node,
-        "chapter_start": chapter_start,
-        "chapter_end": chapter_end,
+        "name": development_node,
+        "goal": summary,
+        "core_setting": "",
+        "chapter_range": [chapter_start, chapter_end],
     })
-    timeline.sort(key=lambda n: n.get("order", 0))
-    outline["timeline"] = timeline
+    macro_phases.sort(key=lambda n: n.get("order", 0))
+    outline["outline"]["macro_phases"] = macro_phases
     _set_outline(config, outline)
-    return f"已添加主线节点 {new_id}：{development_node}（第{chapter_start}-{chapter_end}章）"
+    return f"已添加宏观阶段 {new_id}：{development_node}（第{chapter_start}-{chapter_end}章）"
 
 
 @tool(args_schema=AddBranchNodeInput)
 def add_branch_node(attach_to: str, side: str, name: str, summary: str,
                     chapter_start: int, chapter_end: int, config: RunnableConfig) -> str:
-    """新增一个支线节点到大纲中。"""
+    """新增一个中纲阶段到大纲中。"""
     outline = _get_outline(config)
-    branches = outline.get("branches", [])
-    new_id = f"B{len(branches) + 1}"
-    branches.append({
+    if "meso" not in outline or not isinstance(outline["meso"], dict):
+        outline["meso"] = {"meso_stages": []}
+    meso_stages = outline["meso"].get("meso_stages", [])
+    new_id = f"M{len(meso_stages) + 1}"
+    meso_stages.append({
         "id": new_id,
-        "attach_to": attach_to,
-        "side": side,
+        "macro_phase_id": attach_to,
+        "type": side,
         "name": name,
-        "summary": summary,
-        "chapter_start": chapter_start,
-        "chapter_end": chapter_end,
+        "cause": summary,
+        "conflict": "",
+        "key_characters": [],
+        "chapter_range": [chapter_start, chapter_end],
     })
-    outline["branches"] = branches
+    outline["meso"]["meso_stages"] = meso_stages
     _set_outline(config, outline)
-    return f"已添加支线节点 {new_id}「{name}」（依附于 {attach_to}，第{chapter_start}-{chapter_end}章）"
+    return f"已添加中纲阶段 {new_id}「{name}」（依附于 {attach_to}，第{chapter_start}-{chapter_end}章）"
 
 
 @tool(args_schema=UpdateNodeInput)
 def update_node(node_id: str, fields: dict, config: RunnableConfig) -> str:
-    """修改任意大纲节点（主线/支线/伏笔）的字段。"""
+    """修改任意大纲节点（宏观阶段/中纲阶段/伏笔）的字段。"""
     outline = _get_outline(config)
     found = False
-    for node_list_key in ("timeline", "branches", "foreshadowing"):
-        for node in outline.get(node_list_key, []):
+    for node_list_key in ("macro_phases", "meso_stages", "foreshadowing"):
+        container = outline
+        if node_list_key == "macro_phases":
+            container = outline.get("outline", {})
+        elif node_list_key == "meso_stages":
+            container = outline.get("meso", {})
+        for node in container.get(node_list_key, []):
             if node.get("id") == node_id:
                 node.update(fields)
                 found = True
@@ -214,12 +223,16 @@ def update_node(node_id: str, fields: dict, config: RunnableConfig) -> str:
 
 @tool(args_schema=DeleteNodeInput)
 def delete_node(node_id: str, config: RunnableConfig) -> str:
-    """删除一个大纲节点（主线/支线/伏笔）。"""
+    """删除一个大纲节点（宏观阶段/中纲阶段/伏笔）。"""
     outline = _get_outline(config)
-    for key in ("timeline", "branches", "foreshadowing"):
-        original_len = len(outline.get(key, []))
-        outline[key] = [n for n in outline.get(key, []) if n.get("id") != node_id]
-        if len(outline[key]) < original_len:
+    for key_container, key in [
+        (outline.get("outline", {}), "macro_phases"),
+        (outline.get("meso", {}), "meso_stages"),
+        (outline, "foreshadowing"),
+    ]:
+        original_len = len(key_container.get(key, []))
+        key_container[key] = [n for n in key_container.get(key, []) if n.get("id") != node_id]
+        if len(key_container[key]) < original_len:
             _set_outline(config, outline)
             return f"已删除节点 {node_id}"
     return f"未找到节点 {node_id}"
@@ -264,7 +277,7 @@ def update_character(name: str, fields: dict, config: RunnableConfig) -> str:
 @tool(args_schema=AddCharacterInput)
 def add_character(name: str, role_type: str, gender: str, age: str, appearance: str,
                   personality: str, background: str, skills: str, current_status: str,
-                  current_goal: str, first_chapter: int, notes: str,
+                  current_goal: str, first_appearance_stage: str, notes: str,
                   config: RunnableConfig) -> str:
     """新增一个角色到角色库。"""
     from app.models.work_model import Character
@@ -290,7 +303,7 @@ def add_character(name: str, role_type: str, gender: str, age: str, appearance: 
         skills=skills,
         current_status=current_status,
         current_goal=current_goal,
-        first_chapter=first_chapter,
+        first_appearance_stage=first_appearance_stage,
         notes=notes,
     )
     db.add(char)

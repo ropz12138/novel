@@ -1,5 +1,4 @@
-import { API_BASE } from "../lib/runtime-config";
-import { authFetch } from "../lib/authFetch";
+import { workApi, characterApi } from "../lib/rpcApi";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import {
@@ -28,18 +27,116 @@ import {
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
 import { Textarea } from "../components/ui/textarea";
+import {
+  applyChapterTextareaAutoHeight,
+  bindChapterTextareaResizeObserver,
+} from "../lib/chapterTextareaHeight";
+import {
+  WORK_DETAIL_BODY_FLEX_CLASS,
+  WORK_DETAIL_CONTENT_ROW_CLASS,
+  WORK_DETAIL_SCROLL_PANE_CLASS,
+} from "../lib/workDetailLayout";
 import { extractChapterNumbers } from "../lib/chapterOutline";
 import { parsePositiveChapterInt } from "../lib/outlineChapterInput";
 import { relationGraphStabilizationFallbackMs } from "../lib/relationGraphLoading";
 import { sortTimelineNodes } from "../lib/outlineTimelineSort";
 import { buildGraphData } from "../lib/buildGraphData";
 import { sessionApi } from "../lib/api";
+import { getLatestSupervisorSession } from "../lib/supervisorSession";
+import { applyChapterSelectionToChatInput } from "../lib/chapterSelectionQuote";
 import { CharacterDetailDrawer } from "../components/CharacterDetailDrawer";
 import { RelationGraphLoadingOverlay } from "../components/RelationGraphLoadingOverlay";
 import { RequirementsDocDrawer } from "../components/RequirementsDocDrawer";
+import { OutlineDocDrawer } from "../components/OutlineDocDrawer";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "../components/supervisor/ChatTimeline";
+import { AgentFeatureToggles } from "../components/supervisor/AgentFeatureToggles";
 import { useSmartScroll } from "../hooks/useSmartScroll";
+import { cn } from "../lib/utils";
+import {
+  MobileChapterStrip,
+  MobileWorkNav,
+  characterCardsGridClassName,
+  resolveDefaultChapterNum,
+  resolveMobilePanelFromRoute,
+  shouldShowWorkPanel,
+  shouldSyncOutlineNodeSelection,
+  useIsMobile,
+} from "./workDetailMobile";
+
+
+function WorkHeaderAction({ active, tone, icon: Icon, label, onClick, disabled, compact }) {
+  const isAi = tone === "ai";
+  const isDoc = tone === "doc";
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={cn(
+        "group inline-flex items-center gap-2 rounded-xl px-3 py-2 text-sm font-medium transition-all duration-200",
+        compact && "px-2.5",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400/50 focus-visible:ring-offset-1",
+        "disabled:pointer-events-none disabled:opacity-50",
+        isAi && active && "bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 text-white shadow-[0_4px_16px_rgba(59,130,246,0.35)]",
+        isAi && !active && "text-slate-700 hover:bg-white hover:text-slate-900 hover:shadow-sm",
+        isDoc && "text-slate-700 hover:bg-white hover:text-amber-950 hover:shadow-sm",
+        isDoc && active && "bg-amber-50 text-amber-950 ring-1 ring-amber-200/90 shadow-sm",
+      )}
+    >
+      <span
+        className={cn(
+          "flex h-7 w-7 shrink-0 items-center justify-center rounded-lg transition-colors",
+          isAi && active && "bg-white/20 text-white",
+          isAi && !active && "bg-gradient-to-br from-blue-100 to-indigo-100 text-blue-600 group-hover:from-blue-200 group-hover:to-indigo-200",
+          isDoc && "bg-amber-100 text-amber-700 group-hover:bg-amber-200/90",
+          isDoc && active && "bg-amber-200/70 text-amber-900",
+        )}
+      >
+        <Icon className="h-4 w-4" />
+      </span>
+      {!compact && <span className="whitespace-nowrap">{label}</span>}
+    </button>
+  );
+}
+
+function ChapterToolbarButton({ variant, loading, disabled, onClick, title, children, icon: Icon }) {
+  const isSave = variant === "save";
+  const isDelete = variant === "delete";
+  const IconComponent = Icon || (isSave ? Save : Trash2);
+
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={cn(
+        "inline-flex h-9 items-center gap-2 rounded-xl px-3.5 text-sm font-medium transition-all duration-200",
+        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-offset-1",
+        "disabled:cursor-not-allowed disabled:opacity-45",
+        isSave && [
+          "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-[0_3px_12px_rgba(16,185,129,0.28)]",
+          "hover:from-emerald-500 hover:to-teal-500 hover:shadow-[0_4px_16px_rgba(16,185,129,0.35)]",
+          "focus-visible:ring-emerald-400/60",
+        ],
+        isDelete && [
+          "border border-red-200/90 bg-white text-red-600",
+          "hover:border-red-300 hover:bg-red-50 hover:text-red-700",
+          "focus-visible:ring-red-300/70",
+        ],
+      )}
+    >
+      {loading ? (
+        <Loader2 className="h-4 w-4 animate-spin" />
+      ) : (
+        <IconComponent className="h-4 w-4 shrink-0" />
+      )}
+      {children}
+    </button>
+  );
+}
 
 
 let visNetworkLoadPromise = null;
@@ -61,10 +158,13 @@ function ensureVisNetworkLoaded() {
 
 function toGraphNodeId(focus) {
   if (!focus?.type || !focus?.id) return null;
-  if (focus.type === "timeline") return `t::${focus.id}`;
-  if (focus.type === "branch") return `b::${focus.id}`;
+  if (focus.type === "macro_phase") return `t::${focus.id}`;
+  if (focus.type === "meso_stage") return `b::${focus.id}`;
   if (focus.type === "foreshadowing") return `f::${focus.id}`;
   if (focus.type === "character") return `c::${focus.id}`;
+  // 兼容旧类型
+  if (focus.type === "timeline") return `t::${focus.id}`;
+  if (focus.type === "branch") return `b::${focus.id}`;
   return null;
 }
 
@@ -72,8 +172,8 @@ function fromGraphNodeId(graphNodeId) {
   const raw = String(graphNodeId || "");
   const [prefix, , id] = raw.split(":");
   if (!prefix || !id) return null;
-  if (prefix === "t") return { type: "timeline", id };
-  if (prefix === "b") return { type: "branch", id };
+  if (prefix === "t") return { type: "macro_phase", id };
+  if (prefix === "b") return { type: "meso_stage", id };
   if (prefix === "f") return { type: "foreshadowing", id };
   if (prefix === "c") return { type: "character", id };
   return null;
@@ -401,23 +501,30 @@ function RelationGraphPanel({ tree, characters, focus, pulseFocus, onCharacterSe
   );
 }
 
-function CharacterCardsPanel({ characters, onCharacterSelect }) {
+function CharacterCardsPanel({ characters, onCharacterSelect, isMobile = false }) {
   const list = Array.isArray(characters) ? characters : [];
   const [expanded, setExpanded] = useState({});
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+    <section className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
       <h3 className="mb-3 text-sm font-semibold text-slate-800">角色卡</h3>
       {list.length === 0 ? (
         <p className="text-xs text-slate-500">暂无角色设定。</p>
       ) : (
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-3">
+        <div className={characterCardsGridClassName(isMobile)}>
           {list.map((c, idx) => {
             const rel = c.relationships && typeof c.relationships === "object" ? c.relationships : {};
             return (
-              <article key={c.id || `${c.name}-${idx}`} className="cursor-pointer rounded-lg border border-slate-200 bg-slate-50 p-3 transition-colors hover:bg-slate-100" onClick={() => onCharacterSelect?.(c)}>
+              <article
+                key={c.id || `${c.name}-${idx}`}
+                className={cn(
+                  "min-w-0 w-full max-w-full overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-3 transition-colors",
+                  !isMobile && "cursor-pointer hover:bg-slate-100",
+                )}
+                onClick={() => onCharacterSelect?.(c)}
+              >
                 <div className="truncate text-sm font-semibold text-slate-800">{c.name || "未知角色"}</div>
                 <div className="mb-1 truncate text-[11px] text-slate-500">
-                  {c.role_type || "配角"} · 首次出场第 {c.first_chapter || 1} 章
+                  {c.role_type || "配角"} · 首次出场阶段 {c.first_appearance_stage || "M1"}
                 </div>
                 {c.current_status && (
                   <p className="truncate text-xs text-slate-600">状态：{c.current_status}</p>
@@ -439,9 +546,10 @@ function CharacterCardsPanel({ characters, onCharacterSelect }) {
                 <button
                   type="button"
                   className="mt-2 text-[11px] text-blue-600 hover:underline"
-                  onClick={() =>
-                    setExpanded((prev) => ({ ...prev, [c.id || c.name || idx]: !prev[c.id || c.name || idx] }))
-                  }
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setExpanded((prev) => ({ ...prev, [c.id || c.name || idx]: !prev[c.id || c.name || idx] }));
+                  }}
                 >
                   {expanded[c.id || c.name || idx] ? "收起详情" : "展开详情"}
                 </button>
@@ -630,34 +738,35 @@ function BranchCard({ branch, onUpdate, onDelete, editing = false, onToggleEdit 
 /* ─────────────────────────── Outline Tree ─────────────────────────────── */
 
 function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch, onSelectNode }) {
-  const timeline = useMemo(() => sortTimelineNodes(tree?.timeline || []), [tree?.timeline]);
-  const branches = tree?.branches || [];
+  // 新数据结构：outline.macro_phases → meso.meso_stages → foreshadowing
+  const macroPhases = useMemo(() => tree?.outline?.macro_phases || [], [tree?.outline?.macro_phases]);
+  const mesoStages = useMemo(() => tree?.meso?.meso_stages || [], [tree?.meso?.meso_stages]);
   const foreshadowing = tree?.foreshadowing || [];
   const isPulsing = (type, id) => pulseFocus?.type === type && String(pulseFocus?.id) === String(id);
   const nodeRefs = useRef(new Map());
   const [expandedNodes, setExpandedNodes] = useState(new Set());
 
-  // Build a set of all valid node IDs (timeline + branch) for orphan detection
+  // Build a set of all valid node IDs (macro_phases + meso_stages) for orphan detection
   const allNodeIds = useMemo(() => {
-    const ids = new Set(timeline.map((t) => String(t.id)));
-    branches.forEach((b) => ids.add(String(b.id)));
+    const ids = new Set(macroPhases.map((p) => String(p.id)));
+    mesoStages.forEach((s) => ids.add(String(s.id)));
     return ids;
-  }, [timeline, branches]);
+  }, [macroPhases, mesoStages]);
 
-  // Foreshadowing planted on a branch node
-  const branchForeshadowing = useMemo(() => {
+  // Foreshadowing planted on a meso_stage node
+  const mesoForeshadowing = useMemo(() => {
     const map = new Map();
     for (const f of foreshadowing) {
-      if (f.plant_node && branches.some((b) => String(b.id) === String(f.plant_node))) {
+      if (f.plant_node && mesoStages.some((s) => String(s.id) === String(f.plant_node))) {
         const key = String(f.plant_node);
         if (!map.has(key)) map.set(key, []);
         map.get(key).push(f);
       }
     }
     return map;
-  }, [foreshadowing, branches]);
+  }, [foreshadowing, mesoStages]);
 
-  // Orphan foreshadowing: plant_node matches neither timeline nor branch
+  // Orphan foreshadowing: plant_node matches neither macro_phase nor meso_stage
   const orphanForeshadowing = useMemo(() => {
     return foreshadowing.filter((f) => !f.plant_node || !allNodeIds.has(String(f.plant_node)));
   }, [foreshadowing, allNodeIds]);
@@ -688,43 +797,45 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
     return expandedNodes.has(`${type}:${String(id)}`);
   }, [expandedNodes]);
 
-  if (!timeline.length) return <p className="text-sm text-slate-600">暂无大纲数据。</p>;
+  if (!macroPhases.length) return <p className="text-sm text-slate-600">暂无大纲数据。</p>;
 
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3">
       <div className="ml-2 border-l-2 border-slate-200 pl-4">
-        {timeline.map((node, idx) => {
-          const nodeBranches = branches.filter((b) => b.attach_to === node.id);
-          const planted = foreshadowing.filter((f) => f.plant_node === node.id);
+        {macroPhases.map((phase, idx) => {
+          // 中纲阶段挂载到宏观阶段下
+          const childStages = mesoStages.filter((s) => s.macro_phase_id === phase.id);
+          const planted = foreshadowing.filter((f) => f.plant_node === phase.id);
+          const chapterRange = phase.chapter_range || [0, 0];
           return (
-            <div key={node.id || idx} className="relative mb-4">
+            <div key={phase.id || idx} className="relative mb-4">
               <div className="absolute -left-[18px] top-4 w-3 border-t-2 border-slate-200" />
               <article
                 ref={(el) => {
-                  const key = `timeline:${String(node.id)}`;
+                  const key = `macro_phase:${String(phase.id)}`;
                   if (el) nodeRefs.current.set(key, el);
                   else nodeRefs.current.delete(key);
                 }}
                 className={`rounded-lg border border-blue-200 bg-blue-50 p-3 transition ${
-                  isPulsing("timeline", node.id) ? "animate-pulse ring-2 ring-blue-300 ring-offset-1" : ""
+                  isPulsing("macro_phase", phase.id) ? "animate-pulse ring-2 ring-blue-300 ring-offset-1" : ""
                 }`}
                 onClick={() => {
-                  toggleExpand("timeline", node.id);
-                  onSelectNode?.({ type: "timeline", id: node.id });
+                  toggleExpand("macro_phase", phase.id);
+                  onSelectNode?.({ type: "macro_phase", id: phase.id });
                 }}
               >
                 <div className="mb-1 flex items-center justify-between gap-2">
-                  <h4 className={`${isExpanded("timeline", node.id) ? "" : "truncate"} text-sm font-semibold text-slate-800`}>
-                    {node.id || `T${idx + 1}`} {node.development_node || "主线节点"}
+                  <h4 className={`${isExpanded("macro_phase", phase.id) ? "" : "truncate"} text-sm font-semibold text-slate-800`}>
+                    {phase.id || `P${idx + 1}`} {phase.name || "宏观阶段"}
                   </h4>
                   <div className="flex items-center gap-1">
                     <button
                       type="button"
                       className="rounded p-1 text-slate-500 hover:bg-blue-100"
-                      title="新增支线"
+                      title="新增中纲阶段"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onAddBranch(node.id, "right");
+                        onAddBranch(phase.id, "right");
                       }}
                     >
                       <Plus className="h-3 w-3" />
@@ -732,63 +843,74 @@ function InlineTree({ tree, pulseFocus, onUpdateNode, onDeleteNode, onAddBranch,
                     <button
                       type="button"
                       className="rounded p-1 text-slate-500 hover:bg-red-50 hover:text-red-500"
-                      title="删除主线"
+                      title="删除宏观阶段"
                       onClick={(e) => {
                         e.stopPropagation();
-                        onDeleteNode(node.id);
+                        onDeleteNode(phase.id);
                       }}
                     >
                       <Trash2 className="h-3 w-3" />
                     </button>
                   </div>
                 </div>
-                <p className={`${isExpanded("timeline", node.id) ? "" : "line-clamp-2"} text-xs text-slate-600`}>{node.summary || "（暂无摘要）"}</p>
+                <p className={`${isExpanded("macro_phase", phase.id) ? "" : "line-clamp-2"} text-xs text-slate-600`}>{phase.goal || "（暂无目标）"}</p>
+                {phase.core_setting && (
+                  <p className="mt-1 text-[11px] text-slate-500">
+                    核心设定：{phase.core_setting}
+                  </p>
+                )}
                 <p className="mt-1 text-[11px] text-slate-500">
-                  {node.time_node || "未设时间"} · 第{node.chapter_start}-{node.chapter_end}章
+                  第{chapterRange[0]}-{chapterRange[1]}章
                 </p>
               </article>
 
-              {(nodeBranches.length > 0 || planted.length > 0) && (
+              {(childStages.length > 0 || planted.length > 0) && (
                 <div className="ml-4 mt-2 border-l border-slate-200 pl-3">
-                  {nodeBranches.map((b, bIdx) => {
-                    const branchPlanted = branchForeshadowing.get(String(b.id)) || [];
+                  {childStages.map((stage, sIdx) => {
+                    const stagePlanted = mesoForeshadowing.get(String(stage.id)) || [];
+                    const stageChapterRange = stage.chapter_range || [0, 0];
                     return (
                       <div
                         ref={(el) => {
-                          const key = `branch:${String(b.id)}`;
+                          const key = `meso_stage:${String(stage.id)}`;
                           if (el) nodeRefs.current.set(key, el);
                           else nodeRefs.current.delete(key);
                         }}
-                        key={b.id || bIdx}
+                        key={stage.id || sIdx}
                         className={`relative mb-2 rounded-md border border-emerald-200 bg-emerald-50 p-2 transition ${
-                          isPulsing("branch", b.id) ? "animate-pulse ring-2 ring-emerald-300 ring-offset-1" : ""
+                          isPulsing("meso_stage", stage.id) ? "animate-pulse ring-2 ring-emerald-300 ring-offset-1" : ""
                         }`}
                         onClick={() => {
-                          toggleExpand("branch", b.id);
-                          onSelectNode?.({ type: "branch", id: b.id });
+                          toggleExpand("meso_stage", stage.id);
+                          onSelectNode?.({ type: "meso_stage", id: stage.id });
                         }}
                       >
                         <div className="absolute -left-[13px] top-3 w-2 border-t border-slate-200" />
                         <div className="flex items-center justify-between gap-2">
-                          <div className={`${isExpanded("branch", b.id) ? "" : "truncate"} text-xs font-semibold text-slate-800`}>
-                            {b.id || `B${bIdx + 1}`} {b.name || "支线"}
+                          <div className={`${isExpanded("meso_stage", stage.id) ? "" : "truncate"} text-xs font-semibold text-slate-800`}>
+                            {stage.id || `M${sIdx + 1}`} {stage.name || "中纲阶段"}
+                            {stage.type && <span className="ml-1 text-[10px] font-normal text-slate-500">({stage.type})</span>}
                           </div>
                           <button
                             type="button"
                             className="rounded p-0.5 text-slate-500 hover:bg-red-50 hover:text-red-500"
                             onClick={(e) => {
                               e.stopPropagation();
-                              onDeleteNode(b.id);
+                              onDeleteNode(stage.id);
                             }}
-                            title="删除支线"
+                            title="删除中纲阶段"
                           >
                             <Trash2 className="h-3 w-3" />
                           </button>
                         </div>
-                        <p className={`${isExpanded("branch", b.id) ? "" : "line-clamp-1"} text-[11px] text-slate-600`}>{b.summary || "（暂无支线摘要）"}</p>
-                        {branchPlanted.length > 0 && (
+                        <p className={`${isExpanded("meso_stage", stage.id) ? "" : "line-clamp-1"} text-[11px] text-slate-600`}>{stage.conflict || stage.cause || "（暂无摘要）"}</p>
+                        <p className="text-[10px] text-slate-500">
+                          第{stageChapterRange[0]}-{stageChapterRange[1]}章
+                          {stage.key_characters?.length > 0 && ` · ${stage.key_characters.join("、")}`}
+                        </p>
+                        {stagePlanted.length > 0 && (
                           <div className="ml-2 mt-1 border-l border-emerald-300 pl-2">
-                            {branchPlanted.map((f, fIdx) => (
+                            {stagePlanted.map((f, fIdx) => (
                               <div
                                 ref={(el) => {
                                   const key = `foreshadowing:${String(f.id)}`;
@@ -940,11 +1062,24 @@ const mdComponents = {
     ),
 };
 
-function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapterUpdated, onCharactersUpdated, onChapterIntelUpdate }) {
+function SupervisorChatPanel({
+  workId,
+  chapterNumber,
+  chatInputApiRef,
+  onOutlineUpdated,
+  onChapterUpdated,
+  onCharactersUpdated,
+  onChapterIntelUpdate,
+}) {
+  const [enableTodolist, setEnableTodolist] = useState(false);
+  const [enableEvaluation, setEnableEvaluation] = useState(false);
+
   const chat = useSupervisorChat({
     workId,
     chapterNumber,
     autoMode: true,
+    enableTodolist,
+    enableEvaluation,
     callbacks: {
       onOutlineUpdated,
       onChapterUpdated,
@@ -962,18 +1097,43 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
   const [sessionListOpen, setSessionListOpen] = useState(false);
   const dropdownRef = useRef(null);
 
+  const latestSessionLoadedForWorkRef = useRef(null);
+
   const loadSessions = async () => {
     try {
       const list = await sessionApi.listSupervisor(workId);
       setSessions(list || []);
+      return list || [];
     } catch {
-      // ignore
+      return [];
     }
   };
 
+  // 进入作品详情时，自动加载该作品最新一次对话
   useEffect(() => {
-    if (workId) loadSessions();
-  }, [workId]);
+    if (!workId || chat.running) return;
+    if (latestSessionLoadedForWorkRef.current === workId) return;
+
+    let cancelled = false;
+    (async () => {
+      const list = await loadSessions();
+      if (cancelled) return;
+
+      latestSessionLoadedForWorkRef.current = workId;
+      const latest = getLatestSupervisorSession(list);
+      if (latest) {
+        setEnableTodolist(Boolean(latest.enable_todolist));
+        setEnableEvaluation(Boolean(latest.enable_evaluation));
+        await chat.handleSelectSession(latest);
+      } else {
+        chat.resetState();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workId, chat.running]);
 
   useEffect(() => {
     const handleClick = (e) => {
@@ -987,12 +1147,14 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
 
   const scrollContainerRef = useRef(null);
   const { stickToBottom, scrollToBottom } = useSmartScroll(scrollContainerRef, [
-    chat.timeline, chat.assistantDraft, chat.editDiff, chat.outlineDiff, chat.characterDiff, chat.running,
+    chat.timeline, chat.assistantReasoningDraft, chat.assistantDraft, chat.editDiff, chat.outlineDiff, chat.characterDiff, chat.running,
   ]);
 
   const handleNewSession = () => {
     if (chat.running) return;
     chat.resetState();
+    setEnableTodolist(false);
+    setEnableEvaluation(false);
     setSessionListOpen(false);
   };
 
@@ -1010,8 +1172,15 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
     }
   };
 
+  const applySessionFeatureFlags = (session) => {
+    if (!session) return;
+    setEnableTodolist(Boolean(session.enable_todolist));
+    setEnableEvaluation(Boolean(session.enable_evaluation));
+  };
+
   const onSelectSession = async (session) => {
     setSessionListOpen(false);
+    applySessionFeatureFlags(session);
     await chat.handleSelectSession(session);
   };
 
@@ -1030,6 +1199,23 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
     await chat.handleConfirmEdit(action, targetDiff);
   };
 
+  const chatInputRef = useRef(null);
+
+  useEffect(() => {
+    if (!chatInputApiRef) return undefined;
+    chatInputApiRef.current = {
+      appendToInput: (text) => {
+        chat.setInput((prev) => (prev.trim() ? `${prev}\n\n${text}` : text));
+      },
+      focusInput: () => {
+        chatInputRef.current?.focus();
+      },
+    };
+    return () => {
+      chatInputApiRef.current = null;
+    };
+  }, [chatInputApiRef, chat.setInput]);
+
   return (
     <div className="flex h-full flex-col">
       {/* Session selector dropdown */}
@@ -1045,6 +1231,13 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
           </button>
         </div>
+        <AgentFeatureToggles
+          enableTodolist={enableTodolist}
+          enableEvaluation={enableEvaluation}
+          onEnableTodolistChange={setEnableTodolist}
+          onEnableEvaluationChange={setEnableEvaluation}
+          disabled={chat.running}
+        />
         <button
           type="button"
           onClick={handleNewSession}
@@ -1103,6 +1296,7 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
         <div className="space-y-3">
           <ChatTimeline
             timeline={chat.timeline}
+            assistantReasoningDraft={chat.assistantReasoningDraft}
             assistantDraft={chat.assistantDraft}
             editDiff={chat.editDiff}
             outlineDiff={chat.outlineDiff}
@@ -1135,6 +1329,7 @@ function SupervisorChatPanel({ workId, chapterNumber, onOutlineUpdated, onChapte
       <div className="shrink-0 px-4 py-3">
         <div className="flex items-end gap-2 pr-2">
           <Textarea
+            ref={chatInputRef}
             value={chat.input}
             onChange={(e) => chat.setInput(e.target.value)}
             placeholder="输入指令... (如「修改大纲」「写第1章」「修改第1章的...」)"
@@ -1192,8 +1387,8 @@ function ChapterIntelSidebar({ chapterNumber, intel, outlineTree, characters }) 
   const timeText = intel?.updated_at ? new Date(intel.updated_at).toLocaleString("zh-CN", { hour12: false }) : "尚无更新";
   const outlineLinks = Array.isArray(intel?.outline_links) ? intel.outline_links : [];
   const [activeOutlineLink, setActiveOutlineLink] = useState(null);
-  const timeline = Array.isArray(outlineTree?.timeline) ? outlineTree.timeline : [];
-  const branches = Array.isArray(outlineTree?.branches) ? outlineTree.branches : [];
+  const macroPhases = Array.isArray(outlineTree?.outline?.macro_phases) ? outlineTree.outline.macro_phases : [];
+  const mesoStages = Array.isArray(outlineTree?.meso?.meso_stages) ? outlineTree.meso.meso_stages : [];
   const foreshadowing = Array.isArray(outlineTree?.foreshadowing) ? outlineTree.foreshadowing : [];
 
   useEffect(() => {
@@ -1202,28 +1397,28 @@ function ChapterIntelSidebar({ chapterNumber, intel, outlineTree, characters }) 
 
   const inferOutlineLinkType = (link) => {
     const explicitType = String(link?.type || "").toLowerCase();
-    if (explicitType === "branch") return "branch";
+    if (explicitType === "meso_stage" || explicitType === "branch") return "meso_stage";
     if (explicitType === "foreshadowing" || explicitType === "foreshadow") return "foreshadowing";
-    if (explicitType === "timeline" || explicitType === "main") return "timeline";
+    if (explicitType === "macro_phase" || explicitType === "timeline" || explicitType === "main") return "macro_phase";
     const id = String(link?.id || "").toUpperCase();
-    if (id.startsWith("B")) return "branch";
+    if (id.startsWith("M") || id.startsWith("B")) return "meso_stage";
     if (id.startsWith("F")) return "foreshadowing";
-    if (id.startsWith("T")) return "timeline";
-    return "timeline";
+    if (id.startsWith("P") || id.startsWith("T")) return "macro_phase";
+    return "macro_phase";
   };
 
   const activeNode = useMemo(() => {
     if (!activeOutlineLink?.id) return null;
     const id = String(activeOutlineLink.id);
     const linkType = inferOutlineLinkType(activeOutlineLink);
-    if (linkType === "branch") {
-      return branches.find((n) => String(n.id) === id) || null;
+    if (linkType === "meso_stage") {
+      return mesoStages.find((n) => String(n.id) === id) || null;
     }
     if (linkType === "foreshadowing") {
       return foreshadowing.find((n) => String(n.id) === id) || null;
     }
-    return timeline.find((n) => String(n.id) === id) || null;
-  }, [activeOutlineLink, timeline, branches, foreshadowing]);
+    return macroPhases.find((n) => String(n.id) === id) || null;
+  }, [activeOutlineLink, macroPhases, mesoStages, foreshadowing]);
 
   return (
     <aside className="rounded-[14px] border border-slate-300 bg-white p-3 shadow-[0_6px_20px_rgba(31,42,55,0.06)]">
@@ -1348,27 +1543,40 @@ export function WorkDetailPage() {
   const [treePulseFocus, setTreePulseFocus] = useState(null);
   const [saving, setSaving] = useState(false);
   const [chatOpen, setChatOpen] = useState(true);
+  const isMobile = useIsMobile();
+  const [mobilePanel, setMobilePanel] = useState("detail");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(true);
   const [chatPanelWidth, setChatPanelWidth] = useState(440);
   const [chatResizing, setChatResizing] = useState(false);
   const [reqDocOpen, setReqDocOpen] = useState(false);
   const [reqDocContent, setReqDocContent] = useState("");
+  const [reqDocSaving, setReqDocSaving] = useState(false);
+
+  const [mesoDocOpen, setMesoDocOpen] = useState(false);
+  const [mesoDocContent, setMesoDocContent] = useState("");
+  const [mesoDocSaving, setMesoDocSaving] = useState(false);
+
+  const [microDocOpen, setMicroDocOpen] = useState(false);
+  const [microDocContent, setMicroDocContent] = useState("");
+  const [microDocSaving, setMicroDocSaving] = useState(false);
 
   const [titleDraft, setTitleDraft] = useState("");
   const [contentDraft, setContentDraft] = useState("");
   const [selectedChapter, setSelectedChapter] = useState(null);
   const [savingChapter, setSavingChapter] = useState(false);
   const [deletingLastChapter, setDeletingLastChapter] = useState(false);
-  const [evaluatingChapter, setEvaluatingChapter] = useState(false);
-  const [evaluationResult, setEvaluationResult] = useState(null);
-  const [evaluationError, setEvaluationError] = useState("");
   const [selectedCharacter, setSelectedCharacter] = useState(null);
   const [chapterIntelByNumber, setChapterIntelByNumber] = useState({});
   const chapterTextareaRef = useRef(null);
+  const chatInputApiRef = useRef(null);
   const resizeStartRef = useRef({ x: 0, width: 440 });
   const treePulseTimerRef = useRef(null);
 
-  const mainTab = searchParams.get("tab") === "chapter" ? "chapter" : "outline";
+  const rawTab = searchParams.get("tab");
+  const mainTab =
+    rawTab === "chapter" || rawTab === "outline"
+      ? rawTab
+      : null; // will be resolved after chapters are loaded
   const chRaw = searchParams.get("ch");
   const selectedChapterNum =
     chRaw != null && chRaw !== "" ? parseInt(chRaw, 10) : null;
@@ -1404,9 +1612,9 @@ export function WorkDetailPage() {
     const fetchWork = async () => {
       try {
         const [workRes, chaptersRes, charsRes] = await Promise.all([
-          authFetch(`${API_BASE}/works/${workId}`),
-          authFetch(`${API_BASE}/works/${workId}/chapters`),
-          authFetch(`${API_BASE}/works/${workId}/characters`),
+          workApi.get(workId),
+          workApi.listChapters(workId),
+          characterApi.list(workId),
         ]);
         if (!workRes.ok) throw new Error("加载失败");
         if (!chaptersRes.ok) throw new Error("加载章节失败");
@@ -1436,6 +1644,32 @@ export function WorkDetailPage() {
     [],
   );
 
+  // ── Resolve default tab when URL has no "tab" param ──
+  useEffect(() => {
+    if (loading || mainTab !== null) return;
+    const latest = resolveDefaultChapterNum(filledChapterNums, chapterNumbers);
+    if (latest != null) {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.set("tab", "chapter");
+          n.set("ch", String(latest));
+          return n;
+        },
+        { replace: true },
+      );
+    } else {
+      setSearchParams(
+        (prev) => {
+          const n = new URLSearchParams(prev);
+          n.set("tab", "outline");
+          return n;
+        },
+        { replace: true },
+      );
+    }
+  }, [loading, mainTab, filledChapterNums, chapterNumbers, setSearchParams]);
+
   useEffect(() => {
     if (loading || mainTab !== "chapter" || chapterNumbers.length === 0) return;
 
@@ -1444,12 +1678,13 @@ export function WorkDetailPage() {
 
     if (hasFilledChapters) {
       if (fromUrl != null && filledChapterNums.includes(fromUrl)) return;
-      const first = filledChapterNums[0];
+      const latest = resolveDefaultChapterNum(filledChapterNums, chapterNumbers);
+      if (latest == null) return;
       setSearchParams(
         (prev) => {
           const n = new URLSearchParams(prev);
           n.set("tab", "chapter");
-          n.set("ch", String(first));
+          n.set("ch", String(latest));
           return n;
         },
         { replace: true },
@@ -1458,12 +1693,13 @@ export function WorkDetailPage() {
     }
 
     if (fromUrl != null && chapterNumbers.includes(fromUrl)) return;
-    const first = chapterNumbers[0];
+    const latest = resolveDefaultChapterNum([], chapterNumbers);
+    if (latest == null) return;
     setSearchParams(
       (prev) => {
         const n = new URLSearchParams(prev);
         n.set("tab", "chapter");
-        n.set("ch", String(first));
+        n.set("ch", String(latest));
         return n;
       },
       { replace: true },
@@ -1490,21 +1726,21 @@ export function WorkDetailPage() {
       setTitleDraft("");
       setContentDraft("");
     }
-    setEvaluationResult(null);
-    setEvaluationError("");
   }, [mainTab, effectiveChapterNum, chapters]);
 
-  /** 正文高度随字数变化，避免固定 min-height 在文末留出大块空白 */
+  /** 正文高度随当前章内容变化；切换章节须先 height:auto，否则会沿用上一章撑开的高度 */
   useLayoutEffect(() => {
     if (mainTab !== "chapter") return;
     const el = chapterTextareaRef.current;
-    if (!el || !contentDraft) return;
-    const nextH = `${Math.max(el.scrollHeight, 120)}px`;
-    if (el.style.height === nextH) return;
-    const container = el.closest(".pretty-scrollbar") || el.parentElement;
-    const prevScroll = container ? container.scrollTop : 0;
-    el.style.height = nextH;
-    if (container) container.scrollTop = prevScroll;
+    if (!el) return;
+    const container = el.closest("[data-work-detail-scroll-pane]") || el.parentElement;
+    const applyHeight = () => {
+      const prevScroll = container ? container.scrollTop : 0;
+      applyChapterTextareaAutoHeight(el, { content: contentDraft });
+      if (container) container.scrollTop = prevScroll;
+    };
+    applyHeight();
+    return bindChapterTextareaResizeObserver(el, applyHeight);
   }, [mainTab, contentDraft, effectiveChapterNum]);
 
   useEffect(() => {
@@ -1525,14 +1761,28 @@ export function WorkDetailPage() {
     };
   }, [chatResizing]);
 
+  useEffect(() => {
+    if (isMobile) {
+      if (chatOpen) {
+        setMobilePanel("chat");
+      }
+      setChatOpen(false);
+      return;
+    }
+    if (mobilePanel === "chat") {
+      setChatOpen(true);
+    }
+  }, [isMobile]);
+
+  useEffect(() => {
+    if (!isMobile || mobilePanel === "chat") return;
+    setMobilePanel(mainTab === "outline" ? "outline" : "detail");
+  }, [isMobile, mainTab, mobilePanel]);
+
   const saveOutline = async (tree) => {
     setSaving(true);
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/outline`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ outline_tree: tree }),
-      });
+      const res = await workApi.updateOutline(workId, tree);
       if (res.ok) {
         const data = await res.json();
         setWork(data);
@@ -1547,7 +1797,7 @@ export function WorkDetailPage() {
   const handleUpdateNode = (nodeId, fields) => {
     setOutlineTree((prev) => {
       const next = structuredClone(prev);
-      for (const list of [next.timeline, next.branches, next.foreshadowing]) {
+      for (const list of [next?.outline?.macro_phases, next?.meso?.meso_stages, next?.foreshadowing]) {
         const node = list?.find((n) => n.id === nodeId);
         if (node) {
           Object.assign(node, fields);
@@ -1562,8 +1812,8 @@ export function WorkDetailPage() {
   const handleDeleteNode = (nodeId) => {
     setOutlineTree((prev) => {
       const next = structuredClone(prev);
-      next.timeline = (next.timeline || []).filter((n) => n.id !== nodeId);
-      next.branches = (next.branches || []).filter((n) => n.id !== nodeId);
+      if (next.outline) next.outline.macro_phases = (next.outline.macro_phases || []).filter((n) => n.id !== nodeId);
+      if (next.meso) next.meso.meso_stages = (next.meso.meso_stages || []).filter((n) => n.id !== nodeId);
       next.foreshadowing = (next.foreshadowing || []).filter((n) => n.id !== nodeId);
       saveOutline(next);
       return next;
@@ -1573,20 +1823,22 @@ export function WorkDetailPage() {
   const handleAddBranch = (attachTo, side) => {
     setOutlineTree((prev) => {
       const next = structuredClone(prev);
-      const host = (next.timeline || []).find((n) => n.id === attachTo);
-      const cs = parsePositiveChapterInt(host?.chapter_start) ?? 1;
-      const ceRaw = parsePositiveChapterInt(host?.chapter_end);
-      const ce = ceRaw != null && ceRaw >= cs ? ceRaw : cs;
-      next.branches = [
-        ...(next.branches || []),
+      const host = (next?.outline?.macro_phases || []).find((n) => n.id === attachTo);
+      const range = host?.chapter_range || [1, 12];
+      const cs = range[0] ?? 1;
+      const ce = range[1] ?? cs;
+      if (!next.meso) next.meso = { meso_stages: [] };
+      next.meso.meso_stages = [
+        ...(next.meso.meso_stages || []),
         {
-          id: `B${Date.now()}`,
-          attach_to: attachTo,
-          side,
-          name: "新支线",
-          summary: "",
-          chapter_start: cs,
-          chapter_end: ce,
+          id: `M${Date.now()}`,
+          macro_phase_id: attachTo,
+          name: "新中纲阶段",
+          type: side,
+          cause: "",
+          conflict: "",
+          key_characters: [],
+          chapter_range: [cs, ce],
         },
       ];
       saveOutline(next);
@@ -1643,9 +1895,85 @@ export function WorkDetailPage() {
     );
   };
 
+  const showOutline = shouldShowWorkPanel(isMobile, mobilePanel, mainTab, "outline");
+  const showDetail = shouldShowWorkPanel(isMobile, mobilePanel, mainTab, "detail");
+  const showMobileChat = isMobile && mobilePanel === "chat";
+  const syncOutlineNodeSelection = shouldSyncOutlineNodeSelection(isMobile);
+
+  const openMobileChat = () => {
+    if (isMobile) {
+      setMobilePanel("chat");
+      return;
+    }
+    setChatOpen(true);
+  };
+
+  const handleChapterQuoteShortcut = useCallback(
+    (e) => {
+      if (!((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "l")) return;
+      const textarea = chapterTextareaRef.current;
+      if (!textarea || effectiveChapterNum == null) return;
+
+      const api = chatInputApiRef.current;
+      if (!api) return;
+
+      const handled = applyChapterSelectionToChatInput({
+        textarea,
+        chapterNumber: effectiveChapterNum,
+        appendToInput: api.appendToInput,
+        focusInput: api.focusInput,
+      });
+      if (!handled) return;
+
+      e.preventDefault();
+      if (isMobile) {
+        openMobileChat();
+      } else if (!chatOpen) {
+        setChatOpen(true);
+      }
+    },
+    [effectiveChapterNum, isMobile, chatOpen, openMobileChat],
+  );
+
+  const toggleDesktopChat = () => {
+    if (isMobile) {
+      setMobilePanel((p) => (p === "chat" ? resolveMobilePanelFromRoute(mainTab, false) : "chat"));
+      return;
+    }
+    setChatOpen((open) => !open);
+  };
+
+  const goMobileOutline = () => {
+    setMobilePanel("outline");
+    setTabOutline();
+  };
+
+  const goMobileDetail = () => {
+    setMobilePanel("detail");
+    if (mainTab !== "chapter") {
+      const latest = resolveDefaultChapterNum(filledChapterNums, chapterNumbers);
+      if (latest != null) {
+        selectChapter(latest);
+      } else {
+        setSearchParams(
+          (prev) => {
+            const n = new URLSearchParams(prev);
+            n.set("tab", "chapter");
+            return n;
+          },
+          { replace: true },
+        );
+      }
+    }
+  };
+
+  const goMobileChat = () => {
+    setMobilePanel("chat");
+  };
+
   const refreshChapters = async () => {
     try {
-      const chaptersRes = await authFetch(`${API_BASE}/works/${workId}/chapters`);
+      const chaptersRes = await workApi.listChapters(workId);
       if (chaptersRes.ok) {
         const chaptersData = await chaptersRes.json();
         setChapters(chaptersData);
@@ -1664,7 +1992,7 @@ export function WorkDetailPage() {
 
   const refreshCharacters = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/characters`);
+      const res = await characterApi.list(workId);
       if (res.ok) {
         const data = await res.json();
         setCharacters(data);
@@ -1674,7 +2002,7 @@ export function WorkDetailPage() {
 
   const fetchRequirementsDoc = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/requirements-doc`);
+      const res = await workApi.getRequirementsDoc(workId);
       if (res.ok) {
         const data = await res.json();
         setReqDocContent(data.content || "");
@@ -1682,10 +2010,84 @@ export function WorkDetailPage() {
     } catch { /* ignore */ }
   };
 
+  const handleSaveRequirementsDoc = async (draft) => {
+    if (reqDocSaving) return;
+    setReqDocSaving(true);
+    try {
+      const res = await workApi.updateRequirementsDoc(workId, draft);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "保存失败" }));
+        throw new Error(err.detail || "保存失败");
+      }
+      const data = await res.json();
+      setReqDocContent(data.content ?? draft);
+    } catch (err) {
+      alert(`需求文档保存失败：${err.message}`);
+    } finally {
+      setReqDocSaving(false);
+    }
+  };
+
+  const fetchMesoDoc = async () => {
+    try {
+      const res = await workApi.getMesoDoc(workId);
+      if (res.ok) {
+        const data = await res.json();
+        setMesoDocContent(data.content || "");
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handleSaveMesoDoc = async (draft) => {
+    if (mesoDocSaving) return;
+    setMesoDocSaving(true);
+    try {
+      const res = await workApi.updateMesoDoc(workId, draft);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "保存失败" }));
+        throw new Error(err.detail || "保存失败");
+      }
+      const data = await res.json();
+      setMesoDocContent(data.content ?? draft);
+    } catch (err) {
+      alert(`中纲文档保存失败：${err.message}`);
+    } finally {
+      setMesoDocSaving(false);
+    }
+  };
+
+  const fetchMicroDoc = async () => {
+    try {
+      const res = await workApi.getMicroDoc(workId);
+      if (res.ok) {
+        const data = await res.json();
+        setMicroDocContent(data.content || "");
+      }
+    } catch { /* ignore */ }
+  };
+
+  const handleSaveMicroDoc = async (draft) => {
+    if (microDocSaving) return;
+    setMicroDocSaving(true);
+    try {
+      const res = await workApi.updateMicroDoc(workId, draft);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ detail: "保存失败" }));
+        throw new Error(err.detail || "保存失败");
+      }
+      const data = await res.json();
+      setMicroDocContent(data.content ?? draft);
+    } catch (err) {
+      alert(`小纲文档保存失败：${err.message}`);
+    } finally {
+      setMicroDocSaving(false);
+    }
+  };
+
   const fetchChapterIntel = async (chapterNumber) => {
     if (!chapterNumber) return;
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/${chapterNumber}/intel`);
+      const res = await workApi.getChapterIntel(workId, chapterNumber);
       if (!res.ok) return;
       const data = await res.json();
       handleChapterIntelUpdate(chapterNumber, data);
@@ -1698,10 +2100,9 @@ export function WorkDetailPage() {
     if (!effectiveChapterNum || savingChapter) return;
     setSavingChapter(true);
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/${effectiveChapterNum}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ title: titleDraft, content: contentDraft }),
+      const res = await workApi.updateChapter(workId, effectiveChapterNum, {
+        title: titleDraft,
+        content: contentDraft,
       });
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "保存失败" }));
@@ -1730,9 +2131,7 @@ export function WorkDetailPage() {
     if (!window.confirm(`确认删除第 ${effectiveChapterNum} 章吗？此操作不可撤销。`)) return;
     setDeletingLastChapter(true);
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/chapters/last`, {
-        method: "DELETE",
-      });
+      const res = await workApi.deleteLastChapter(workId);
       if (!res.ok) {
         const err = await res.json().catch(() => ({ detail: "删除失败" }));
         throw new Error(err.detail || "删除失败");
@@ -1764,34 +2163,6 @@ export function WorkDetailPage() {
       alert(`删除失败：${err.message}`);
     } finally {
       setDeletingLastChapter(false);
-    }
-  };
-
-  const handleEvaluateChapter = async () => {
-    if (!effectiveChapterNum || evaluatingChapter) return;
-    if (!contentDraft.trim()) {
-      setEvaluationError("当前章节正文为空，无法评估。");
-      setEvaluationResult(null);
-      return;
-    }
-    setEvaluatingChapter(true);
-    setEvaluationError("");
-    try {
-      const res = await authFetch(`${API_BASE}/evaluation/works/${workId}/chapters/${effectiveChapterNum}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chapter_content: contentDraft }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || `评估失败（HTTP ${res.status}）`);
-      }
-      setEvaluationResult(data);
-    } catch (err) {
-      setEvaluationResult(null);
-      setEvaluationError(err.message || "评估失败");
-    } finally {
-      setEvaluatingChapter(false);
     }
   };
 
@@ -1841,7 +2212,12 @@ export function WorkDetailPage() {
   };
 
   return (
-    <main className="flex h-screen flex-col bg-[linear-gradient(145deg,_#f8fafc_0%,_#ecfeff_45%,_#e2e8f0_100%)]">
+    <main
+      className={cn(
+        "flex h-screen flex-col bg-[linear-gradient(145deg,_#f8fafc_0%,_#ecfeff_45%,_#e2e8f0_100%)]",
+        isMobile && "pb-[calc(4.25rem+env(safe-area-inset-bottom,0px))]",
+      )}
+    >
       <section className="flex shrink-0 items-center justify-between border-b border-slate-200 bg-white/80 px-4 py-3 backdrop-blur sm:px-6">
         <div className="flex min-w-0 flex-1 items-center gap-3 sm:gap-4">
           <Button asChild variant="ghost" size="sm" className="shrink-0">
@@ -1850,14 +2226,32 @@ export function WorkDetailPage() {
             </Link>
           </Button>
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-slate-900">
-              <EditableText
-                value={story.title || work.title}
-                onSave={(val) => handleUpdateStory("title", val)}
-                className="text-lg font-semibold text-slate-900"
-              />
-            </h1>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+            <div className="flex items-center gap-2">
+              <h1 className="truncate text-lg font-semibold text-slate-900">
+                <EditableText
+                  value={story.title || work.title}
+                  onSave={(val) => handleUpdateStory("title", val)}
+                  className="text-lg font-semibold text-slate-900"
+                />
+              </h1>
+              {showDetail && effectiveChapterNum != null && (
+                <div className="hidden items-center gap-2 sm:flex">
+                  <Input
+                    value={titleDraft}
+                    onChange={(e) => setTitleDraft(e.target.value)}
+                    placeholder={`第${effectiveChapterNum}章`}
+                    className="h-6 w-28 border-slate-200 bg-slate-50/50 text-xs"
+                  />
+                  <span className="shrink-0 text-[10px] text-slate-400">{wordCount}字</span>
+                </div>
+              )}
+              {showDetail && effectiveChapterNum != null && selectedChapter && (
+                <span className={`shrink-0 rounded-full px-1.5 py-px text-[10px] font-medium ${statusBadge(isChapterDraftDirty ? "草稿" : selectedChapter.status)}`}>
+                  {isChapterDraftDirty ? "草稿" : selectedChapter.status}
+                </span>
+              )}
+            </div>
+            <div className="hidden flex-wrap items-center gap-2 text-xs text-slate-500 sm:flex">
               <EditableText
                 value={story.genre || work.genre}
                 onSave={(val) => handleUpdateStory("genre", val)}
@@ -1880,7 +2274,41 @@ export function WorkDetailPage() {
         </div>
 
         <div className="flex shrink-0 flex-wrap items-center justify-end gap-2">
-          <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-0.5">
+          {showDetail && effectiveChapterNum != null && (
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={handleSaveChapter}
+                disabled={savingChapter || deletingLastChapter || (!titleDraft && !contentDraft)}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-lg px-2 text-[11px] font-medium transition-all duration-200",
+                  "bg-gradient-to-r from-emerald-600 to-teal-600 text-white shadow-sm",
+                  "hover:from-emerald-500 hover:to-teal-500",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400/60",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                )}
+              >
+                {savingChapter ? <Loader2 className="h-3 w-3 animate-spin" /> : <Save className="h-3 w-3" />}
+                保存
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteLastChapter}
+                disabled={!canDeleteCurrentChapter || deletingLastChapter || savingChapter}
+                title={canDeleteCurrentChapter ? "删除当前末章" : "仅可删除当前末章"}
+                className={cn(
+                  "inline-flex h-6 items-center gap-1 rounded-lg border border-red-200/90 bg-white px-2 text-[11px] font-medium text-red-600 transition-all duration-200",
+                  "hover:border-red-300 hover:bg-red-50 hover:text-red-700",
+                  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-red-300/70",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                )}
+              >
+                {deletingLastChapter ? <Loader2 className="h-3 w-3 animate-spin" /> : <Trash2 className="h-3 w-3" />}
+                删除末章
+              </button>
+            </div>
+          )}
+          <div className="hidden rounded-lg border border-slate-200 bg-slate-50 p-0.5 md:flex">
             <Button
               variant={mainTab === "outline" ? "secondary" : "ghost"}
               size="sm"
@@ -1892,28 +2320,56 @@ export function WorkDetailPage() {
             </Button>
           </div>
 
-          <Button variant={chatOpen ? "default" : "outline"} size="sm" onClick={() => setChatOpen(!chatOpen)}>
-            <Bot className="mr-1 h-4 w-4" />
-            AI 助手
-          </Button>
-
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              setReqDocOpen(true);
-              fetchRequirementsDoc();
-            }}
-          >
-            <FileText className="mr-1 h-4 w-4" />
-            需求文档
-          </Button>
+          <div className="flex items-center gap-1 rounded-2xl border border-slate-200/80 bg-gradient-to-b from-white to-slate-50/90 p-1 shadow-sm">
+            <WorkHeaderAction
+              tone="ai"
+              label="AI 助手"
+              icon={Bot}
+              compact={isMobile}
+              active={isMobile ? mobilePanel === "chat" : chatOpen}
+              onClick={toggleDesktopChat}
+            />
+            <div className="mx-0.5 h-7 w-px bg-slate-200/90" aria-hidden />
+            <WorkHeaderAction
+              tone="doc"
+              label="需求文档"
+              icon={FileText}
+              compact={isMobile}
+              active={reqDocOpen}
+              onClick={() => {
+                setReqDocOpen(true);
+                fetchRequirementsDoc();
+              }}
+            />
+            <WorkHeaderAction
+              tone="doc"
+              label="中纲"
+              icon={FileText}
+              compact={isMobile}
+              active={mesoDocOpen}
+              onClick={() => {
+                setMesoDocOpen(true);
+                fetchMesoDoc();
+              }}
+            />
+            <WorkHeaderAction
+              tone="doc"
+              label="小纲"
+              icon={FileText}
+              compact={isMobile}
+              active={microDocOpen}
+              onClick={() => {
+                setMicroDocOpen(true);
+                fetchMicroDoc();
+              }}
+            />
+          </div>
         </div>
       </section>
 
-      <div className="flex flex-1 overflow-hidden">
+      <div className={WORK_DETAIL_BODY_FLEX_CLASS}>
         <aside
-          className={`flex shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 ${
+          className={`hidden shrink-0 flex-col border-r border-slate-200 bg-white transition-[width] duration-200 md:flex ${
             sidebarCollapsed ? "w-12" : "w-[200px] sm:w-[220px]"
           }`}
         >
@@ -1998,20 +2454,21 @@ export function WorkDetailPage() {
           )}
         </aside>
 
-        <div className="flex min-w-0 flex-1 overflow-hidden">
-          <div className="pretty-scrollbar min-w-0 flex-1 overflow-auto px-4 pb-4 pt-4 sm:px-6 sm:pb-4 sm:pt-6">
-            {mainTab === "outline" && (
+        <div className={WORK_DETAIL_CONTENT_ROW_CLASS}>
+          {!showMobileChat && (
+          <div className={WORK_DETAIL_SCROLL_PANE_CLASS} data-work-detail-scroll-pane>
+            {showOutline && (
               <div className="mx-auto grid max-w-[1600px] gap-5 xl:grid-cols-[380px_1fr]">
                 <div className="min-w-0 rounded-[14px] border border-slate-300 bg-white p-4 shadow-[0_6px_24px_rgba(15,23,42,0.05)]">
                   <h3 className="mb-3 text-base font-semibold text-slate-800">剧情大纲树</h3>
                   <div className="pretty-scrollbar max-h-[780px] overflow-y-auto pr-1">
                     <InlineTree
                       tree={outlineTree}
-                      pulseFocus={treePulseFocus}
+                      pulseFocus={syncOutlineNodeSelection ? treePulseFocus : null}
                       onUpdateNode={handleUpdateNode}
                       onDeleteNode={handleDeleteNode}
                       onAddBranch={handleAddBranch}
-                      onSelectNode={handleTreeNodeSelect}
+                      onSelectNode={syncOutlineNodeSelection ? handleTreeNodeSelect : undefined}
                     />
                   </div>
                 </div>
@@ -2019,19 +2476,28 @@ export function WorkDetailPage() {
                   <RelationGraphPanel
                     tree={outlineTree}
                     characters={characters}
-                    focus={graphFocus}
+                    focus={syncOutlineNodeSelection ? graphFocus : null}
                     pulseFocus={null}
-                    onNodeSelect={handleGraphNodeSelect}
+                    onNodeSelect={syncOutlineNodeSelection ? handleGraphNodeSelect : undefined}
                     onCharacterSelect={setSelectedCharacter}
                   />
-                  <CharacterCardsPanel characters={characters} onCharacterSelect={setSelectedCharacter} />
+                  <CharacterCardsPanel
+                    characters={characters}
+                    onCharacterSelect={setSelectedCharacter}
+                    isMobile={isMobile}
+                  />
                 </div>
               </div>
             )}
 
-            {mainTab === "chapter" && (
+            {showDetail && (
               <div className="mx-auto grid w-full max-w-[1400px] gap-4 xl:grid-cols-[minmax(0,1fr)_360px]">
                 <div className="min-w-0">
+                <MobileChapterStrip
+                  chapters={filledChapters.length > 0 ? filledChapters : chapterNumbers.map((n) => ({ chapter_number: n, title: "" }))}
+                  activeNum={effectiveChapterNum}
+                  onSelect={selectChapter}
+                />
                 {chapterNumbers.length === 0 ? (
                   <div className="flex flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-slate-200 bg-white/60 p-8 text-center text-slate-500">
                     <p className="text-sm">请先在「大纲」中为时间线配置章节区间</p>
@@ -2045,61 +2511,16 @@ export function WorkDetailPage() {
                   </div>
                 ) : (
                   <>
-                    <div className="sticky top-0 z-10 mb-4 flex flex-col gap-3 rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm backdrop-blur sm:flex-row sm:items-center sm:justify-between">
-                      <div className="flex min-w-0 flex-1 flex-col gap-2 sm:flex-row sm:items-center">
-                        <Input
-                          value={titleDraft}
-                          onChange={(e) => setTitleDraft(e.target.value)}
-                          placeholder={`第${effectiveChapterNum}章 标题`}
-                          className="w-full text-sm font-medium sm:max-w-[320px]"
-                        />
-                        <span className="text-xs text-slate-400">{wordCount} 字</span>
-                        {selectedChapter && (
-                          <span className={`w-fit rounded-full px-2 py-0.5 text-[10px] font-medium ${statusBadge(isChapterDraftDirty ? "草稿" : selectedChapter.status)}`}>
-                            {isChapterDraftDirty ? "草稿" : selectedChapter.status}
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleSaveChapter}
-                          disabled={savingChapter || deletingLastChapter || (!titleDraft && !contentDraft)}
-                        >
-                          {savingChapter ? (
-                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Save className="mr-1 h-3.5 w-3.5" />
-                          )}
-                          保存
-                        </Button>
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={handleDeleteLastChapter}
-                          disabled={!canDeleteCurrentChapter || deletingLastChapter || savingChapter}
-                          title={canDeleteCurrentChapter ? "删除当前末章" : "仅可删除当前末章"}
-                          className="border-red-200 text-red-600 hover:bg-red-50 hover:text-red-700"
-                        >
-                          {deletingLastChapter ? (
-                            <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
-                          ) : (
-                            <Trash2 className="mr-1 h-3.5 w-3.5" />
-                          )}
-                          删除末章
-                        </Button>
-                      </div>
-                    </div>
-
                     <div className="rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm">
                       {contentDraft ? (
                         <Textarea
+                          key={effectiveChapterNum}
                           ref={chapterTextareaRef}
                           value={contentDraft}
                           onChange={(e) => setContentDraft(e.target.value)}
+                          onKeyDown={handleChapterQuoteShortcut}
                           className="min-h-[120px] resize-none overflow-hidden border-0 bg-transparent p-0 text-[15px] leading-[1.8] text-slate-800 shadow-none focus-visible:ring-0"
-                          placeholder="开始写作..."
+                          placeholder="开始写作...（选中文字后 Ctrl+L 可引用到 AI 对话）"
                         />
                       ) : (
                         <div className="flex flex-col items-center justify-center gap-4 py-10">
@@ -2107,61 +2528,18 @@ export function WorkDetailPage() {
                             <PenLine className="h-8 w-8 text-slate-400" />
                           </div>
                           <p className="text-sm text-slate-500">第 {effectiveChapterNum} 章尚未生成正文</p>
-                          <Button variant="outline" onClick={() => setChatOpen(true)}>
+                          <Button variant="outline" onClick={openMobileChat}>
                             <Sparkles className="mr-1 h-4 w-4" />
                             在 AI 对话中生成
                           </Button>
                         </div>
                       )}
                     </div>
-
-                    {(evaluationError || evaluationResult) && (
-                      <div className="mt-4 rounded-xl border border-slate-200 bg-white/90 p-4 shadow-sm">
-                        <div className="mb-3 flex items-center justify-between">
-                          <h3 className="text-sm font-semibold text-slate-800">章节评估</h3>
-                          {evaluationResult?.chapter_title && (
-                            <span className="text-xs text-slate-500">{evaluationResult.chapter_title}</span>
-                          )}
-                        </div>
-
-                        {evaluationError ? (
-                          <p className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">{evaluationError}</p>
-                        ) : (
-                          <div className="grid gap-3 md:grid-cols-2">
-                            {[
-                              { key: "editor", label: "编辑视角" },
-                              { key: "reader", label: "读者视角" },
-                            ].map((item) => {
-                              const r = evaluationResult?.[item.key];
-                              if (!r) return null;
-                              return (
-                                <article key={item.key} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
-                                  <div className="mb-2 flex items-center justify-between">
-                                    <span className="text-sm font-medium text-slate-800">{item.label}</span>
-                                    <span className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
-                                      {r.total_score}/60
-                                    </span>
-                                  </div>
-                                  <p className="mb-1 text-xs font-medium text-slate-600">问题</p>
-                                  <ul className="mb-2 list-disc space-y-0.5 pl-4 text-xs text-slate-600">
-                                    {(r.issues || []).slice(0, 3).map((v, i) => <li key={`${item.key}-issue-${i}`}>{v}</li>)}
-                                  </ul>
-                                  <p className="mb-1 text-xs font-medium text-slate-600">建议</p>
-                                  <ul className="list-disc space-y-0.5 pl-4 text-xs text-slate-600">
-                                    {(r.suggestions || []).slice(0, 3).map((v, i) => <li key={`${item.key}-sugg-${i}`}>{v}</li>)}
-                                  </ul>
-                                </article>
-                              );
-                            })}
-                          </div>
-                        )}
-                      </div>
-                    )}
                   </>
                 )}
                 </div>
                 {effectiveChapterNum != null && chapterNumbers.length > 0 && (
-                  <div className="min-w-0 xl:sticky xl:top-0 xl:max-h-[calc(100vh-2rem)] xl:overflow-y-auto xl:pretty-scrollbar">
+                  <div className="hidden min-w-0 xl:sticky xl:top-0 xl:max-h-[calc(100vh-2rem)] xl:block xl:overflow-y-auto xl:pretty-scrollbar">
                     <ChapterIntelSidebar
                       chapterNumber={effectiveChapterNum}
                       intel={currentChapterIntel}
@@ -2173,12 +2551,28 @@ export function WorkDetailPage() {
               </div>
             )}
           </div>
+          )}
 
-          {chatOpen && (
+          {showMobileChat && (
+            <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-white md:hidden">
+              <SupervisorChatPanel
+                workId={workId}
+                chapterNumber={effectiveChapterNum}
+                chatInputApiRef={chatInputApiRef}
+                onOutlineUpdated={(newTree) => setOutlineTree(newTree)}
+                onChapterUpdated={() => refreshChapters()}
+                onCharactersUpdated={() => refreshCharacters()}
+                onChapterIntelUpdate={handleChapterIntelUpdate}
+              />
+            </div>
+          )}
+
+          {chatOpen && !isMobile && (
             <div
-              className={`relative hidden shrink-0 overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white md:flex md:flex-col ${
-                chatResizing ? "select-none" : ""
-              }`}
+              className={cn(
+                "relative flex shrink-0 flex-col overflow-hidden rounded-l-2xl border-l border-slate-200 bg-white",
+                chatResizing && "select-none",
+              )}
               style={{ width: `${chatPanelWidth}px` }}
             >
               <div
@@ -2192,6 +2586,7 @@ export function WorkDetailPage() {
               <SupervisorChatPanel
                 workId={workId}
                 chapterNumber={effectiveChapterNum}
+                chatInputApiRef={chatInputApiRef}
                 onOutlineUpdated={(newTree) => setOutlineTree(newTree)}
                 onChapterUpdated={() => refreshChapters()}
                 onCharactersUpdated={() => refreshCharacters()}
@@ -2202,20 +2597,13 @@ export function WorkDetailPage() {
         </div>
       </div>
 
-      {chatOpen && (
-        <div className="flex max-h-[40vh] shrink-0 flex-col border-t border-slate-200 bg-white md:hidden">
-          <div className="border-b border-slate-100 px-3 py-2 text-center text-xs text-slate-500">AI 对话（小屏）</div>
-          <div className="min-h-[200px] flex-1 overflow-hidden">
-            <SupervisorChatPanel
-              workId={workId}
-              chapterNumber={effectiveChapterNum}
-              onOutlineUpdated={(newTree) => setOutlineTree(newTree)}
-              onChapterUpdated={() => refreshChapters()}
-              onCharactersUpdated={() => refreshCharacters()}
-              onChapterIntelUpdate={handleChapterIntelUpdate}
-            />
-          </div>
-        </div>
+      {isMobile && (
+        <MobileWorkNav
+          panel={mobilePanel}
+          onOutline={goMobileOutline}
+          onDetail={goMobileDetail}
+          onChat={goMobileChat}
+        />
       )}
 
       <CharacterDetailDrawer
@@ -2224,7 +2612,7 @@ export function WorkDetailPage() {
         onClose={() => setSelectedCharacter(null)}
         onLinkClick={(link) => {
           if (link?.timeline_id) {
-            setGraphFocus({ type: "timeline", id: link.timeline_id });
+            setGraphFocus({ type: "macro_phase", id: link.timeline_id });
           }
         }}
       />
@@ -2233,6 +2621,32 @@ export function WorkDetailPage() {
         open={reqDocOpen}
         onClose={() => setReqDocOpen(false)}
         content={reqDocContent}
+        onSave={handleSaveRequirementsDoc}
+        saving={reqDocSaving}
+      />
+
+      <OutlineDocDrawer
+        open={mesoDocOpen}
+        onClose={() => setMesoDocOpen(false)}
+        content={mesoDocContent}
+        onSave={handleSaveMesoDoc}
+        saving={mesoDocSaving}
+        title="中纲文档"
+        subtitle="当前阶段的详细剧情信息，AI 写作时会读取全文"
+        placeholder="## 当前阶段&#10;&#10;描述当前所处的剧情阶段的详细信息…"
+        accentColor="emerald"
+      />
+
+      <OutlineDocDrawer
+        open={microDocOpen}
+        onClose={() => setMicroDocOpen(false)}
+        content={microDocContent}
+        onSave={handleSaveMicroDoc}
+        saving={microDocSaving}
+        title="小纲文档"
+        subtitle="近期章节的场景安排，AI 写作时会读取全文"
+        placeholder="## 近期场景安排&#10;&#10;### 第N章&#10;- 场景1：…&#10;- 场景2：…"
+        accentColor="blue"
       />
     </main>
   );

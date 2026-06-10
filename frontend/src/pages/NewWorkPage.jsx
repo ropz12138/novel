@@ -39,8 +39,8 @@ function formatOutlineProgress(d) {
   if (!d?.section || !d?.node) return "";
   const n = d.node;
   if (d.section === "story") return `📘 作品：${n.title || "未命名"}｜${n.genre || "未分类"}｜${n.volume || ""}\n`;
-  if (d.section === "timeline") return `🧭 主线 ${d.index}/${d.total}：${n.time_node || ""} - ${n.development_node || ""}${n.summary ? `｜${n.summary}` : ""}\n`;
-  if (d.section === "branches") return `🌿 支线 ${d.index}/${d.total}：${n.name || ""} - ${n.summary || ""}\n`;
+  if (d.section === "macro_phases") return `🧭 大纲 ${d.index}/${d.total}：${n.name || ""}${n.goal ? `｜${n.goal}` : ""}\n`;
+  if (d.section === "meso_stages") return `🌿 中纲 ${d.index}/${d.total}：${n.name || ""} - ${n.conflict || n.cause || ""}\n`;
   if (d.section === "foreshadowing") return `🪝 伏笔 ${d.index}/${d.total}：${n.content || ""}\n`;
   if (d.section === "characters") return `👤 角色 ${d.index}/${d.total}：${n.name || ""}（${n.role_type || "配角"}）\n`;
   return "";

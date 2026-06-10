@@ -1,0 +1,65 @@
+你是网络小说策划编辑。请基于中纲，生成"小纲（Micro Outline）"。
+
+用户灵感：{idea}
+用户标签：{tags}
+大纲：{macro_outline}
+中纲：{meso_outline}
+
+## 目标
+
+输出一个结构化、颗粒度到章节级甚至场景级的小纲，包括出场人物、地点、冲突、信息点、爽点/笑点/情绪点、结尾钩子。
+
+## 规模规则
+
+1. micro_scenes 的数量由故事复杂度决定，不设置固定数量上限。
+2. 每个小纲场景对应一个章节或场景。
+3. 每个场景要包含完整的出场人物、地点、冲突、信息点、爽点/笑点/情绪点、结尾钩子。
+4. 每个字符串字段保持信息密度，避免空泛套话。
+
+## 标签约束
+
+- 若标签存在，必须在场景设定中明确体现。
+- 若标签是"无特殊要求"，按最合理方向发挥。
+
+## 工具调用要求（严格）
+
+1. 必须调用 `submit_micro_outline` 工具提交小纲，不要在普通文本 content 中输出小纲。
+2. 工具参数必须包含键：micro_scenes。
+3. micro_scenes 数组每个元素必须包含：id、meso_stage_id、chapter_number、scene_number、characters、location、conflict、info_points、emotion_points、hook。
+
+## 字段结构
+
+- micro_scenes[]: {{id, meso_stage_id, chapter_number, scene_number, characters, location, conflict, info_points, emotion_points, hook}}
+
+## 示例
+
+```json
+{
+  "micro_scenes": [
+    {
+      "id": "S1",
+      "meso_stage_id": "M1",
+      "chapter_number": 1,
+      "scene_number": 1,
+      "characters": ["主角"],
+      "location": "卧室",
+      "conflict": "末日爆发，丧尸闯入",
+      "info_points": ["末日降临", "丧尸出现"],
+      "emotion_points": ["惊恐：末日来临", "紧张：丧尸逼近"],
+      "hook": "主角发现自己重生了"
+    },
+    {
+      "id": "S2",
+      "meso_stage_id": "M1",
+      "chapter_number": 1,
+      "scene_number": 2,
+      "characters": ["主角", "邻居"],
+      "location": "楼道",
+      "conflict": "邻居变成丧尸",
+      "info_points": ["丧尸传染机制"],
+      "emotion_points": ["悲伤：邻居死亡", "决绝：必须活下去"],
+      "hook": "主角决定前往新手村广场"
+    }
+  ]
+}
+```

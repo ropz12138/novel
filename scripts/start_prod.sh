@@ -108,7 +108,7 @@ echo $! > "$RUN_DIR/backend-prod.pid"
 # --- 启动成功校验 ---
 backend_pid="$(cat "$RUN_DIR/backend-prod.pid" 2>/dev/null || true)"
 started_ok=0
-for _ in $(seq 1 20); do
+for _ in $(seq 1 40); do
   if [ -f "$RUN_DIR/backend-prod.log" ] && grep -q "Application startup complete\|Uvicorn running on" "$RUN_DIR/backend-prod.log" 2>/dev/null; then
     started_ok=1
     break

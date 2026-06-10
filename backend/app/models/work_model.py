@@ -38,9 +38,19 @@ class Work(Base):
     genre: Mapped[str] = mapped_column(String(60), nullable=False, default="未分类")
     idea: Mapped[str] = mapped_column(Text, nullable=False, default="")
     tags: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
-    outline_tree: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    outline_tree: Mapped[dict] = mapped_column(JSONB, nullable=False, default=lambda: {
+        "story": {},
+        "outline": {"macro_phases": [], "core_characters": [], "ending": {}},
+        "meso": {"meso_stages": []},
+        "micro": {"micro_scenes": []},
+        "foreshadowing": [],
+        "characters": [],
+        "character_links": []
+    })
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="草稿")
     requirements_doc: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    meso_doc: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
+    micro_doc: Mapped[str | None] = mapped_column(Text, nullable=True, default=None)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
 
@@ -94,7 +104,7 @@ class Character(Base):
     relationships: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
 
     # ── 元数据 ──
-    first_chapter: Mapped[int] = mapped_column(Integer, nullable=True)
+    first_appearance_stage: Mapped[str] = mapped_column(String(50), nullable=True)
     notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
@@ -135,7 +145,6 @@ class ChapterMetadata(Base):
     key_plot_points: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
     outline_links: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
     involved_characters: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
-    foreshadows: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
     facts: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=_utcnow)

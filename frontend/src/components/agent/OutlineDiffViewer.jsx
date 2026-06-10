@@ -14,8 +14,8 @@ import {
 
 const SECTION_META = {
   story: { label: "主线故事", icon: Star, color: "text-violet-600 bg-violet-50" },
-  timeline: { label: "时间线", icon: BookOpen, color: "text-blue-600 bg-blue-50" },
-  branches: { label: "支线", icon: GitBranch, color: "text-teal-600 bg-teal-50" },
+  macro_phases: { label: "大纲", icon: BookOpen, color: "text-blue-600 bg-blue-50" },
+  meso_stages: { label: "中纲", icon: GitBranch, color: "text-teal-600 bg-teal-50" },
   foreshadowing: { label: "伏笔", icon: Target, color: "text-amber-600 bg-amber-50" },
 };
 
@@ -29,7 +29,7 @@ const TYPE_ICON = {
  * 大纲结构化 diff 查看器。
  *
  * Props:
- * - diff: { story: [...], timeline: [...], branches: [...], foreshadowing: [...] }
+ * - diff: { story: [...], macro_phases: [...], meso_stages: [...], foreshadowing: [...] }
  * - summary: { total_added, total_modified, total_removed, total_changes }
  * - collapsed: boolean (initial collapsed state)
  */
@@ -83,13 +83,13 @@ export function OutlineDiffViewer({ diff = {}, summary = {}, collapsed: initialC
           {diff.story && diff.story.length > 0 && (
             <OutlineSection key="story" sectionKey="story" items={diff.story} />
           )}
-          {/* Timeline section */}
-          {diff.timeline && diff.timeline.length > 0 && (
-            <OutlineSection key="timeline" sectionKey="timeline" items={diff.timeline} />
+          {/* Macro phases section */}
+          {diff.macro_phases && diff.macro_phases.length > 0 && (
+            <OutlineSection key="macro_phases" sectionKey="macro_phases" items={diff.macro_phases} />
           )}
-          {/* Branches section */}
-          {diff.branches && diff.branches.length > 0 && (
-            <OutlineSection key="branches" sectionKey="branches" items={diff.branches} />
+          {/* Meso stages section */}
+          {diff.meso_stages && diff.meso_stages.length > 0 && (
+            <OutlineSection key="meso_stages" sectionKey="meso_stages" items={diff.meso_stages} />
           )}
           {/* Foreshadowing section */}
           {diff.foreshadowing && diff.foreshadowing.length > 0 && (

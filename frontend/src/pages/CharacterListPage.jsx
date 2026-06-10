@@ -1,5 +1,4 @@
-import { API_BASE } from "../lib/runtime-config";
-import { authFetch } from "../lib/authFetch";
+import { characterApi } from "../lib/rpcApi";
 import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 import {
@@ -48,7 +47,7 @@ function CharacterCard({ char, onEdit, onDelete }) {
         <p>状态：{char.current_status || "—"}</p>
         <p>目的：{char.current_goal || "—"}</p>
         {char.last_location && <p>位置：{char.last_location}</p>}
-        {char.first_chapter && <p>首次出场：第{char.first_chapter}章</p>}
+        {char.first_appearance_stage && <p>首次出场阶段：{char.first_appearance_stage}</p>}
         {char.appearance && <p>外貌：{char.appearance}</p>}
         {char.personality && <p>性格：{char.personality}</p>}
         {char.background && <p>背景：{char.background}</p>}
@@ -72,7 +71,7 @@ function CharacterForm({ character, onSave, onCancel }) {
     current_status: "存活",
     current_goal: "",
     last_location: "",
-    first_chapter: "",
+    first_appearance_stage: "",
     notes: "",
     ...character,
   });
@@ -84,7 +83,7 @@ function CharacterForm({ character, onSave, onCancel }) {
   const handleSubmit = () => {
     const data = {
       ...form,
-      first_chapter: form.first_chapter ? parseInt(form.first_chapter, 10) : null,
+      first_appearance_stage: form.first_appearance_stage || null,
     };
     onSave(data);
   };
@@ -186,12 +185,12 @@ function CharacterForm({ character, onSave, onCancel }) {
               </select>
             </div>
             <div>
-              <label className="mb-1 block text-xs font-medium text-slate-600">首次出场章节</label>
+              <label className="mb-1 block text-xs font-medium text-slate-600">首次出场阶段（中纲阶段ID）</label>
               <Input
-                type="number"
-                value={form.first_chapter}
-                onChange={(e) => handleChange("first_chapter", e.target.value)}
-                placeholder="1"
+                type="text"
+                value={form.first_appearance_stage}
+                onChange={(e) => handleChange("first_appearance_stage", e.target.value)}
+                placeholder="M1"
               />
             </div>
           </div>
@@ -233,7 +232,7 @@ export function CharacterListPage() {
 
   const fetchCharacters = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/works/${workId}/characters`);
+      const res = await characterApi.list(workId);
       const data = await res.json();
       setCharacters(data);
     } catch (e) {
@@ -250,17 +249,11 @@ export function CharacterListPage() {
 
   const handleSave = async (data) => {
     const isEdit = editing && editing.id;
-    const url = isEdit
-      ? `${API_BASE}/works/${workId}/characters/${editing.id}`
-      : `${API_BASE}/works/${workId}/characters`;
-    const method = isEdit ? "PUT" : "POST";
 
     try {
-      const res = await authFetch(url, {
-        method,
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(data),
-      });
+      const res = isEdit
+        ? await characterApi.update(workId, editing.id, data)
+        : await characterApi.create(workId, data);
       if (!res.ok) {
         const err = await res.json();
         alert(err.detail || "保存失败");
@@ -278,7 +271,7 @@ export function CharacterListPage() {
   const handleDelete = async (id) => {
     if (!confirm("确定要删除这个角色吗？")) return;
     try {
-      await authFetch(`${API_BASE}/works/${workId}/characters/${id}`, { method: "DELETE" });
+      await characterApi.delete(workId, id);
       await fetchCharacters();
     } catch (e) {
       console.error(e);

@@ -26,7 +26,7 @@ const FIELD_LABELS = {
   skills: "能力",
   current_status: "状态",
   current_goal: "目的",
-  first_chapter: "出场章节",
+  first_appearance_stage: "出场阶段",
   notes: "备注",
 };
 

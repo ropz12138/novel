@@ -27,10 +27,3 @@ export function authFetch(url, options = {}) {
     return response;
   });
 }
-
-/**
- * Helper: build a full API URL from a relative path.
- */
-export function apiUrl(path) {
-  return `${API_BASE}${path}`;
-}

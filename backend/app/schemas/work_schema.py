@@ -53,7 +53,7 @@ class CharacterInfo(BaseModel):
     skills: str = Field(default="", description="能力技能")
     current_status: str = Field(default="存活", description="当前状态")
     current_goal: str = Field(default="", description="当前目的/动机")
-    first_chapter: int = Field(default=1, description="首次出场章节号")
+    first_appearance_stage: str = Field(default="M1", description="首次出场阶段（中纲阶段ID，如 M1、M6）")
 
 
 class CharacterBrief(BaseModel):
@@ -61,7 +61,7 @@ class CharacterBrief(BaseModel):
     role_type: str = Field(default="配角", description="角色类型：主角/配角/反派/龙套/路人")
     gender: str = Field(default="", description="性别")
     age: str = Field(default="", description="年龄")
-    first_chapter: int = Field(default=1, description="首次出场章节号")
+    first_appearance_stage: str = Field(default="M1", description="首次出场阶段（中纲阶段ID）")
     brief: str = Field(default="", description="一句话角色定位，如'与主角共同成长的挚友'")
 
 
@@ -73,6 +73,7 @@ class CharacterDetail(BaseModel):
     skills: str = Field(default="", description="能力技能")
     current_status: str = Field(default="存活", description="当前状态")
     current_goal: str = Field(default="", description="当前目的/动机")
+    first_appearance_stage: str = Field(default="M1", description="首次出场阶段（中纲阶段ID，如 M1、M6）")
 
 
 class CharacterDetailBatch(BaseModel):
@@ -93,28 +94,69 @@ class CharacterLink(BaseModel):
     chapter_end: int | None = Field(default=None, description="关系生效结束章节")
 
 
+class MacroPhaseNode(BaseModel):
+    id: str = Field(description="阶段ID，如 P1、P2")
+    order: int = Field(default=0, description="排序序号")
+    name: str = Field(description="阶段名称，如'末日爆发与初始求生'")
+    goal: str = Field(default="", description="阶段目标描述")
+    core_setting: str = Field(default="", description="核心设定")
+    ending_direction: str = Field(default="", description="本阶段结局方向（可选）")
+    chapter_range: list[int] = Field(default=[1, 12], description="章节范围 [起始, 结束]")
+
+
+class MesoStageNode(BaseModel):
+    id: str = Field(description="阶段ID，如 M1、M2")
+    macro_phase_id: str = Field(description="关联的宏观阶段ID")
+    name: str = Field(description="阶段名称")
+    type: str = Field(default="", description="阶段类型，如副本/地图/案件/赛事等")
+    cause: str = Field(default="", description="起因")
+    conflict: str = Field(default="", description="冲突")
+    key_characters: list[str] = Field(default_factory=list, description="关键人物列表")
+    twist: str = Field(default="", description="反转")
+    climax: str = Field(default="", description="高潮")
+    reward: str = Field(default="", description="收益/结果")
+    chapter_range: list[int] = Field(default=[1, 12], description="章节范围 [起始, 结束]")
+
+
+class MicroSceneNode(BaseModel):
+    id: str = Field(description="场景ID")
+    meso_stage_id: str = Field(description="关联的中纲阶段ID")
+    chapter_number: int = Field(description="章节号")
+    scene_number: int = Field(default=1, description="场景号")
+    characters: list[str] = Field(default_factory=list, description="出场人物")
+    location: str = Field(default="", description="地点")
+    conflict: str = Field(default="", description="冲突")
+    info_points: list[str] = Field(default_factory=list, description="信息点")
+    emotion_points: list[str] = Field(default_factory=list, description="爽点/笑点/情绪点")
+    hook: str = Field(default="", description="结尾钩子")
+
+
+class MacroOutlineData(BaseModel):
+    macro_phases: list[MacroPhaseNode] = Field(default_factory=list)
+    core_characters: list[CharacterBrief] = Field(default_factory=list)
+    ending: dict = Field(default_factory=dict, description="整体结局方向（可选）")
+
+
+class MesoOutlineData(BaseModel):
+    meso_stages: list[MesoStageNode] = Field(default_factory=list)
+
+
+class MicroOutlineData(BaseModel):
+    micro_scenes: list[MicroSceneNode] = Field(default_factory=list)
+
+
 class OutlineTreeData(BaseModel):
-    story: StoryInfo
-    timeline: list[TimelineNode]
-    branches: list[BranchNode]
-    foreshadowing: list[ForeshadowingNode]
+    story: StoryInfo = Field(default_factory=lambda: StoryInfo(title="", genre="", volume=""))
+    outline: MacroOutlineData = Field(default_factory=MacroOutlineData)
+    meso: MesoOutlineData = Field(default_factory=MesoOutlineData)
+    micro: MicroOutlineData = Field(default_factory=MicroOutlineData)
+    foreshadowing: list[ForeshadowingNode] = Field(default_factory=list)
     characters: list[CharacterInfo] = Field(default_factory=list)
     character_links: list[CharacterLink] = Field(default_factory=list)
 
 
-class OutlineGenerateResponse(BaseModel):
-    outline_tree: OutlineTreeData
-    work_id: str
-
-
 class OutlineUpdateRequest(BaseModel):
     outline_tree: dict
-
-
-class ChatEditRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=1000)
-    history: list[dict] = Field(default_factory=list)
-    session_id: str | None = Field(default=None, description="可选，复用已有 session")
 
 
 class ToolCall(BaseModel):
@@ -191,7 +233,6 @@ class ChapterIntelOut(BaseModel):
     key_plot_points: list = Field(default_factory=list)
     outline_links: list = Field(default_factory=list)
     involved_characters: list = Field(default_factory=list)
-    foreshadows: list = Field(default_factory=list)
     facts: list = Field(default_factory=list)
     updated_at: datetime | None = None
     chapter_updated_at: datetime | None = None
@@ -202,26 +243,10 @@ class ChapterUpdateRequest(BaseModel):
     content: str | None = None
 
 
-class ChapterGenerateResponse(BaseModel):
-    chapter: ChapterOut
-    message: str = "正文生成成功"
-
-
 class ChapterDeleteLastResponse(BaseModel):
     deleted_chapter_number: int
     next_chapter_number: int
     message: str = "末章删除成功"
-
-
-class ChapterChatRequest(BaseModel):
-    message: str = Field(min_length=1, max_length=2000)
-    history: list[dict] = Field(default_factory=list)
-
-
-class ChapterChatResponse(BaseModel):
-    assistant_message: str
-    proposed_content: str
-    proposed_title: str | None = None
 
 
 # ──────────────────────────── Character Schemas ────────────────────────────
@@ -240,7 +265,7 @@ class CharacterCreateRequest(BaseModel):
     last_location: str = Field(default="", max_length=200)
     last_chapter: int | None = None
     relationships: dict = Field(default_factory=dict)
-    first_chapter: int | None = None
+    first_appearance_stage: str | None = None
     notes: str = Field(default="")
 
 
@@ -258,7 +283,7 @@ class CharacterUpdateRequest(BaseModel):
     last_location: str | None = None
     last_chapter: int | None = None
     relationships: dict | None = None
-    first_chapter: int | None = None
+    first_appearance_stage: str | None = None
     notes: str | None = None
 
 
@@ -278,7 +303,7 @@ class CharacterOut(BaseModel):
     last_location: str
     last_chapter: int | None = None
     relationships: dict
-    first_chapter: int | None = None
+    first_appearance_stage: str | None = None
     notes: str
     created_at: datetime | None = None
     updated_at: datetime | None = None

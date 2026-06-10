@@ -21,19 +21,19 @@ const LINK_TYPE_COLORS = {
 /**
  * Extract character_links for a specific character and enrich with timeline info.
  */
-export function getCharacterLinks(characterName, characterLinks, timeline) {
+export function getCharacterLinks(characterName, characterLinks, macroPhases) {
   if (!characterName || !Array.isArray(characterLinks)) return [];
   const links = characterLinks.filter(
     (link) => link && link.character_name === characterName
   );
   return links.map((link) => {
-    const node = Array.isArray(timeline)
-      ? timeline.find((t) => t && t.id === link.timeline_id)
+    const node = Array.isArray(macroPhases)
+      ? macroPhases.find((t) => t && t.id === link.timeline_id)
       : null;
     return {
       ...link,
       timeline_title: node
-        ? `${node.id} ${node.development_node || "主线节点"}`
+        ? `${node.id} ${node.name || "宏观阶段"}`
         : link.timeline_id,
     };
   });
@@ -92,7 +92,7 @@ export function CharacterDetailDrawer({
   const characterLinks = getCharacterLinks(
     character.name,
     outlineTree?.character_links || [],
-    outlineTree?.timeline || []
+    outlineTree?.outline?.macro_phases || []
   );
   const relationships =
     character.relationships && typeof character.relationships === "object"
@@ -116,8 +116,8 @@ export function CharacterDetailDrawer({
               <span className="rounded-full bg-violet-100 px-2 py-0.5 text-[10px] font-medium text-violet-700">
                 {character.role_type || "配角"}
               </span>
-              {character.first_chapter && (
-                <span>首次出场：第{character.first_chapter}章</span>
+              {character.first_appearance_stage && (
+                <span>首次出场阶段：{character.first_appearance_stage}</span>
               )}
             </div>
           </div>

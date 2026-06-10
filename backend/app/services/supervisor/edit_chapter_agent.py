@@ -21,10 +21,9 @@ from sqlalchemy.orm import Session
 from app.core.config import settings
 from app.services.supervisor.edit_chapter_tools import EDIT_CHAPTER_TOOLS
 from app.services.supervisor.sub_agent_base import (
-    chunk_to_ai_message,
+    astream_agent_llm_to_message,
+    bind_agent_llm_with_tools,
     get_llm,
-    run_agent_stream,
-    stream_text_delta,
 )
 
 logger = logging.getLogger(__name__)
@@ -63,38 +62,38 @@ def _build_edit_chapter_system_prompt(
 # ── Agent Node ──
 
 
-async def _edit_chapter_agent_node(state: EditChapterState) -> dict:
-    """LLM 节点：接收 messages，流式输出，返回 AIMessage。
+def _make_edit_chapter_agent_node(*, emit):
+    async def _edit_chapter_agent_node(state: EditChapterState) -> dict:
+        """LLM 节点：接收 messages，流式输出，返回 AIMessage。
 
-    system prompt 只在首次调用时注入（通过初始消息），
-    后续轮次直接使用 state 中的 messages（已包含历史 tool 调用上下文）。
-    """
-    llm = get_llm(temperature=0.7)
-    llm_with_tools = llm.bind_tools(EDIT_CHAPTER_TOOLS)
+        system prompt 只在首次调用时注入（通过初始消息），
+        后续轮次直接使用 state 中的 messages（已包含历史 tool 调用上下文）。
+        """
+        llm = get_llm(temperature=0.7)
+        llm_with_tools = bind_agent_llm_with_tools(llm, EDIT_CHAPTER_TOOLS)
 
-    messages = state.get("messages", [])
+        messages = state.get("messages", [])
 
-    # 检查是否已有 system prompt（首次调用时由 run() 注入到初始消息中）
-    has_system = any(isinstance(m, SystemMessage) for m in messages)
-    if not has_system:
-        system_prompt = _build_edit_chapter_system_prompt(
-            work_id=state.get("work_id", ""),
-            chapter_number=state.get("chapter_number", 0),
-            user_message=state.get("user_message", ""),
+        has_system = any(isinstance(m, SystemMessage) for m in messages)
+        if not has_system:
+            system_prompt = _build_edit_chapter_system_prompt(
+                work_id=state.get("work_id", ""),
+                chapter_number=state.get("chapter_number", 0),
+                user_message=state.get("user_message", ""),
+            )
+            full_messages = [SystemMessage(content=system_prompt)] + messages
+        else:
+            full_messages = messages
+
+        response = await astream_agent_llm_to_message(
+            llm_with_tools,
+            full_messages,
+            emit=emit,
+            stream_event="edit_chapter_stream",
         )
-        full_messages = [SystemMessage(content=system_prompt)] + messages
-    else:
-        full_messages = messages
+        return {"messages": [response]}
 
-    aggregated = None
-    async for chunk in llm_with_tools.astream(full_messages):
-        aggregated = chunk if aggregated is None else aggregated + chunk
-
-    if aggregated is None:
-        raise RuntimeError("EditChapterAgent LLM 未返回任何流式分片")
-
-    response = chunk_to_ai_message(aggregated)
-    return {"messages": [response]}
+    return _edit_chapter_agent_node
 
 
 # ── 条件边 ──
@@ -124,7 +123,7 @@ class EditChapterAgent:
     def _build_graph(self):
         """构建 LangGraph StateGraph"""
         graph = StateGraph(EditChapterState)
-        graph.add_node("agent", _edit_chapter_agent_node)
+        graph.add_node("agent", _make_edit_chapter_agent_node(emit=self.emit))
         graph.add_node("tools", ToolNode(EDIT_CHAPTER_TOOLS))
 
         graph.add_edge(START, "agent")

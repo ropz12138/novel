@@ -15,8 +15,13 @@ from langgraph.graph import MessagesState
 from langgraph.prebuilt import ToolNode
 from sqlalchemy.orm import Session
 
-from app.services.supervisor.evaluation_tools import EVALUATION_TOOLS
-from app.services.supervisor.sub_agent_base import chunk_to_ai_message, get_llm
+from app.services.supervisor.tool_registry import build_evaluation_tools
+from app.services.supervisor.prompt_builder import inject_evaluation_prompt_sections
+from app.services.supervisor.sub_agent_base import (
+    astream_agent_llm_to_message,
+    bind_agent_llm_with_tools,
+    get_llm,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -35,8 +40,11 @@ def _build_evaluation_system_prompt(
     work_id: str,
     chapter_number: int | None,
     user_message: str,
+    *,
+    enable_child_todolist: bool = False,
 ) -> str:
     template = (PROMPT_DIR / "evaluation_agent_system.txt").read_text(encoding="utf-8")
+    template = inject_evaluation_prompt_sections(template, enabled=enable_child_todolist)
     if chapter_number is None:
         target_description = (
             "未由系统固定；请从 Supervisor 下派任务中判断目标章节，"
@@ -57,44 +65,46 @@ def _build_evaluation_system_prompt(
     )
 
 
-async def _evaluation_agent_node(state: EvaluationState) -> dict:
-    llm = get_llm(temperature=0.2, streaming=False)
-    llm_with_tools = llm.bind_tools(EVALUATION_TOOLS)
+def _make_evaluation_agent_node(tools, *, enable_child_todolist: bool, emit):
+    async def _evaluation_agent_node(state: EvaluationState) -> dict:
+        llm = get_llm(temperature=0.2, streaming=True)
+        llm_with_tools = bind_agent_llm_with_tools(llm, tools)
 
-    messages = state.get("messages", [])
+        messages = state.get("messages", [])
 
-    has_system = any(isinstance(m, SystemMessage) for m in messages)
-    if not has_system:
-        system_prompt = _build_evaluation_system_prompt(
-            work_id=state.get("work_id", ""),
-            chapter_number=state.get("chapter_number"),
-            user_message=state.get("user_message", ""),
+        has_system = any(isinstance(m, SystemMessage) for m in messages)
+        if not has_system:
+            system_prompt = _build_evaluation_system_prompt(
+                work_id=state.get("work_id", ""),
+                chapter_number=state.get("chapter_number"),
+                user_message=state.get("user_message", ""),
+                enable_child_todolist=enable_child_todolist,
+            )
+            full_messages = [SystemMessage(content=system_prompt)] + messages
+        else:
+            full_messages = messages
+
+        msg_summary: list[str] = []
+        for i, m in enumerate(full_messages):
+            role = getattr(m, "type", type(m).__name__)
+            content_len = len(getattr(m, "content", "") or "")
+            tc_count = len(getattr(m, "tool_calls", []) or [])
+            msg_summary.append(f"[{i}]{role}:len={content_len},tc={tc_count}")
+        logger.info(
+            "evaluation.agent_node input_messages=%d summary=[%s]",
+            len(full_messages),
+            " | ".join(msg_summary),
         )
-        full_messages = [SystemMessage(content=system_prompt)] + messages
-    else:
-        full_messages = messages
 
-    msg_summary: list[str] = []
-    for i, m in enumerate(full_messages):
-        role = getattr(m, "type", type(m).__name__)
-        content_len = len(getattr(m, "content", "") or "")
-        tc_count = len(getattr(m, "tool_calls", []) or [])
-        msg_summary.append(f"[{i}]{role}:len={content_len},tc={tc_count}")
-    logger.info(
-        "evaluation.agent_node input_messages=%d summary=[%s]",
-        len(full_messages),
-        " | ".join(msg_summary),
-    )
+        response = await astream_agent_llm_to_message(
+            llm_with_tools,
+            full_messages,
+            emit=emit,
+            stream_event="thinking_stream",
+        )
+        return {"messages": [response]}
 
-    aggregated = None
-    async for chunk in llm_with_tools.astream(full_messages):
-        aggregated = chunk if aggregated is None else aggregated + chunk
-
-    if aggregated is None:
-        raise RuntimeError("EvaluationAgent LLM 未返回任何流式分片")
-
-    response = chunk_to_ai_message(aggregated)
-    return {"messages": [response]}
+    return _evaluation_agent_node
 
 
 def _should_continue(state: EvaluationState) -> str:
@@ -120,10 +130,18 @@ def _extract_section(text: str, header: str) -> str:
 class EvaluationAgent:
     """章节评估 Agent — 使用 LangGraph StateGraph 编排"""
 
-    def _build_graph(self):
+    def _build_graph(self, *, enable_child_todolist: bool = False, emit=None):
+        tools = build_evaluation_tools(enable_child_todolist=enable_child_todolist)
         graph = StateGraph(EvaluationState)
-        graph.add_node("agent", _evaluation_agent_node)
-        graph.add_node("tools", ToolNode(EVALUATION_TOOLS))
+        graph.add_node(
+            "agent",
+            _make_evaluation_agent_node(
+                tools,
+                enable_child_todolist=enable_child_todolist,
+                emit=emit or (lambda _e, _d: None),
+            ),
+        )
+        graph.add_node("tools", ToolNode(tools))
         graph.add_edge(START, "agent")
         graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})
         graph.add_edge("tools", "agent")
@@ -150,11 +168,13 @@ class EvaluationAgent:
         """
         from app.models.work_model import Chapter
 
-        graph = self._build_graph()
         configurable = dict(base_configurable or {})
+        enable_child_todolist = bool(configurable.get("enable_child_todolist", False))
+        emit = configurable.get("emit") or (lambda e, d: None)
+        graph = self._build_graph(enable_child_todolist=enable_child_todolist, emit=emit)
         configurable.update({
             "db": db,
-            "emit": configurable.get("emit") or (lambda e, d: None),
+            "emit": emit,
             "work_id": work_id,
             "chapter_number": chapter_number,
         })
@@ -176,6 +196,7 @@ class EvaluationAgent:
             work_id=work_id,
             chapter_number=chapter_number,
             user_message=user_msg,
+            enable_child_todolist=enable_child_todolist,
         )
 
         messages = [SystemMessage(content=system_prompt), HumanMessage(content=user_msg)]

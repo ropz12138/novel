@@ -45,6 +45,7 @@ const mdComponents = {
 export function ChatTimeline({
   timeline,
   assistantDraft,
+  assistantReasoningDraft = "",
   editDiff,
   outlineDiff,
   characterDiff,
@@ -56,7 +57,7 @@ export function ChatTimeline({
 }) {
   const bottomRef = useRef(null);
 
-  const hasContent = timeline.length > 0 || assistantDraft || editDiff || outlineDiff || characterDiff;
+  const hasContent = timeline.length > 0 || assistantReasoningDraft || assistantDraft || editDiff || outlineDiff || characterDiff;
   if (!hasContent && !running) return null;
 
   return (
@@ -65,6 +66,7 @@ export function ChatTimeline({
         // ── Execution step ──
         if (item.kind === "step") {
           const showContent = item.status === "running" || (item.status === "done" && item.panelOpen);
+          const hasStream = (item.reasoningStream && item.reasoningStream.trim()) || (item.stream && item.stream.trim());
           return (
             <div key={`s-${item.id}`} className="flex gap-2 justify-start pl-1">
               <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center text-slate-300">
@@ -76,12 +78,12 @@ export function ChatTimeline({
               </div>
               <div className="max-w-[min(100%,42rem)] flex-1 min-w-0 py-0.5">
                 <div
-                  className={`text-[11px] font-normal leading-snug text-slate-400 select-none ${item.stream && item.stream.trim() ? "cursor-pointer hover:text-slate-600" : ""}`}
-                  onClick={() => item.stream && item.stream.trim() && onToggleStep(item.id)}
+                  className={`text-[11px] font-normal leading-snug text-slate-400 select-none ${hasStream ? "cursor-pointer hover:text-slate-600" : ""}`}
+                  onClick={() => hasStream && onToggleStep(item.id)}
                 >
                   {item.label}
                 </div>
-                {showContent && item.stream && item.stream.trim().length > 0 && (
+                {showContent && hasStream && (
                   <div
                     ref={(el) => {
                       if (el && item.status === "running") {
@@ -90,7 +92,14 @@ export function ChatTimeline({
                     }}
                     className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[10px] font-normal leading-relaxed text-slate-400"
                   >
-                    {item.stream}
+                    {item.reasoningStream && item.reasoningStream.trim() && (
+                      <div className="mb-1 text-[10px] leading-relaxed text-slate-300">
+                        {item.reasoningStream}
+                      </div>
+                    )}
+                    {item.stream && item.stream.trim() && (
+                      <div>{item.stream}</div>
+                    )}
                     {item.status === "running" && (
                       <span className="inline-block h-2.5 w-px animate-pulse bg-slate-400 align-text-bottom" />
                     )}
@@ -212,14 +221,34 @@ export function ChatTimeline({
       )}
 
       {/* Streaming draft */}
-      {assistantDraft && (
+      {(assistantReasoningDraft || assistantDraft) && (
         <div className="flex gap-3 justify-start">
           <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-500">
             <Bot className="h-3.5 w-3.5" />
           </div>
           <div className="max-w-[85%] rounded-xl bg-slate-100 px-4 py-2.5 text-sm leading-relaxed text-slate-800">
-            <Markdown remarkPlugins={[remarkGfm]}>{assistantDraft}</Markdown>
-            {running && (
+            {assistantReasoningDraft && !assistantDraft && (
+              <div className="mb-2 border-b border-slate-200/70 pb-2">
+                <div className="mb-1 text-[10px] font-medium text-slate-400">思考过程</div>
+                <div
+                  ref={(el) => {
+                    if (el && running) {
+                      el.scrollTop = el.scrollHeight;
+                    }
+                  }}
+                  className="max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-xs leading-relaxed text-slate-400"
+                >
+                  {assistantReasoningDraft}
+                  {running && (
+                    <span className="inline-block h-2.5 w-px animate-pulse bg-slate-400 align-text-bottom ml-0.5" />
+                  )}
+                </div>
+              </div>
+            )}
+            {assistantDraft && (
+              <Markdown remarkPlugins={[remarkGfm]}>{assistantDraft}</Markdown>
+            )}
+            {running && assistantDraft && (
               <span className="inline-block h-2.5 w-px animate-pulse bg-slate-400 align-text-bottom ml-0.5" />
             )}
           </div>
@@ -368,7 +397,7 @@ function renderMessageContent(msg, confirming, onConfirmEdit) {
     default:
       // User message or plain assistant text
       if (msg.role === "user") {
-        return <p>{msg.content}</p>;
+        return <p className="whitespace-pre-wrap break-words">{msg.content}</p>;
       }
       return (
         <>

@@ -14,10 +14,6 @@ def list_characters(work_id: str, db: Session, role_type: str | None = None, *, 
     return service.list_characters(work_id, db, role_type, user_id=user_id)
 
 
-def get_character(work_id: str, character_id: str, db: Session, *, user_id: str) -> CharacterOut:
-    return service.get_character(work_id, character_id, db, user_id=user_id)
-
-
 def create_character(work_id: str, payload: CharacterCreateRequest, db: Session, *, user_id: str) -> CharacterOut:
     return service.create_character(work_id, payload, db, user_id=user_id)
 
@@ -28,11 +24,3 @@ def update_character(work_id: str, character_id: str, payload: CharacterUpdateRe
 
 def delete_character(work_id: str, character_id: str, db: Session, *, user_id: str) -> None:
     service.delete_character(work_id, character_id, db, user_id=user_id)
-
-
-def query_data(work_id: str, target: str, filters: dict, db: Session, *, user_id: str) -> list[dict]:
-    return service.query_data(work_id, target, filters, db, user_id=user_id)
-
-
-def grep(work_id: str, keyword: str, scope: str = "all", context_chars: int = 200, db: Session = None, *, user_id: str) -> list[dict]:
-    return service.grep(work_id, keyword, scope, context_chars, db, user_id=user_id)

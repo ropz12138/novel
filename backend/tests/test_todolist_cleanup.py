@@ -197,6 +197,7 @@ class TestExecuteTodoTaskDependencyWithDuplicateTaskIds:
             "db": mock_db,
             "emit": lambda e, d: None,
             "supervisor_session_id": "sess-1",
+            "enable_evaluation": True,
         }}
 
         with patch(

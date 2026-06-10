@@ -64,7 +64,7 @@
 修改角色的字段。通过角色名定位角色。
 参数：
 - name: 角色名（必须与角色库中已有角色完全匹配）
-- fields: 要修改的字段字典。可修改字段：name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, last_location, first_chapter, notes
+- fields: 要修改的字段字典。可修改字段：name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, last_location, first_appearance_stage, notes
 
 #### add_character
 新增一个角色。
@@ -80,7 +80,7 @@
 - current_status: 故事开始前的状态（默认"存活"），禁止包含大纲中任何剧情事件发生后才出现的状态
 - current_goal: 故事开始前的目的/动机，禁止填入剧情推进后才产生的新目标
 - last_location: 当前所在位置（如未知可填"未知"）
-- first_chapter: 首次出场章节（默认1）
+- first_appearance_stage: 首次出场阶段（默认M1，中纲阶段ID）
 - notes: 补充备注
 
 #### delete_character
@@ -99,4 +99,4 @@
 6. chapter_start 必须 <= chapter_end。
 7. 角色操作中，name 必须与角色库中已有角色名完全匹配（update_character / delete_character）。
 8. 当用户要求修改角色信息（如改名、改性格、改状态等），使用角色工具而不是大纲工具。
-9. 当调用 add_character 新增角色时，必须同时初始化角色动态状态：至少给出 current_status、current_goal、last_location、first_chapter。若用户未提供，可使用合理默认值（如 current_status="存活"、current_goal=""、last_location="未知"）。关键约束：角色的所有字段都必须描述**故事开始前**的状态，即角色还没有经历任何大纲中列出的剧情事件时的初始面貌——appearance 禁止包含故事发展后才出现的外貌变化，personality 禁止包含经历事件后才形成的性格转变，skills 禁止列出来自故事后续成长才获得的能力，current_status 禁止包含大纲中任何剧情事件发生后才出现的状态，current_goal 禁止填入剧情推进后才产生的新目标。
+9. 当调用 add_character 新增角色时，必须同时初始化角色动态状态：至少给出 current_status、current_goal、last_location、first_appearance_stage。若用户未提供，可使用合理默认值（如 current_status="存活"、current_goal=""、last_location="未知"、first_appearance_stage="M1"）。关键约束：角色的所有字段都必须描述**故事开始前**的状态，即角色还没有经历任何大纲中列出的剧情事件时的初始面貌——appearance 禁止包含故事发展后才出现的外貌变化，personality 禁止包含经历事件后才形成的性格转变，skills 禁止列出来自故事后续成长才获得的能力，current_status 禁止包含大纲中任何剧情事件发生后才出现的状态，current_goal 禁止填入剧情推进后才产生的新目标。

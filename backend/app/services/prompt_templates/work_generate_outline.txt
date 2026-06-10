@@ -25,7 +25,7 @@
 
 1. 必须调用 `submit_outline` 工具提交完整大纲，不要在普通文本 content 中输出大纲。
 2. 工具参数必须包含键：story、timeline、branches、foreshadowing、characters。
-3. characters 数组只能包含角色对象，禁止把字段名（如 current_goal、first_chapter）作为数组元素。
+3. characters 数组只能包含角色对象，禁止把字段名（如 current_goal、first_appearance_stage）作为数组元素。
 4. branches.attach_to 必须引用 timeline 已存在的 id。
 5. side 只能为 left 或 right。
 6. chapter_start/chapter_end 必须是整数且 chapter_start <= chapter_end。
@@ -36,7 +36,7 @@
 - timeline[]: {{id, order, development_node, summary, time_node, chapter_start, chapter_end}}
 - branches[]: {{id, name, attach_to, side, chapter_start, chapter_end, summary}}
 - foreshadowing[]: {{id, plant_node, payoff_node, content}}
-- characters[]: {{name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, first_chapter}}
+- characters[]: {{name, role_type, gender, age, appearance, personality, background, skills, current_status, current_goal, first_appearance_stage}}
 
 ### 角色初始状态约束（重要）
 

@@ -1,8 +1,7 @@
-import { authFetch } from "../lib/authFetch";
-import { API_BASE } from "../lib/runtime-config";
+import { workApi } from "../lib/rpcApi";
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { BookOpen, GitBranch, Trash2, Calendar, Cpu, Bot } from "lucide-react";
+import { BookOpen, GitBranch, Trash2, Calendar, Bot } from "lucide-react";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../components/ui/card";
 
@@ -14,7 +13,7 @@ export function DashboardPage() {
 
   const fetchWorks = async () => {
     try {
-      const res = await authFetch(`${API_BASE}/works`);
+      const res = await workApi.list();
       if (res.ok) {
         const data = await res.json();
         setWorks(data);
@@ -40,7 +39,7 @@ export function DashboardPage() {
     e.preventDefault();
     e.stopPropagation();
     if (!confirm("确定删除这部作品？")) return;
-    await authFetch(`${API_BASE}/works/${workId}`, { method: "DELETE" });
+    await workApi.delete(workId);
     setWorks((prev) => prev.filter((w) => w.id !== workId));
   };
 
@@ -64,11 +63,6 @@ export function DashboardPage() {
                   <Bot className="h-4 w-4" /> AI 写作助手
                 </Link>
               </Button>
-              <Button variant="outline" asChild>
-                <Link to="/architecture" className="flex items-center gap-1.5">
-                  <Cpu className="h-4 w-4" /> Agent 架构
-                </Link>
-              </Button>
               <Button variant="outline" onClick={handleLogout}>退出登录</Button>
             </div>
           </div>
@@ -82,8 +76,8 @@ export function DashboardPage() {
             {works.map((work) => {
               const outline = work.outline_tree || {};
               const story = outline.story || {};
-              const timeline = outline.timeline || [];
-              const branches = outline.branches || [];
+              const macroPhases = outline.outline?.macro_phases || [];
+              const mesoStages = outline.meso?.meso_stages || [];
               const tags = work.tags || [];
               const createdDate = work.created_at ? new Date(work.created_at).toLocaleDateString("zh-CN") : "";
 
@@ -113,9 +107,9 @@ export function DashboardPage() {
                     <CardContent className="space-y-3">
                       <div className="flex items-center gap-3 text-xs text-slate-500">
                         <span className="flex items-center gap-1">
-                          <GitBranch className="h-3 w-3" /> {timeline.length} 主线
+                          <GitBranch className="h-3 w-3" /> {macroPhases.length} 大纲
                         </span>
-                        <span>{branches.length} 支线</span>
+                        <span>{mesoStages.length} 中纲</span>
                       </div>
                       {tags.length > 0 && (
                         <div className="flex flex-wrap gap-1">

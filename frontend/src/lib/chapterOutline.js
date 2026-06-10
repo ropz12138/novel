@@ -3,15 +3,16 @@
  */
 export function extractChapterNumbers(outlineTree) {
   if (!outlineTree) return [];
-  const timeline = outlineTree.timeline || [];
-  const branches = outlineTree.branches || [];
-  const allNodes = [...timeline, ...branches];
+  const macroPhases = outlineTree.outline?.macro_phases || [];
+  const mesoStages = outlineTree.meso?.meso_stages || [];
+  const allNodes = [...macroPhases, ...mesoStages];
 
   if (allNodes.length === 0) return [];
 
   let maxChapter = 0;
   for (const node of allNodes) {
-    const end = node.chapter_end || 0;
+    const range = node.chapter_range || [0, 0];
+    const end = range[1] || 0;
     if (end > maxChapter) maxChapter = end;
   }
 

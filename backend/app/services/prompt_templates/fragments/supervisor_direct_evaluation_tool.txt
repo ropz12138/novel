@@ -1,0 +1,1 @@
+- **dispatch_evaluation**: 派发章节评估任务给 EvaluationAgent。当用户要求评价、评估、打分、指出章节问题、从编辑或读者视角审稿时使用。

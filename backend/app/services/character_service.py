@@ -39,7 +39,7 @@ class CharacterService:
             "skills": c.skills or "",
             "current_status": c.current_status or "",
             "current_goal": c.current_goal or "",
-            "first_chapter": c.first_chapter or 1,
+            "first_appearance_stage": c.first_appearance_stage or "M1",
         }
 
     @staticmethod
@@ -52,7 +52,7 @@ class CharacterService:
         chars = (
             db.query(Character)
             .filter_by(work_id=work_id)
-            .order_by(Character.first_chapter.asc(), Character.created_at.asc())
+            .order_by(Character.first_appearance_stage.asc(), Character.created_at.asc())
             .all()
         )
         outline_chars = [CharacterService._character_to_outline_dict(c) for c in chars]
@@ -71,30 +71,22 @@ class CharacterService:
         return [CharacterOut.model_validate(c) for c in chars]
 
     @staticmethod
-    def get_character(work_id: str, character_id: str, db: Session, *, user_id: str) -> CharacterOut:
-        _verify_work_ownership(work_id, user_id, db)
-        char = db.query(Character).filter_by(work_id=work_id, id=character_id).first()
-        if not char:
-            raise HTTPException(status_code=404, detail="角色不存在")
-        return CharacterOut.model_validate(char)
-
-    @staticmethod
     def create_character(work_id: str, payload: CharacterCreateRequest, db: Session, *, user_id: str) -> CharacterOut:
         _verify_work_ownership(work_id, user_id, db)
         existing = db.query(Character).filter_by(work_id=work_id, name=payload.name).first()
         if existing:
             raise HTTPException(status_code=409, detail=f"角色 '{payload.name}' 已存在")
         data = payload.model_dump()
-        first_chapter = data.get("first_chapter") or 1
+        first_appearance_stage = data.get("first_appearance_stage") or "M1"
         if not data.get("current_status"):
             data["current_status"] = "存活"
         data["current_goal"] = data.get("current_goal", "") or ""
         data["last_location"] = data.get("last_location", "") or ""
         data["relationships"] = data.get("relationships", {}) or {}
         if data.get("last_chapter") is None:
-            data["last_chapter"] = first_chapter
-        if data.get("first_chapter") is None:
-            data["first_chapter"] = first_chapter
+            data["last_chapter"] = None
+        if data.get("first_appearance_stage") is None:
+            data["first_appearance_stage"] = first_appearance_stage
 
         char = Character(work_id=work_id, **data)
         db.add(char)
@@ -164,10 +156,11 @@ class CharacterService:
                     q = q.filter(Character.current_status.in_(value))
                 else:
                     q = q.filter(Character.current_status == value)
-            elif key == "first_chapter__lte":
-                q = q.filter(Character.first_chapter <= int(value))
-            elif key == "first_chapter__gte":
-                q = q.filter(Character.first_chapter >= int(value))
+            elif key == "first_appearance_stage":
+                if isinstance(value, list):
+                    q = q.filter(Character.first_appearance_stage.in_(value))
+                else:
+                    q = q.filter(Character.first_appearance_stage == value)
             elif key == "last_chapter__lte":
                 q = q.filter(Character.last_chapter <= int(value))
             elif key == "last_chapter__gte":
@@ -199,7 +192,7 @@ class CharacterService:
                 "last_location": c.last_location,
                 "last_chapter": c.last_chapter,
                 "relationships": c.relationships,
-                "first_chapter": c.first_chapter,
+                "first_appearance_stage": c.first_appearance_stage,
                 "notes": c.notes,
             }
             for c in chars

@@ -19,6 +19,8 @@ from app.services.supervisor.supervisor_agent import SupervisorAgent
 from app.services.agent_log_service import log_event, new_session_id
 from app.services import message_service
 
+from app.services.stream_trace import gap_log, gap_log_sse_emit
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/supervisor", tags=["supervisor"])
@@ -166,7 +168,6 @@ def persist_event_message(db: Session, session_id: str, event: str, data: dict) 
                     "chapter_number": data.get("chapter_number"),
                     "summary": data.get("summary", ""),
                     "key_plot_points": data.get("key_plot_points", []),
-                    "foreshadows": data.get("foreshadows", []),
                     "diff": data.get("diff", {}),
                     "diff_summary": data.get("diff_summary", {}),
                 },
@@ -189,7 +190,6 @@ def persist_event_message(db: Session, session_id: str, event: str, data: dict) 
                     "chapter_number": data.get("chapter_number"),
                     "summary": data.get("summary", ""),
                     "key_plot_points": data.get("key_plot_points", []),
-                    "foreshadows": data.get("foreshadows", []),
                 },
             },
         )
@@ -391,17 +391,19 @@ async def start_supervisor(
 ):
     """启动统筹 Agent 新会话。返回 SSE 流。"""
     t0 = time.perf_counter()
+    gap_log("http_start", t0=t0, route="start", message_len=len(payload.message or ""), work_id=payload.work_id or "")
     logger.info("supervisor_router.start message_len=%s work_id=%s", len(payload.message or ""), payload.work_id)
     queue: asyncio.Queue = asyncio.Queue()
-
-    def emit(event: str, data: dict):
-        logger.debug("supervisor_router.emit event=%s data_keys=%s", event, list(data.keys()) if isinstance(data, dict) else type(data))
-        queue.put_nowait((event, data))
 
     async def event_generator():
         task = _launch_supervisor_task(
             queue=queue,
-            runner=lambda agent: agent.start(message=payload.message, auto_mode=payload.auto_mode),
+            runner=lambda agent: agent.start(
+                message=payload.message,
+                auto_mode=payload.auto_mode,
+                enable_todolist=payload.enable_todolist,
+                enable_evaluation=payload.enable_evaluation,
+            ),
             work_id=payload.work_id,
             log_label="start",
             t0=t0,
@@ -409,11 +411,16 @@ async def start_supervisor(
         )
 
         try:
+            first_yield = False
             while True:
                 item = await queue.get()
                 if item is None:
                     break
                 event, data = item
+                if not first_yield:
+                    first_yield = True
+                    sid = data.get("session_id") if isinstance(data, dict) else None
+                    gap_log("first_sse_yield", session_id=sid, t0=t0, event=event)
                 yield _sse_format(event, data)
         except asyncio.CancelledError:
             logger.info("supervisor_router.start client disconnected; run task continues in background")
@@ -437,17 +444,25 @@ async def resume_supervisor(
 ):
     """恢复已有统筹 Agent 会话。返回 SSE 流。"""
     t0 = time.perf_counter()
+    gap_log(
+        "http_start",
+        session_id=payload.session_id,
+        t0=t0,
+        route="resume",
+        message_len=len(payload.message or ""),
+    )
     logger.info("supervisor_router.resume session_id=%s message_len=%s", payload.session_id, len(payload.message or ""))
     queue: asyncio.Queue = asyncio.Queue()
-
-    def emit(event: str, data: dict):
-        logger.debug("supervisor_router.emit event=%s data_keys=%s", event, list(data.keys()) if isinstance(data, dict) else type(data))
-        queue.put_nowait((event, data))
 
     async def event_generator():
         task = _launch_supervisor_task(
             queue=queue,
-            runner=lambda agent: agent.resume(session_id=payload.session_id, message=payload.message),
+            runner=lambda agent: agent.resume(
+                session_id=payload.session_id,
+                message=payload.message,
+                enable_todolist=payload.enable_todolist,
+                enable_evaluation=payload.enable_evaluation,
+            ),
             work_id=None,
             log_label="resume",
             t0=t0,
@@ -456,11 +471,20 @@ async def resume_supervisor(
         )
 
         try:
+            first_yield = False
             while True:
                 item = await queue.get()
                 if item is None:
                     break
                 event, data = item
+                if not first_yield:
+                    first_yield = True
+                    gap_log(
+                        "first_sse_yield",
+                        session_id=payload.session_id,
+                        t0=t0,
+                        event=event,
+                    )
                 yield _sse_format(event, data)
         except asyncio.CancelledError:
             logger.info("supervisor_router.resume client disconnected; run task continues in background")
@@ -705,6 +729,7 @@ def _launch_supervisor_task(
 
     def emit(event: str, data: dict):
         nonlocal current_session_id, run_db
+        gap_log_sse_emit(event, data, session_id=current_session_id, t0=t0)
         logger.debug(
             "supervisor_router.emit event=%s data_keys=%s",
             event,
@@ -727,10 +752,18 @@ def _launch_supervisor_task(
     async def run():
         nonlocal run_db
         run_db = SessionLocal()
-        agent = SupervisorAgent(emit=emit, db=run_db, work_id=work_id, user_id=user_id)
+        gap_log("background_task_begin", session_id=current_session_id, t0=t0, log_label=log_label)
+        agent = SupervisorAgent(
+            emit=emit,
+            db=run_db,
+            work_id=work_id,
+            user_id=user_id,
+            gap_trace_t0=t0,
+        )
         try:
             logger.info("supervisor_router.run begin agent.%s", log_label)
             await runner(agent)
+            gap_log("background_task_end", session_id=current_session_id, t0=t0, log_label=log_label)
             logger.info(
                 "supervisor_router.run end agent.%s elapsed_ms=%.1f",
                 log_label,

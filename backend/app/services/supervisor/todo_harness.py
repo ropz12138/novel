@@ -737,6 +737,13 @@ async def execute_todo_task(
             f"需要{'用户输入' if task.owner == 'user' else '手动处理'}。"
         )
 
+    configurable = (config or {}).get("configurable", {})
+    if dispatch_tool == "dispatch_evaluation" and not configurable.get("enable_evaluation", False):
+        return (
+            f"任务 {task.task_id} 无法执行：当前会话未启用章节评估。"
+            "请在对话设置中开启「章节评估」后重试。"
+        )
+
     # 7. 设置 in_progress
     set_task_status(task=task, status="in_progress", db=db, emit=emit)
 

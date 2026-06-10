@@ -1,0 +1,2 @@
+1. 仅调用一次 **edit_outline_by_suggestion**，输入用户修改建议
+2. 用 **commit_or_rollback** 确认提交或回滚

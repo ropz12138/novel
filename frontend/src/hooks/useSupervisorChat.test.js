@@ -67,6 +67,7 @@ describe("useSupervisorChat", () => {
       expect(result.current.running).toBe(false);
       expect(result.current.sessionId).toBe(null);
       expect(result.current.assistantDraft).toBe("");
+      expect(result.current.assistantReasoningDraft).toBe("");
       expect(result.current.editDiff).toBe(null);
       expect(result.current.outlineDiff).toBe(null);
       expect(result.current.characterDiff).toBe(null);
@@ -105,6 +106,70 @@ describe("useSupervisorChat", () => {
       const msg = result.current.timeline[0];
       expect(msg.type).toBe("outline_created");
       expect(msg.workId).toBe("w1");
+    });
+  });
+
+  describe("finalizeAllRunningSteps", () => {
+    it("marks every running step as done", async () => {
+      const { applyFinalizeAllRunningSteps } = await import("./useSupervisorChat");
+      const timeline = [
+        { kind: "step", id: 1, label: "生成小纲", status: "running" },
+        { kind: "message", id: 2, role: "user", content: "hi" },
+        { kind: "step", id: 3, label: "进行中", status: "running" },
+      ];
+      const next = applyFinalizeAllRunningSteps(timeline);
+      expect(next[0].status).toBe("done");
+      expect(next[2].status).toBe("done");
+    });
+
+    it("clears running step after stage_start when supervisor_done arrives without outline_done", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.setRunning(true);
+        result.current._testOnSSE("stage_start", { stage: "micro_outline_create", label: "生成小纲" });
+        result.current._testOnSSE("supervisor_done", {});
+      });
+
+      expect(result.current.timeline.some((item) => item.kind === "step" && item.status === "running")).toBe(false);
+      const step = result.current.timeline.find((item) => item.label === "生成小纲");
+      expect(step?.status).toBe("done");
+      expect(result.current.running).toBe(false);
+    });
+
+    it("clears running step on error event", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.setRunning(true);
+        result.current._testOnSSE("stage_start", { stage: "micro_outline_create", label: "生成小纲" });
+        result.current._testOnSSE("error", { message: "Request timed out." });
+      });
+
+      expect(result.current.timeline.some((item) => item.kind === "step" && item.status === "running")).toBe(false);
+      expect(result.current.running).toBe(false);
+    });
+
+    it("clears running step on outline_stage_error event", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("stage_start", { stage: "micro_outline_create", label: "生成小纲" });
+        result.current._testOnSSE("outline_stage_error", {
+          stage: "micro",
+          message: "小纲生成失败：timeout",
+        });
+      });
+
+      expect(result.current.timeline.some((item) => item.kind === "step" && item.status === "running")).toBe(false);
+      const errMsg = result.current.timeline.find((m) => m.type === "outline_stage_error");
+      expect(errMsg?.content).toContain("小纲生成失败");
     });
   });
 
@@ -292,6 +357,27 @@ describe("useSupervisorChat", () => {
       expect(result.current.timeline).toHaveLength(0);
     });
 
+    it("preserves multiline input in timeline and request body", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true })
+      );
+
+      act(() => {
+        result.current.setInput("第一行\n第二行");
+      });
+
+      act(() => {
+        result.current.handleSend();
+      });
+
+      expect(
+        result.current.timeline.some((m) => m.role === "user" && m.content === "第一行\n第二行")
+      ).toBe(true);
+
+      const body = JSON.parse(mockAuthFetchCalls[0][1].body);
+      expect(body.message).toBe("第一行\n第二行");
+    });
+
     it("adds user message to timeline and initiates SSE with correct params", () => {
       const { result } = renderHook(() =>
         useSupervisorChat({ workId: "w1", autoMode: true })
@@ -321,7 +407,12 @@ describe("useSupervisorChat", () => {
 
     it("sends resume when session exists", () => {
       const { result } = renderHook(() =>
-        useSupervisorChat({ workId: "w1", autoMode: false })
+        useSupervisorChat({
+          workId: "w1",
+          autoMode: false,
+          enableTodolist: true,
+          enableEvaluation: true,
+        })
       );
 
       // Simulate session_created
@@ -348,6 +439,8 @@ describe("useSupervisorChat", () => {
       const body = JSON.parse(mockAuthFetchCalls[0][1].body);
       expect(body.session_id).toBe("s1");
       expect(body.message).toBe("continue");
+      expect(body.enable_todolist).toBe(true);
+      expect(body.enable_evaluation).toBe(true);
     });
   });
 
@@ -402,6 +495,21 @@ describe("useSupervisorChat", () => {
   });
 
   describe("SSE event: supervisor_stream / supervisor_done", () => {
+    it("accumulates reasoning stream before content stream", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("supervisor_stream", { chunk: "分析", phase: "reasoning" });
+        result.current._testOnSSE("supervisor_stream", { chunk: "中", phase: "reasoning" });
+        result.current._testOnSSE("supervisor_stream", { chunk: "你好", phase: "content" });
+      });
+
+      expect(result.current.assistantReasoningDraft).toBe("分析中");
+      expect(result.current.assistantDraft).toBe("你好");
+    });
+
     it("accumulates stream text and finalizes on done", () => {
       const { result } = renderHook(() =>
         useSupervisorChat({ workId: "w1", autoMode: false })
@@ -451,6 +559,93 @@ describe("useSupervisorChat", () => {
       expect(msg).toBeDefined();
       expect(msg.content).toContain("New Novel");
     });
+
+    it("does not trigger onWorkCreated for stage-only outline_done", () => {
+      const onWorkCreated = vi.fn();
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false, callbacks: { onWorkCreated } })
+      );
+
+      act(() => {
+        result.current._testOnSSE("outline_done", {
+          work_id: "w1",
+          title: "尸帝",
+          stage: "meso",
+        });
+      });
+
+      expect(onWorkCreated).not.toHaveBeenCalled();
+      const msg = result.current.timeline.find((m) => m.type === "outline_stage_done");
+      expect(msg?.content).toBe("中纲生成完成。");
+    });
+
+    it("shows fallback title when macro outline_done lacks title", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: null, autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("outline_done", { work_id: "w3" });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "outline_created");
+      expect(msg?.content).toBe("已创建作品「未命名作品」的大纲。");
+    });
+  });
+
+  describe("SSE event: outline_stream", () => {
+    it("appends content chunk to running step stream", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.setRunning(true);
+        result.current._testOnSSE("stage_start", { stage: "macro_outline", label: "生成宏纲" });
+        result.current._testOnSSE("outline_stream", { chunk: "第一幕：", phase: "content" });
+      });
+
+      const step = result.current.timeline.find((s) => s.kind === "step" && s.label === "生成宏纲");
+      expect(step?.stream).toContain("第一幕：");
+    });
+
+    it("appends reasoning chunk to running step reasoningStream", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.setRunning(true);
+        result.current._testOnSSE("stage_start", { stage: "macro_outline", label: "生成宏纲" });
+        result.current._testOnSSE("outline_stream", { chunk: "thinking...", phase: "reasoning" });
+      });
+
+      const step = result.current.timeline.find((s) => s.kind === "step" && s.label === "生成宏纲");
+      expect(step?.reasoningStream).toContain("thinking...");
+    });
+  });
+
+  describe("formatOutlineDoneMessage", () => {
+    it("formats macro outline creation", async () => {
+      const { formatOutlineDoneMessage } = await import("./useSupervisorChat");
+      expect(formatOutlineDoneMessage({ title: "尸帝" })).toBe(
+        "已创建作品「尸帝」的大纲。"
+      );
+    });
+
+    it("formats stage-specific messages", async () => {
+      const { formatOutlineDoneMessage } = await import("./useSupervisorChat");
+      expect(formatOutlineDoneMessage({ stage: "meso", title: "尸帝" })).toBe(
+        "中纲生成完成。"
+      );
+      expect(formatOutlineDoneMessage({ stage: "micro", title: "尸帝" })).toBe(
+        "小纲生成完成。"
+      );
+      expect(formatOutlineDoneMessage({ stage: "character_details", title: "尸帝" })).toBe(
+        "角色详情生成完成。"
+      );
+    });
   });
 
   describe("SSE event: saved", () => {
@@ -475,6 +670,68 @@ describe("useSupervisorChat", () => {
     });
   });
 
+  describe("SSE event: edit_chapter_applied", () => {
+    it("triggers onChapterUpdated when chapter content is saved", () => {
+      const onChapterUpdated = vi.fn();
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true, callbacks: { onChapterUpdated } })
+      );
+
+      act(() => {
+        result.current._testOnSSE("edit_chapter_applied", {
+          chapter_number: 5,
+          title: "第五章",
+          word_count: 3200,
+        });
+      });
+
+      expect(onChapterUpdated).toHaveBeenCalledWith(5);
+    });
+
+    it("does not call onChapterUpdated when chapter_number is missing", () => {
+      const onChapterUpdated = vi.fn();
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true, callbacks: { onChapterUpdated } })
+      );
+
+      act(() => {
+        result.current._testOnSSE("edit_chapter_applied", { title: "第五章", word_count: 3200 });
+      });
+
+      expect(onChapterUpdated).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("SSE event: edit_chapter_accepted", () => {
+    it("triggers onChapterUpdated and clears editDiff", () => {
+      const onChapterUpdated = vi.fn();
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false, callbacks: { onChapterUpdated } })
+      );
+
+      act(() => {
+        result.current._testOnSSE("edit_chapter_diff", {
+          diff: [],
+          summary: {},
+          new_content: "new",
+          chapter_number: 3,
+          readonly: false,
+        });
+        result.current._testOnSSE("edit_chapter_accepted", {
+          chapter_number: 3,
+          title: "第三章",
+          word_count: 1500,
+        });
+      });
+
+      expect(onChapterUpdated).toHaveBeenCalledWith(3);
+      expect(result.current.editDiff).toBe(null);
+    });
+  });
+
   describe("SSE event: error", () => {
     it("adds error message to timeline and stops running", () => {
       const { result } = renderHook(() =>
@@ -492,6 +749,24 @@ describe("useSupervisorChat", () => {
       expect(errMsg).toBeDefined();
       expect(errMsg.content).toContain("something went wrong");
       expect(result.current.running).toBe(false);
+    });
+  });
+
+  describe("SSE event: edit_chapter_stream / write_stream with phase", () => {
+    it("accumulates reasoning and content in running step", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.pushExecStep("写第1章");
+        result.current._testOnSSE("write_stream", { chunk: "构思", phase: "reasoning" });
+        result.current._testOnSSE("edit_chapter_stream", { chunk: '{"edits":', phase: "content" });
+      });
+
+      const step = result.current.timeline.find((item) => item.kind === "step" && item.status === "running");
+      expect(step.reasoningStream).toBe("构思");
+      expect(step.stream).toBe('{"edits":');
     });
   });
 
@@ -742,6 +1017,106 @@ describe("useSupervisorChat", () => {
         (m) => m.type === "edit_diff_card" && m.diffCard?.readonly
       );
       expect(msg).toBeDefined();
+    });
+
+    it("ignores non-readonly diffs in auto mode", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true })
+      );
+
+      act(() => {
+        result.current._testOnSSE("edit_chapter_diff", {
+          diff: [{ old: "a", new: "b" }],
+          summary: { lines_added: 1, lines_removed: 1 },
+          new_content: "updated text",
+          chapter_number: 1,
+          readonly: false,
+        });
+      });
+
+      expect(result.current.editDiff).toBe(null);
+      expect(result.current.timeline.some((m) => m.type === "edit_diff_card")).toBe(false);
+    });
+  });
+
+  describe("SSE event: edit_chapter_auto_applied", () => {
+    it("removes pending non-readonly card for same chapter", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+      sessionApi.getSupervisorMessages.mockResolvedValue([
+        {
+          role: "assistant",
+          content: "",
+          meta: {
+            type: "edit_diff_card",
+            diffCard: {
+              chapter_number: 1,
+              readonly: false,
+              summary: { lines_added: 11, lines_removed: 45 },
+              diff: [],
+            },
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true })
+      );
+
+      await act(async () => {
+        await result.current.handleSelectSession({ id: "s1" });
+      });
+
+      expect(result.current.timeline.filter((m) => m.type === "edit_diff_card")).toHaveLength(1);
+
+      act(() => {
+        result.current._testOnSSE("edit_chapter_auto_applied", {
+          diff: [],
+          summary: { lines_added: 11, lines_removed: 45 },
+          new_content: "new",
+          chapter_number: 1,
+        });
+      });
+
+      const cards = result.current.timeline.filter((m) => m.type === "edit_diff_card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].diffCard.readonly).toBe(true);
+    });
+
+    it("dedupes persisted pending card when loading session with auto-applied card", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+      sessionApi.getSupervisorMessages.mockResolvedValue([
+        {
+          role: "assistant",
+          content: "",
+          meta: {
+            type: "edit_diff_card",
+            diffCard: { chapter_number: 1, readonly: false, summary: {}, diff: [] },
+          },
+          created_at: new Date().toISOString(),
+        },
+        {
+          role: "assistant",
+          content: "",
+          meta: {
+            type: "edit_diff_card",
+            diffCard: { chapter_number: 1, readonly: true, summary: {}, diff: [] },
+          },
+          created_at: new Date().toISOString(),
+        },
+      ]);
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true })
+      );
+
+      await act(async () => {
+        await result.current.handleSelectSession({ id: "s1" });
+      });
+
+      const cards = result.current.timeline.filter((m) => m.type === "edit_diff_card");
+      expect(cards).toHaveLength(1);
+      expect(cards[0].diffCard.readonly).toBe(true);
     });
   });
 

@@ -171,7 +171,7 @@ def test_normalize_coerces_loose_integer_fields():
             }
         ],
         "foreshadowing": [],
-        "characters": [{"name": "角色", "first_chapter": "第2章"}],
+        "characters": [{"name": "角色", "first_appearance_stage": "M2"}],
     })
 
     assert result["timeline"][0]["order"] == 3
@@ -179,4 +179,4 @@ def test_normalize_coerces_loose_integer_fields():
     assert result["timeline"][0]["chapter_end"] == 30
     assert result["branches"][0]["chapter_start"] == 4
     assert result["branches"][0]["chapter_end"] == 6
-    assert result["characters"][0]["first_chapter"] == 2
+    assert result["characters"][0]["first_appearance_stage"] == "M2"

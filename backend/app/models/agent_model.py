@@ -54,6 +54,12 @@ class SupervisorSession(Base):
     # 自动模式：True 时所有编辑操作直接执行，不等待用户确认（默认开启）
     auto_mode: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
+    # 任务清单编排：True 时走 analyze_requirements + execute_todo_task
+    enable_todolist: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    # 章节评估子 Agent：True 时允许评估任务
+    enable_evaluation: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
     # 需求分析结论：信息是否充分可执行
     ready_to_execute: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 

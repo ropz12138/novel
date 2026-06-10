@@ -35,10 +35,11 @@ from app.services.supervisor.outline_tools import (
     read_outline,
 )
 from app.services.agent.chapter_tools import (
-    query_chapter_outline,
-    query_foreshadowing,
+    query_meso_outline,
+    query_micro_outline,
     query_previous_chapters,
 )
+from app.services.stream_trace import gap_log, gap_trace_from_config
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class QueryCharactersInput(BaseModel):
     filters: dict = Field(
         default_factory=dict,
         description="过滤条件，支持 role_type, gender, name, current_status, "
-                    "first_chapter__lte/gte, last_chapter__lte/gte, "
+                    "first_appearance_stage, last_chapter__lte/gte, "
                     "字段名__contains（模糊搜索）",
     )
 
@@ -85,8 +86,8 @@ class QueryChaptersInput(BaseModel):
                     "title__contains, status",
     )
     content_preview_length: int = Field(
-        default=200,
-        description="章节内容预览长度（字符数），0 表示返回完整内容",
+        default=0,
+        description="章节内容预览长度（字符数），0 表示返回完整内容。始终返回完整内容，禁止截断。",
     )
 
 
@@ -276,14 +277,14 @@ def _format_characters(results: list[dict]) -> str:
         parts = [f"【{c['name']}】{c['role_type']}"]
         for key in (
             "gender", "age", "appearance", "personality", "background", "skills",
-            "current_status", "current_goal", "last_location", "first_chapter",
+            "current_status", "current_goal", "last_location", "first_appearance_stage",
         ):
             if c.get(key):
                 label_map = {
                     "gender": "性别", "age": "年龄", "personality": "性格",
                     "appearance": "外貌", "background": "背景", "skills": "技能",
                     "current_status": "状态", "current_goal": "目的",
-                    "last_location": "位置", "first_chapter": "首次出场",
+                    "last_location": "位置", "first_appearance_stage": "首次出场阶段",
                 }
                 parts.append(f"{label_map[key]}：{c[key]}")
         lines.append("，".join(parts))
@@ -367,11 +368,11 @@ def query_characters(filters: dict, config: RunnableConfig, work_id: str | None 
 
 @tool(args_schema=QueryChaptersInput)
 def query_chapters(filters: dict, content_preview_length: int, config: RunnableConfig, work_id: str | None = None) -> str:
-    """结构化查询章节列表与基本信息（章节号、标题、状态、字数、正文预览）。
+    """结构化查询章节列表与基本信息（章节号、标题、状态、字数、完整正文）。
 
     不包含章节元数据（摘要、关键情节、伏笔、角色状态变化、事实索引、一致性状态）。
     查元数据请用 query_chapter_meta；在元数据中搜关键词请用 grep_chapter_meta。
-    支持按章节号范围、标题模糊搜索、状态过滤。默认只返回内容预览以节省 token。
+    支持按章节号范围、标题模糊搜索、状态过滤。始终返回完整正文，不截断。
     """
     from app.services.character_service import CharacterService
 
@@ -387,12 +388,44 @@ def query_chapters(filters: dict, content_preview_length: int, config: RunnableC
 
 class CountChapterWordsInput(BaseModel):
     chapter_number: int = Field(description="要计算字数的章节号")
+    expected_word_count: int | None = Field(
+        default=None,
+        description="期望字数；传入后会根据与实际字数的差异给出篇幅建议",
+    )
     work_id: str | None = Field(default=None, description="作品 ID（默认使用当前会话绑定的作品）")
 
 
+def _chapter_body_word_count(content: str) -> int:
+    return len((content or "").replace("\n", "").replace(" ", ""))
+
+
+def _build_word_count_advice(actual: int, expected: int) -> str:
+    diff = actual - expected
+    if diff == 0:
+        return f"建议：实际字数与期望字数一致（{expected} 字），篇幅合适。"
+    if diff < 0:
+        short_by = -diff
+        pct = round(short_by / expected * 100)
+        return (
+            f"建议：实际字数比期望少 {short_by} 字（约少 {pct}%），"
+            f"可补充情节推进、对话或场景细节以达到目标篇幅。"
+        )
+    long_by = diff
+    pct = round(long_by / expected * 100)
+    return (
+        f"建议：实际字数比期望多 {long_by} 字（约多 {pct}%），"
+        f"可删减冗余描写、合并重复信息或收紧节奏。"
+    )
+
+
 @tool(args_schema=CountChapterWordsInput)
-def count_chapter_words(chapter_number: int, config: RunnableConfig, work_id: str | None = None) -> str:
-    """计算指定章节正文的字数（去除空格和换行后的纯文字数）。"""
+def count_chapter_words(
+    chapter_number: int,
+    config: RunnableConfig,
+    expected_word_count: int | None = None,
+    work_id: str | None = None,
+) -> str:
+    """计算指定章节正文的字数（去除空格和换行后的纯文字数），可选对比期望字数并给出篇幅建议。"""
     from app.models.work_model import Chapter
 
     db = _get_db(config)
@@ -402,16 +435,20 @@ def count_chapter_words(chapter_number: int, config: RunnableConfig, work_id: st
     if not work_id:
         return "当前会话尚未绑定作品。"
 
+    if expected_word_count is not None and expected_word_count <= 0:
+        return "期望字数必须大于 0。"
+
     chapter = db.query(Chapter).filter_by(
         work_id=work_id, chapter_number=chapter_number
     ).first()
     if not chapter:
         return f"第{chapter_number}章不存在。"
 
-    content = chapter.content or ""
-    word_count = len(content.replace("\n", "").replace(" ", ""))
-
-    return f"第{chapter_number}章「{chapter.title}」字数：{word_count} 字"
+    word_count = _chapter_body_word_count(chapter.content)
+    lines = [f"第{chapter_number}章「{chapter.title}」字数：{word_count} 字"]
+    if expected_word_count is not None:
+        lines.append(_build_word_count_advice(word_count, expected_word_count))
+    return "\n".join(lines)
 
 
 @tool(args_schema=GrepInput)
@@ -504,13 +541,13 @@ def read_work_context(config: RunnableConfig, work_id: str | None = None) -> str
 
     outline = work.outline_tree or {}
     story = outline.get("story", {})
-    timeline = outline.get("timeline", [])
+    macro_phases = outline.get("outline", {}).get("macro_phases", [])
 
     context = "\n".join([
         f"标题: {work.title}",
         f"类型: {story.get('genre', '')}",
         f"卷: {story.get('volume', '')}",
-        f"时间线节点数: {len(timeline)}",
+        f"宏观阶段数: {len(macro_phases)}",
     ])
 
     emit("requirements_context_read", {"work_id": work_id})
@@ -569,17 +606,31 @@ def update_requirements_doc(content: str, config: RunnableConfig) -> str:
     emit = _get_emit(config)
     work_id = _get_work_id(config)
     if not work_id:
-        return "错误：当前会话未绑定作品，无法更新需求文档。"
+        return "当前会话尚未绑定作品，需求文档暂时无法保存。请先使用 dispatch_outline 创建大纲，作品创建成功后再次调用本工具写入需求文档。"
 
     work = db.query(Work).filter_by(id=work_id).first()
     if not work:
-        return f"错误：作品 {work_id} 不存在。"
+        return f"作品 {work_id} 不存在，需求文档暂时无法保存。请先使用 dispatch_outline 创建大纲。"
 
     work.requirements_doc = content
     db.commit()
 
     emit("requirements_doc_updated", {"work_id": work_id})
     return "需求文档已更新。"
+
+
+def _session_flags(config: RunnableConfig | None) -> tuple[bool, bool]:
+    configurable = (config or {}).get("configurable", {})
+    enable_todolist = bool(configurable.get("enable_todolist", False))
+    enable_evaluation = bool(configurable.get("enable_evaluation", False))
+    return enable_todolist, enable_evaluation
+
+
+def _build_requirements_planner_template(config: RunnableConfig | None) -> str:
+    from app.services.supervisor.prompt_builder import build_requirements_planner_prompt
+
+    _, enable_evaluation = _session_flags(config)
+    return build_requirements_planner_prompt(enable_evaluation=enable_evaluation)
 
 
 async def _analyze_requirements_coroutine(
@@ -618,7 +669,7 @@ async def _analyze_requirements_coroutine(
     emit = _get_emit(config)
     session_id = (config or {}).get("configurable", {}).get("supervisor_session_id")
 
-    template = (PROMPT_DIR / "requirements_planner.txt").read_text(encoding="utf-8")
+    template = _build_requirements_planner_template(config)
     prompt = PromptTemplate.from_template(template)
     llm = get_llm(temperature=0.2, streaming=False)
     structured_llm = llm.with_structured_output(
@@ -636,6 +687,7 @@ async def _analyze_requirements_coroutine(
 
     questions = result.questions if result.questions else []
     todolist = result.todolist if result.todolist else []
+    _, enable_evaluation = _session_flags(config)
 
     # owner -> dispatch_tool 推断映射
     OWNER_DISPATCH_MAP = {
@@ -665,13 +717,21 @@ async def _analyze_requirements_coroutine(
             return TASK_TYPE_DISPATCH_MAP[t.task_type]
 
         text = f"{t.task or ''} {t.instruction or ''} {message or ''}"
-        if any(keyword in text for keyword in ("评估", "评价", "审稿", "打分")):
+        if enable_evaluation and any(keyword in text for keyword in ("评估", "评价", "审稿", "打分")):
             return "dispatch_evaluation"
         if any(keyword in text for keyword in ("章节", "正文", "写第", "撰写", "续写", "改写", "编辑")):
             return "dispatch_chapter"
         if any(keyword in text for keyword in ("大纲", "角色", "主线", "支线", "伏笔", "设定")):
             return "dispatch_outline"
         return ""
+
+    if not enable_evaluation:
+        todolist = [
+            t for t in todolist
+            if t.owner != "evaluation_agent"
+            and (t.task_type or "") != "evaluation"
+            and infer_dispatch_tool(t) != "dispatch_evaluation"
+        ]
 
     # 清理同一 session 中的旧 todolist（含子任务），防止重复调用导致 task_id 冲突
     if session_id and todolist:
@@ -1178,6 +1238,8 @@ def read_todolist(config: RunnableConfig) -> str:
 def _guard_direct_dispatch_todolist(tool_name: str, config: RunnableConfig, db: Session) -> str | None:
     """有待执行或失败的顶层 todolist 时，禁止 Supervisor 绕过状态机 dispatch。"""
     configurable = (config or {}).get("configurable", {})
+    if not configurable.get("enable_todolist", False):
+        return None
     if configurable.get("todo_harness_bypass"):
         return None
 
@@ -1462,6 +1524,23 @@ async def _dispatch_chapter_coroutine(
     else:
         enriched_instruction = instruction or f"修改第{chapter_number}章"
 
+    trace_t0, trace_session_id = gap_trace_from_config(config)
+    gap_log(
+        "tool_begin",
+        session_id=trace_session_id,
+        t0=trace_t0,
+        tool="dispatch_chapter",
+        chapter_number=chapter_number,
+        is_new_chapter=is_new_chapter,
+    )
+
+    pre_edit_content = ""
+    if not is_new_chapter and chapter_number is not None:
+        pre_edit_chapter = db.query(Chapter).filter_by(
+            work_id=work_id, chapter_number=chapter_number
+        ).first()
+        pre_edit_content = (pre_edit_chapter.content or "") if pre_edit_chapter else ""
+
     # 统一调用 ChapterAgent
     agent = ChapterAgent(emit=emit)
 
@@ -1475,6 +1554,8 @@ async def _dispatch_chapter_coroutine(
             auto_mode=auto_mode,
             db_lock=db_lock,
             base_configurable=config.get("configurable", {}),
+            pre_edit_content=pre_edit_content or None,
+            emit_diff_event=not auto_mode,
         )
     except Exception as exc:
         db.rollback()
@@ -1556,7 +1637,6 @@ async def _dispatch_chapter_coroutine(
                 "key_plot_points": metadata_row.key_plot_points,
                 "outline_links": metadata_row.outline_links,
                 "involved_characters": metadata_row.involved_characters,
-                "foreshadows": metadata_row.foreshadows,
                 "facts": metadata_row.facts,
                 "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
             })
@@ -1564,8 +1644,11 @@ async def _dispatch_chapter_coroutine(
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"写第{chapter_number}章完成")
 
+        from app.services.agent.chapter_tools import _word_count
+
+        word_count = _word_count(chapter.content or "")
         metadata_note = "已同步章节元数据。" if metadata_row else "章节元数据稍后可重新同步。"
-        message = f"第{chapter_number}章写作完成。{metadata_note}"
+        message = f"第{chapter_number}章写作完成，字数：{word_count} 字。{metadata_note}"
         return _dispatch_tool_result(
             ok=True,
             status="completed",
@@ -1578,30 +1661,48 @@ async def _dispatch_chapter_coroutine(
             payload={
                 "created": True,
                 "metadata_synced": bool(metadata_row),
+                "word_count": word_count,
             },
         )
 
     # ── 编辑章节的后续处理 ──
+    from app.services.agent.chapter_tools import _word_count
+    from app.services.supervisor.chapter_agent import build_chapter_edit_diff_result
+
+    if not result.get("summary"):
+        from app.models.work_model import Chapter as _Ch
+
+        pending_chapter = db.query(_Ch).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+        new_content_for_diff = pending_chapter.content if pending_chapter else ""
+        old_content_for_diff = result.get("old_content") or pre_edit_content
+        if (
+            old_content_for_diff
+            and new_content_for_diff
+            and old_content_for_diff != new_content_for_diff
+        ):
+            result.update(build_chapter_edit_diff_result(old_content_for_diff, new_content_for_diff))
+
     summary = result.get("summary", {})
 
     if auto_mode:
         from app.models.work_model import Chapter as _Ch
         old_chapter = db.query(_Ch).filter_by(work_id=work_id, chapter_number=chapter_number).first()
         new_content = old_chapter.content if old_chapter else ""
-        old_content = result.get("old_content", "")
+        old_content = result.get("old_content") or pre_edit_content
+        word_count = _word_count(new_content)
 
-        from app.services.supervisor.chapter_agent import _build_diff, _summarize_diff
         if old_content and new_content and old_content != new_content:
-            diff = _build_diff(old_content, new_content)
-            summary = _summarize_diff(diff)
+            diff_result = build_chapter_edit_diff_result(old_content, new_content)
+            diff = diff_result["diff"]
+            summary = diff_result["summary"]
         else:
-            diff = []
+            diff = result.get("diff", [])
             summary = summary or {}
 
         emit("edit_chapter_auto_applied", {
             "chapter_number": chapter_number,
             "title": (old_chapter.title if old_chapter else "") or f"第{chapter_number}章",
-            "word_count": len((new_content or "").replace("\n", "").replace(" ", "")),
+            "word_count": word_count,
             "summary": summary,
             "diff": diff,
             "new_content": new_content,
@@ -1609,7 +1710,7 @@ async def _dispatch_chapter_coroutine(
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"自动编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
         message = (
-            f"第{chapter_number}章修改已完成"
+            f"第{chapter_number}章修改已完成，字数：{word_count} 字"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
         )
         return _dispatch_tool_result(
@@ -1623,6 +1724,7 @@ async def _dispatch_chapter_coroutine(
             payload={
                 "auto_applied": True,
                 "summary": summary,
+                "word_count": word_count,
             },
         )
 
@@ -1636,7 +1738,7 @@ async def _dispatch_chapter_coroutine(
                 "type": "edit_chapter",
                 "work_id": work_id,
                 "chapter_number": chapter_number,
-                "old_content": result.get("old_content", ""),
+                "old_content": result.get("old_content") or pre_edit_content,
                 "new_content": result.get("new_content", ""),
                 "task_item_id": config.get("configurable", {}).get("current_task_item_id"),
             }
@@ -1649,10 +1751,15 @@ async def _dispatch_chapter_coroutine(
                 raise
 
     if summary:
+        from app.models.work_model import Chapter as _Ch
+
+        pending_chapter = db.query(_Ch).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+        pending_content = result.get("new_content") or (pending_chapter.content if pending_chapter else "")
+        word_count = _word_count(pending_content)
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
         message = (
-            f"第{chapter_number}章修改已完成"
+            f"第{chapter_number}章修改已完成，字数：{word_count} 字"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
             f"请等待用户确认是否接受修改。"
         )
@@ -1667,11 +1774,16 @@ async def _dispatch_chapter_coroutine(
             payload={
                 "auto_applied": False,
                 "summary": summary,
+                "word_count": word_count,
             },
         )
 
+    from app.models.work_model import Chapter as _Ch
+
+    pending_chapter = db.query(_Ch).filter_by(work_id=work_id, chapter_number=chapter_number).first()
+    word_count = _word_count(pending_chapter.content if pending_chapter else "")
     message = (
-        f"第{chapter_number}章修改已完成。"
+        f"第{chapter_number}章修改已完成，字数：{word_count} 字。"
         f"{result.get('message', '')}"
     )
     return _dispatch_tool_result(
@@ -1682,7 +1794,7 @@ async def _dispatch_chapter_coroutine(
         work_id=work_id,
         chapter_number=chapter_number,
         message=message,
-        payload={"auto_applied": False},
+        payload={"auto_applied": False, "word_count": word_count},
     )
 
 
@@ -1695,6 +1807,9 @@ async def _dispatch_evaluation_coroutine(
 ) -> str:
     """派发章节评估任务给 EvaluationAgent。"""
     from app.services.evaluation_agent import EvaluationAgent
+
+    if not config.get("configurable", {}).get("enable_evaluation", False):
+        return "当前会话未启用章节评估。请在对话设置中开启「章节评估」后重试。"
 
     emit = _get_emit(config)
     db = _get_db(config)
@@ -1859,36 +1974,93 @@ dispatch_writing_expert = StructuredTool.from_function(
 )
 
 
-# ── 导出所有工具列表 ──
+@tool
+def query_macro_outline(config: RunnableConfig = None, work_id: str | None = None) -> str:
+    """读取大纲（Macro Outline）：返回宏观阶段概览和阶段概览信息。"""
+    from app.models.work_model import Work
 
-ALL_TOOLS = [
+    db = _get_db(config)
+    emit = _get_emit(config)
+    work_id = work_id or _get_work_id(config)
+
+    work = db.query(Work).filter_by(id=work_id).first()
+    if not work:
+        return f"作品 {work_id} 不存在。"
+
+    outline = work.outline_tree or {}
+    story = outline.get("story", {})
+    macro_phases = outline.get("outline", {}).get("macro_phases", [])
+    meso_stages = outline.get("meso", {}).get("meso_stages", [])
+
+    parts = [
+        f"标题：{work.title}",
+        f"类型：{story.get('genre', '未知')}",
+        f"宏观阶段数：{len(macro_phases)}",
+    ]
+
+    for phase in macro_phases:
+        cr = phase.get("chapter_range", [0, 0])
+        parts.append(f"\n[{phase.get('id', '')}] {phase.get('name', '')}（第{cr[0]}-{cr[1]}章）")
+        parts.append(f"  目标：{phase.get('goal', '')}")
+        parts.append(f"  核心设定：{phase.get('core_setting', '')}")
+        if phase.get("ending_direction"):
+            parts.append(f"  结局方向：{phase['ending_direction']}")
+
+        child_stages = [s for s in meso_stages if s.get("macro_phase_id") == phase.get("id")]
+        if child_stages:
+            parts.append(f"  阶段概览（{len(child_stages)} 个）：")
+            for stage in child_stages:
+                scr = stage.get("chapter_range", [0, 0])
+                parts.append(f"    - [{stage.get('id', '')}] {stage.get('name', '')}（第{scr[0]}-{scr[1]}章）")
+                if stage.get("summary"):
+                    parts.append(f"      {stage['summary']}")
+
+    emit("query_result", {"source": "大纲查询", "summary": f"宏观阶段 {len(macro_phases)} 个"})
+    return "\n".join(parts)
+
+
+# ── 导出工具列表（分组，供 tool_registry 组装） ──
+
+SUPERVISOR_QUERY_TOOLS = [
     query_characters,
     query_chapters,
     count_chapter_words,
     query_chapter_meta,
     grep_chapter_meta,
     grep,
-    # 从子 Agent 补充的查询工具
     read_outline,
     query_outline_related_chapters,
     read_chapter,
     query_characters_by_chapter,
     grep_in_chapter,
-    query_chapter_outline,
+    query_macro_outline,
+    query_meso_outline,
+    query_micro_outline,
     query_previous_chapters,
-    query_foreshadowing,
-    # 需求分析工具
     read_work_context,
     read_chat_history,
-    analyze_requirements,
-    # 需求文档工具
+]
+
+SUPERVISOR_REQUIREMENTS_DOC_TOOLS = [
     read_requirements_doc,
     update_requirements_doc,
-    # 状态机工具
+]
+
+SUPERVISOR_TODOLIST_TOOLS = [
+    analyze_requirements,
     update_task_status,
     update_todolist_readiness,
     edit_todolist,
-    # Todo Execution Harness 工具
     execute_todo_task_tool,
     read_todolist,
 ]
+
+SUPERVISOR_DISPATCH_TOOLS = {
+    "dispatch_outline": dispatch_outline,
+    "dispatch_chapter": dispatch_chapter,
+    "dispatch_evaluation": dispatch_evaluation,
+}
+
+from app.services.supervisor.tool_registry import build_supervisor_tools  # noqa: E402
+
+ALL_TOOLS = build_supervisor_tools(enable_todolist=True, enable_evaluation=True)

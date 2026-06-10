@@ -31,7 +31,6 @@ class TestToolsRegistration:
         "grep_in_chapter",
         "query_chapter_outline",
         "query_previous_chapters",
-        "query_foreshadowing",
         "read_work_context",
         "read_chat_history",
     }
@@ -56,7 +55,7 @@ class TestToolsRegistration:
     def test_all_tools_count(self):
         """应该恰好注册 23 个工具（不含 dispatch_*）"""
         from app.services.supervisor.tools import ALL_TOOLS
-        assert len(ALL_TOOLS) == 23
+        assert len(ALL_TOOLS) == 24
 
     def test_tool_names_unique(self):
         """所有工具名不应重复"""

@@ -17,42 +17,47 @@ def _base_outline():
     """基础大纲（修改前）"""
     return {
         "story": {"title": "旧标题", "genre": "玄幻", "volume": "第一卷"},
-        "timeline": [
-            {
-                "id": "N1",
-                "order": 1,
-                "development_node": "开端",
-                "summary": "主角发现异常",
-                "time_node": "初期",
-                "chapter_start": 1,
-                "chapter_end": 10,
-            },
-            {
-                "id": "N2",
-                "order": 2,
-                "development_node": "发展",
-                "summary": "主角成长",
-                "time_node": "中期",
-                "chapter_start": 11,
-                "chapter_end": 20,
-            },
-        ],
-        "branches": [
-            {
-                "id": "B1",
-                "attach_to": "N1",
-                "side": "left",
-                "name": "支线A",
-                "summary": "支线描述",
-                "chapter_start": 3,
-                "chapter_end": 7,
-            },
-        ],
+        "outline": {
+            "macro_phases": [
+                {
+                    "id": "P1",
+                    "order": 1,
+                    "name": "开端",
+                    "goal": "主角发现异常",
+                    "core_setting": "",
+                    "chapter_range": [1, 10],
+                },
+                {
+                    "id": "P2",
+                    "order": 2,
+                    "name": "发展",
+                    "goal": "主角成长",
+                    "core_setting": "",
+                    "chapter_range": [11, 20],
+                },
+            ],
+            "core_characters": [],
+            "ending": {},
+        },
+        "meso": {
+            "meso_stages": [
+                {
+                    "id": "M1",
+                    "macro_phase_id": "P1",
+                    "type": "left",
+                    "name": "支线A",
+                    "cause": "支线描述",
+                    "conflict": "",
+                    "key_characters": [],
+                    "chapter_range": [3, 7],
+                },
+            ],
+        },
         "foreshadowing": [
             {
                 "id": "F1",
-                "plant_node": "N1",
-                "payoff_node": "N2",
+                "plant_node": "P1",
+                "payoff_node": "P2",
                 "content": "伏笔内容",
             },
         ],
@@ -73,7 +78,7 @@ def _base_characters():
             "skills": "剑术",
             "current_status": "存活",
             "current_goal": "复仇",
-            "first_chapter": 1,
+            "first_appearance_stage": "M1",
         },
         {
             "name": "李四",
@@ -86,7 +91,7 @@ def _base_characters():
             "skills": "魔法",
             "current_status": "存活",
             "current_goal": "寻找真相",
-            "first_chapter": 1,
+            "first_appearance_stage": "M1",
         },
     ]
 
@@ -105,8 +110,8 @@ class TestComputeOutlineDiff:
         new = _base_outline()
         result = compute_outline_diff(old, new)
         assert result["story"] == []
-        assert result["timeline"] == []
-        assert result["branches"] == []
+        assert result["macro_phases"] == []
+        assert result["meso_stages"] == []
         assert result["foreshadowing"] == []
 
     def test_story_modified(self):
@@ -158,59 +163,58 @@ class TestComputeOutlineDiff:
         assert result["story"][0]["old"] == "第一卷"
 
     def test_timeline_node_added(self):
-        """新增主线节点"""
+        """新增宏观阶段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["timeline"].append({
-            "id": "N3",
+        new["outline"]["macro_phases"].append({
+            "id": "P3",
             "order": 3,
-            "development_node": "高潮",
-            "summary": "决战",
-            "time_node": "后期",
-            "chapter_start": 21,
-            "chapter_end": 30,
+            "name": "高潮",
+            "goal": "决战",
+            "core_setting": "",
+            "chapter_range": [21, 30],
         })
 
         result = compute_outline_diff(old, new)
-        assert len(result["timeline"]) == 1
-        assert result["timeline"][0]["type"] == "added"
-        assert result["timeline"][0]["node_id"] == "N3"
-        assert result["timeline"][0]["data"]["development_node"] == "高潮"
+        assert len(result["macro_phases"]) == 1
+        assert result["macro_phases"][0]["type"] == "added"
+        assert result["macro_phases"][0]["node_id"] == "P3"
+        assert result["macro_phases"][0]["data"]["name"] == "高潮"
 
     def test_timeline_node_removed(self):
-        """删除主线节点"""
+        """删除宏观阶段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["timeline"] = [new["timeline"][0]]  # 只保留 N1
+        new["outline"]["macro_phases"] = [new["outline"]["macro_phases"][0]]  # 只保留 P1
 
         result = compute_outline_diff(old, new)
-        assert len(result["timeline"]) == 1
-        assert result["timeline"][0]["type"] == "removed"
-        assert result["timeline"][0]["node_id"] == "N2"
-        assert result["timeline"][0]["data"]["development_node"] == "发展"
+        assert len(result["macro_phases"]) == 1
+        assert result["macro_phases"][0]["type"] == "removed"
+        assert result["macro_phases"][0]["node_id"] == "P2"
+        assert result["macro_phases"][0]["data"]["name"] == "发展"
 
     def test_timeline_node_modified(self):
-        """修改主线节点字段"""
+        """修改宏观阶段字段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["timeline"][0]["development_node"] = "新的开端"
-        new["timeline"][0]["chapter_end"] = 15
+        new["outline"]["macro_phases"][0]["name"] = "新的开端"
+        new["outline"]["macro_phases"][0]["chapter_range"] = [1, 15]
 
         result = compute_outline_diff(old, new)
-        assert len(result["timeline"]) == 1
-        assert result["timeline"][0]["type"] == "modified"
-        assert result["timeline"][0]["node_id"] == "N1"
-        changes = {c["field"]: c for c in result["timeline"][0]["changes"]}
-        assert changes["development_node"]["old"] == "开端"
-        assert changes["development_node"]["new"] == "新的开端"
-        assert changes["chapter_end"]["old"] == 10
-        assert changes["chapter_end"]["new"] == 15
+        assert len(result["macro_phases"]) == 1
+        assert result["macro_phases"][0]["type"] == "modified"
+        assert result["macro_phases"][0]["node_id"] == "P1"
+        changes = {c["field"]: c for c in result["macro_phases"][0]["changes"]}
+        assert changes["name"]["old"] == "开端"
+        assert changes["name"]["new"] == "新的开端"
+        assert changes["chapter_range"]["old"] == [1, 10]
+        assert changes["chapter_range"]["new"] == [1, 15]
 
     def test_timeline_mixed_operations(self):
         """同时有新增、修改、删除"""
@@ -218,70 +222,70 @@ class TestComputeOutlineDiff:
 
         old = _base_outline()
         new = _base_outline()
-        # 修改 N1
-        new["timeline"][0]["summary"] = "新摘要"
-        # 删除 N2
-        new["timeline"] = [new["timeline"][0]]
-        # 新增 N3
-        new["timeline"].append({
-            "id": "N3",
+        # 修改 P1
+        new["outline"]["macro_phases"][0]["goal"] = "新目标"
+        # 删除 P2
+        new["outline"]["macro_phases"] = [new["outline"]["macro_phases"][0]]
+        # 新增 P3
+        new["outline"]["macro_phases"].append({
+            "id": "P3",
             "order": 2,
-            "development_node": "新节点",
-            "summary": "",
-            "time_node": "后期",
-            "chapter_start": 21,
-            "chapter_end": 30,
+            "name": "新阶段",
+            "goal": "",
+            "core_setting": "",
+            "chapter_range": [21, 30],
         })
 
         result = compute_outline_diff(old, new)
-        types = {c["type"] for c in result["timeline"]}
+        types = {c["type"] for c in result["macro_phases"]}
         assert types == {"added", "modified", "removed"}
 
     def test_branch_added(self):
-        """新增支线"""
+        """新增中纲阶段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["branches"].append({
-            "id": "B2",
-            "attach_to": "N2",
-            "side": "right",
-            "name": "支线B",
-            "summary": "",
-            "chapter_start": 11,
-            "chapter_end": 15,
+        new["meso"]["meso_stages"].append({
+            "id": "M2",
+            "macro_phase_id": "P2",
+            "type": "right",
+            "name": "中纲B",
+            "cause": "",
+            "conflict": "",
+            "key_characters": [],
+            "chapter_range": [11, 15],
         })
 
         result = compute_outline_diff(old, new)
-        assert len(result["branches"]) == 1
-        assert result["branches"][0]["type"] == "added"
-        assert result["branches"][0]["node_id"] == "B2"
+        assert len(result["meso_stages"]) == 1
+        assert result["meso_stages"][0]["type"] == "added"
+        assert result["meso_stages"][0]["node_id"] == "M2"
 
     def test_branch_modified(self):
-        """修改支线"""
+        """修改中纲阶段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["branches"][0]["name"] = "新支线名"
+        new["meso"]["meso_stages"][0]["name"] = "新阶段名"
 
         result = compute_outline_diff(old, new)
-        assert len(result["branches"]) == 1
-        assert result["branches"][0]["type"] == "modified"
-        assert result["branches"][0]["changes"][0]["field"] == "name"
+        assert len(result["meso_stages"]) == 1
+        assert result["meso_stages"][0]["type"] == "modified"
+        assert result["meso_stages"][0]["changes"][0]["field"] == "name"
 
     def test_branch_removed(self):
-        """删除支线"""
+        """删除中纲阶段"""
         from app.services.diff_service import compute_outline_diff
 
         old = _base_outline()
         new = _base_outline()
-        new["branches"] = []
+        new["meso"]["meso_stages"] = []
 
         result = compute_outline_diff(old, new)
-        assert len(result["branches"]) == 1
-        assert result["branches"][0]["type"] == "removed"
+        assert len(result["meso_stages"]) == 1
+        assert result["meso_stages"][0]["type"] == "removed"
 
     def test_foreshadowing_added(self):
         """新增伏笔"""
@@ -291,7 +295,7 @@ class TestComputeOutlineDiff:
         new = _base_outline()
         new["foreshadowing"].append({
             "id": "F2",
-            "plant_node": "N1",
+            "plant_node": "P1",
             "payoff_node": "N3",
             "content": "新伏笔",
         })
@@ -329,11 +333,11 @@ class TestComputeOutlineDiff:
         """空大纲对比"""
         from app.services.diff_service import compute_outline_diff
 
-        old = {"story": {}, "timeline": [], "branches": [], "foreshadowing": []}
-        new = {"story": {}, "timeline": [], "branches": [], "foreshadowing": []}
+        old = {"story": {}, "outline": {"macro_phases": []}, "meso": {"meso_stages": []}, "foreshadowing": []}
+        new = {"story": {}, "outline": {"macro_phases": []}, "meso": {"meso_stages": []}, "foreshadowing": []}
         result = compute_outline_diff(old, new)
         assert result["story"] == []
-        assert result["timeline"] == []
+        assert result["macro_phases"] == []
 
     def test_none_values_handled(self):
         """字段值为 None 时正常处理"""
@@ -380,7 +384,7 @@ class TestComputeCharacterDiff:
             "skills": "暗杀",
             "current_status": "存活",
             "current_goal": "称霸",
-            "first_chapter": 5,
+            "first_appearance_stage": "M5",
         })
 
         result = compute_character_diff(old, new)
@@ -446,7 +450,7 @@ class TestComputeCharacterDiff:
             "name": "王五", "role_type": "反派", "gender": "男",
             "age": "30", "appearance": "", "personality": "狡猾",
             "background": "", "skills": "", "current_status": "存活",
-            "current_goal": "", "first_chapter": 1,
+            "current_goal": "", "first_appearance_stage": "M1",
         })
 
         result = compute_character_diff(old, new)
@@ -486,8 +490,8 @@ class TestSummarizeDiff:
 
         diff = {
             "story": [],
-            "timeline": [],
-            "branches": [],
+            "macro_phases": [],
+            "meso_stages": [],
             "foreshadowing": [],
         }
         result = summarize_outline_diff(diff)
@@ -503,12 +507,12 @@ class TestSummarizeDiff:
             "story": [
                 {"type": "modified", "field": "title", "old": "旧", "new": "新"},
             ],
-            "timeline": [
-                {"type": "added", "node_id": "N3", "data": {}},
-                {"type": "modified", "node_id": "N1", "changes": []},
-                {"type": "removed", "node_id": "N2", "data": {}},
+            "macro_phases": [
+                {"type": "added", "node_id": "P3", "data": {}},
+                {"type": "modified", "node_id": "P1", "changes": []},
+                {"type": "removed", "node_id": "P2", "data": {}},
             ],
-            "branches": [],
+            "meso_stages": [],
             "foreshadowing": [
                 {"type": "removed", "node_id": "F1", "data": {}},
             ],
@@ -564,10 +568,20 @@ class TestOutlineAgentTwoPhaseFlow:
         assert hasattr(OutlineAgent, "rollback_outline_edit")
 
     def test_outline_tools_count(self):
-        """大纲工具集应有 10 个工具（包含 read_requirements_doc）"""
+        """大纲工具集应包含所有必要工具"""
         from app.services.supervisor.outline_tools import get_outline_tools
         tools = get_outline_tools(auto_mode=True)
-        assert len(tools) == 10
+        tool_names = {t.name for t in tools}
+        # 核心读取工具
+        assert "read_outline" in tool_names
+        assert "read_macro_outline" in tool_names
+        assert "read_meso_outline" in tool_names
+        assert "read_micro_outline" in tool_names
+        # 核心生成工具
+        assert "generate_macro_outline" in tool_names
+        assert "generate_meso_outline" in tool_names
+        assert "generate_micro_outline" in tool_names
+        assert len(tools) >= 10
 
 
 # ── 5. dispatch_outline 确认流程测试 ──
@@ -610,7 +624,7 @@ class TestDispatchOutlineConfirmFlow:
             mock_edit.return_value = {
                 "message": "已修改",
                 "operations": [],
-                "outline_diff": {"story": [{"type": "modified"}], "timeline": [], "branches": [], "foreshadowing": []},
+                "outline_diff": {"story": [{"type": "modified"}], "macro_phases": [], "meso_stages": [], "foreshadowing": []},
                 "character_diff": {"changes": []},
                 "new_outline": _base_outline(),
             }

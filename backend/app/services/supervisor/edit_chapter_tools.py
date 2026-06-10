@@ -13,6 +13,8 @@ from langchain_core.tools import StructuredTool, tool
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app.services.stream_trace import gap_log, gap_trace_from_config
+
 logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).resolve().parent.parent / "prompt_templates"
 MAX_PATCH_ATTEMPTS = 3
@@ -195,7 +197,22 @@ def query_characters_by_chapter(
     if not characters:
         return "该作品暂无角色设定。"
 
-    relevant = [c for c in characters if c.first_chapter is None or c.first_chapter <= target_chapter]
+    # 根据 first_appearance_stage 对应的章节范围判断是否在目标章节之前出场
+    from app.models.work_model import Work
+    work = db.query(Work).filter_by(id=work_id).first()
+    stage_chapter_map: dict[str, int] = {}
+    if work and work.outline_tree:
+        for stage in (work.outline_tree.get("meso", {}).get("meso_stages") or []):
+            sid = stage.get("id", "")
+            cr = stage.get("chapter_range", [])
+            if sid and isinstance(cr, list) and len(cr) >= 1:
+                stage_chapter_map[sid] = cr[0]
+
+    def _stage_start(c) -> int:
+        s = getattr(c, "first_appearance_stage", None) or "M1"
+        return stage_chapter_map.get(s, 1)
+
+    relevant = [c for c in characters if _stage_start(c) <= target_chapter]
     if not relevant:
         return f"第{chapter_start}~{chapter_end}章暂无出场角色。"
 
@@ -323,7 +340,6 @@ def query_chapter_meta(
             f"关键情节：{len(row.key_plot_points or [])} 条",
             f"大纲关联：{len(row.outline_links or [])} 条",
             f"出场角色：{len(row.involved_characters or [])} 条",
-            f"伏笔：{len(row.foreshadows or [])} 条",
             f"事实：{len(row.facts or [])} 条",
         ]))
     return "\n\n".join(blocks)
@@ -380,7 +396,6 @@ def grep_chapter_meta(
                 json.dumps(row.key_plot_points or [], ensure_ascii=False),
                 json.dumps(row.outline_links or [], ensure_ascii=False),
                 json.dumps(row.involved_characters or [], ensure_ascii=False),
-                json.dumps(row.foreshadows or [], ensure_ascii=False),
                 json.dumps(row.facts or [], ensure_ascii=False),
             ]
             matches = [s for s in haystack if kw in s]
@@ -402,7 +417,6 @@ def _snapshot_metadata(row) -> dict:
         "key_plot_points": list(row.key_plot_points or []),
         "outline_links": [dict(item) for item in (row.outline_links or [])],
         "involved_characters": [dict(item) for item in (row.involved_characters or [])],
-        "foreshadows": [dict(item) for item in (row.foreshadows or [])],
         "facts": [dict(item) for item in (row.facts or [])],
     }
 
@@ -502,16 +516,6 @@ def _build_metadata_diff(old_meta: dict | None, new_meta: dict) -> dict:
         total_removed += sum(1 for d in ic_diff if d["type"] == "removed")
         total_modified += sum(1 for d in ic_diff if d["type"] == "modified")
 
-    # foreshadows：dict 列表，按 content 匹配
-    old_fs = old_meta.get("foreshadows", []) if old_meta else []
-    new_fs = new_meta.get("foreshadows", [])
-    fs_diff = _diff_dict_list(old_fs, new_fs, "content")
-    if fs_diff:
-        diff["foreshadows"] = fs_diff
-        total_added += sum(1 for d in fs_diff if d["type"] == "added")
-        total_removed += sum(1 for d in fs_diff if d["type"] == "removed")
-        total_modified += sum(1 for d in fs_diff if d["type"] == "modified")
-
     # facts：dict 列表，按 key 匹配
     old_ft = old_meta.get("facts", []) if old_meta else []
     new_ft = new_meta.get("facts", [])
@@ -603,8 +607,14 @@ async def _sync_chapter_metadata_coroutine(
     emit("stage_start", {"stage": "sync_metadata", "label": f"同步第{chapter_number}章元数据"})
 
     try:
+        metadata = await ChapterOutlineSyncService.generate_for_chapter(db, work=work, chapter=chapter)
         with _with_lock(config):
-            metadata_row = await ChapterOutlineSyncService.generate_and_persist(db, work=work, chapter=chapter)
+            metadata_row = ChapterOutlineSyncService.persist_metadata(
+                db,
+                work_id=work.id,
+                chapter_number=chapter.chapter_number,
+                metadata=metadata,
+            )
             db.commit()
     except Exception as exc:
         with _with_lock(config):
@@ -620,7 +630,6 @@ async def _sync_chapter_metadata_coroutine(
         "key_plot_points": metadata_row.key_plot_points,
         "outline_links": metadata_row.outline_links,
         "involved_characters": metadata_row.involved_characters,
-        "foreshadows": metadata_row.foreshadows,
         "facts": metadata_row.facts,
         "updated_at": metadata_row.updated_at.isoformat() if metadata_row.updated_at else None,
         "diff": diff_result["diff"],
@@ -631,13 +640,6 @@ async def _sync_chapter_metadata_coroutine(
     parts.append(f"摘要：{metadata_row.summary or ''}")
     if metadata_row.key_plot_points:
         parts.append(f"关键情节：{'; '.join(metadata_row.key_plot_points)}")
-    if metadata_row.foreshadows:
-        foreshadow_items = []
-        for f in metadata_row.foreshadows:
-            if isinstance(f, dict):
-                foreshadow_items.append(f"{f.get('type', '')}: {f.get('content', '')}")
-        if foreshadow_items:
-            parts.append(f"伏笔：{'; '.join(foreshadow_items)}")
     if metadata_row.facts:
         fact_items = []
         for f in metadata_row.facts:
@@ -660,22 +662,51 @@ async def _rewrite_chapter_coroutine(
 ) -> str:
     emit = _get_emit(config)
     work_id = work_id or _get_work_id(config)
+    trace_t0, trace_session_id = gap_trace_from_config(config)
+    gap_log(
+        "tool_begin",
+        session_id=trace_session_id,
+        t0=trace_t0,
+        tool="rewrite_chapter",
+        chapter_number=chapter_number,
+    )
+
+    from app.services.supervisor.sub_agent_base import stream_chain_with_reasoning
+    from app.services.supervisor.session_interrupt import (
+        INTERRUPTED_USER_MESSAGE,
+        SessionInterruptedError,
+        make_interrupt_checker,
+    )
+
+    should_abort = make_interrupt_checker(config)
+    if should_abort():
+        return INTERRUPTED_USER_MESSAGE
 
     template = (PROMPT_DIR / "edit_chapter.txt").read_text(encoding="utf-8")
     prompt = PromptTemplate.from_template(template)
     llm = _get_llm(temperature=0.7)
     chain = prompt | llm
 
-    new_content = ""
-    async for chunk in chain.astream({
-        "story_info": story_info or "（未提供）",
-        "chapter_outline": chapter_outline or "（未提供）",
-        "current_content": current_content,
-        "user_message": edit_instruction,
-    }):
-        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-        new_content += text
-        emit("edit_chapter_stream", {"chunk": text})
+    try:
+        new_content = await stream_chain_with_reasoning(
+            chain,
+            {
+                "story_info": story_info or "（未提供）",
+                "chapter_outline": chapter_outline or "（未提供）",
+                "current_content": current_content,
+                "user_message": edit_instruction,
+            },
+            emit,
+            "edit_chapter_stream",
+            config=config,
+            trace_label="rewrite_chapter",
+            should_abort=should_abort,
+        )
+    except SessionInterruptedError:
+        return f"{INTERRUPTED_USER_MESSAGE}本章修改未保存。"
+
+    if should_abort():
+        return f"{INTERRUPTED_USER_MESSAGE}本章修改未保存。"
 
     final_content = new_content.strip()
     result = await _save_content_only(
@@ -729,13 +760,23 @@ def _patch_retry_hint(*, raw_output: str, error: str) -> str:
     )
 
 
-async def _stream_patch(chain, inputs: dict, emit) -> str:
-    raw_output = ""
-    async for chunk in chain.astream(inputs):
-        text = chunk.content if hasattr(chunk, "content") else str(chunk)
-        raw_output += text
-        emit("edit_chapter_stream", {"chunk": text})
-    return raw_output
+async def _stream_patch(chain, inputs: dict, emit, *, config=None) -> str:
+    from app.services.supervisor.sub_agent_base import stream_chain_with_reasoning
+    from app.services.supervisor.session_interrupt import (
+        SessionInterruptedError,
+        make_interrupt_checker,
+    )
+
+    should_abort = make_interrupt_checker(config)
+    return await stream_chain_with_reasoning(
+        chain,
+        inputs,
+        emit,
+        "edit_chapter_stream",
+        config=config,
+        trace_label="generate_patch_edit",
+        should_abort=should_abort,
+    )
 
 
 async def _generate_patch_ops_with_retry(
@@ -743,6 +784,7 @@ async def _generate_patch_ops_with_retry(
     chain,
     base_inputs: dict,
     emit,
+    config=None,
     max_attempts: int = MAX_PATCH_ATTEMPTS,
 ) -> list[dict]:
     last_error = ""
@@ -754,7 +796,7 @@ async def _generate_patch_ops_with_retry(
                 str(inputs.get("user_message") or "")
                 + _patch_retry_hint(raw_output=last_raw_output, error=last_error)
             )
-        raw_output = await _stream_patch(chain, inputs, emit)
+        raw_output = await _stream_patch(chain, inputs, emit, config=config)
         try:
             return _parse_patch_json(raw_output)
         except PatchParseError as exc:
@@ -782,24 +824,48 @@ async def _generate_patch_edit_coroutine(
     work_id: str | None = None,
 ) -> str:
     from app.services.supervisor.edit_patch import EditOperation, apply_edits
+    from app.services.supervisor.session_interrupt import (
+        INTERRUPTED_USER_MESSAGE,
+        SessionInterruptedError,
+        make_interrupt_checker,
+    )
 
     emit = _get_emit(config)
     work_id = work_id or _get_work_id(config)
+    should_abort = make_interrupt_checker(config)
+    if should_abort():
+        return f"{INTERRUPTED_USER_MESSAGE}本章修改未保存。"
+    trace_t0, trace_session_id = gap_trace_from_config(config)
+    gap_log(
+        "tool_begin",
+        session_id=trace_session_id,
+        t0=trace_t0,
+        tool="generate_patch_edit",
+        chapter_number=chapter_number,
+    )
     template = (PROMPT_DIR / "edit_chapter_patch.txt").read_text(encoding="utf-8")
     prompt = PromptTemplate.from_template(template)
     llm = _get_llm(temperature=0.7)
     chain = prompt | llm
 
-    edit_ops = await _generate_patch_ops_with_retry(
-        chain=chain,
-        base_inputs={
-            "story_info": story_info or "（未提供）",
-            "chapter_outline": chapter_outline or "（未提供）",
-            "current_content": current_content,
-            "user_message": edit_instruction,
-        },
-        emit=emit,
-    )
+    try:
+        edit_ops = await _generate_patch_ops_with_retry(
+            chain=chain,
+            base_inputs={
+                "story_info": story_info or "（未提供）",
+                "chapter_outline": chapter_outline or "（未提供）",
+                "current_content": current_content,
+                "user_message": edit_instruction,
+            },
+            emit=emit,
+            config=config,
+        )
+    except SessionInterruptedError:
+        return f"{INTERRUPTED_USER_MESSAGE}本章修改未保存。"
+
+    if should_abort():
+        return f"{INTERRUPTED_USER_MESSAGE}本章修改未保存。"
+
     ops = [
         EditOperation(
             type=op["type"],
@@ -926,16 +992,9 @@ overwrite_chapter_title = StructuredTool.from_function(
 )
 
 
-from app.services.supervisor.outline_tools import (  # noqa: E402
-    create_child_todolist,
-    read_child_todolist,
-    update_child_task_status,
-)
+from app.services.supervisor.outline_tools import CHILD_TODO_TOOLS  # noqa: E402
 
-EDIT_CHAPTER_TOOLS = [
-    create_child_todolist,
-    read_child_todolist,
-    update_child_task_status,
+_EDIT_CHAPTER_CORE_TOOLS = [
     read_chapter,
     query_characters_by_chapter,
     grep_in_chapter,
@@ -945,4 +1004,9 @@ EDIT_CHAPTER_TOOLS = [
     rewrite_chapter,
     overwrite_chapter_title,
     sync_chapter_metadata,
+]
+
+EDIT_CHAPTER_TOOLS = [
+    *CHILD_TODO_TOOLS,
+    *_EDIT_CHAPTER_CORE_TOOLS,
 ]

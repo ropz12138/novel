@@ -1,7 +1,6 @@
 from . import (
     auth_router,
     character_router,
-    evaluation_router,
     session_router,
     supervisor_router,
     work_router,
@@ -10,7 +9,6 @@ from . import (
 __all__ = [
     "auth_router",
     "character_router",
-    "evaluation_router",
     "session_router",
     "supervisor_router",
     "work_router",

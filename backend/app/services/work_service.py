@@ -7,10 +7,9 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException, status
-from langchain_core.prompts import PromptTemplate
 from langchain_core.tools import StructuredTool
 from app.core.deepseek_llm import DeepSeekChatOpenAI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -19,8 +18,6 @@ from app.models.work_model import Chapter, ChapterMetadata, Character, Work
 from app.services.agent_log_service import log_event, new_session_id
 from app.schemas.work_schema import (
     BranchNode,
-    ChapterChatResponse,
-    ChapterGenerateResponse,
     ChapterDeleteLastResponse,
     ChapterIntelOut,
     ChapterOut,
@@ -29,7 +26,6 @@ from app.schemas.work_schema import (
     CharacterBrief,
     CharacterDetail,
     ForeshadowingNode,
-    OutlineGenerateResponse,
     OutlineQuickGenerateRequest,
     OutlineTreeData,
     StoryInfo,
@@ -80,8 +76,9 @@ class _SubmitOutlineInput(OutlineTreeData):
 def _empty_outline(story: dict | None = None) -> dict:
     return {
         "story": story or {},
-        "timeline": [],
-        "branches": [],
+        "outline": {"macro_phases": [], "core_characters": [], "ending": {}},
+        "meso": {"meso_stages": []},
+        "micro": {"micro_scenes": []},
         "foreshadowing": [],
         "characters": [],
         "character_links": [],
@@ -148,8 +145,8 @@ def _upsert_outline_characters(ctx: dict[str, Any], characters: list[dict]) -> N
             "skills": char_data.get("skills", ""),
             "current_status": char_data.get("current_status", "存活"),
             "current_goal": char_data.get("current_goal", ""),
-            "first_chapter": char_data.get("first_chapter", 1),
-            "last_chapter": char_data.get("first_chapter"),
+            "first_appearance_stage": char_data.get("first_appearance_stage", "M1"),
+            "last_chapter": char_data.get("last_chapter"),
         }
         if char:
             for key, value in payload.items():
@@ -217,6 +214,68 @@ class _SubmitForeshadowingInput(BaseModel):
 
 class _SubmitCharacterLinksInput(BaseModel):
     character_links: list[dict]
+
+
+# ── 三层大纲架构输入模型 ──
+
+
+class MacroPhase(BaseModel):
+    id: str = Field(description="阶段ID，如 P1、P2")
+    name: str = Field(description="阶段名称，如：新手村、第一卷、序章")
+    goal: str = Field(description="阶段目标，主角在这个阶段要达成什么")
+    core_setting: str = Field(description="核心设定，这个阶段的关键世界观/规则/势力")
+    ending_direction: str = Field(default="", description="结局方向，这个阶段结束时的状态/转折（可选）")
+    chapter_range: list[int] = Field(default_factory=lambda: [1, 50], description="预计章节范围 [开始, 结束]")
+
+
+class CoreCharacterBrief(BaseModel):
+    name: str = Field(description="角色名")
+    role_type: str = Field(description="主角/反派/导师等")
+    brief: str = Field(description="一句话角色定位")
+
+
+class MesoStage(BaseModel):
+    id: str = Field(description="阶段ID，如 M1、M2")
+    macro_phase_id: str = Field(description="关联的大纲阶段ID")
+    name: str = Field(description="阶段名称，如：新手村副本、城市案件")
+    type: str = Field(description="类型：副本/地图/案件/赛事/战争/感情阶段/商业阶段")
+    cause: str = Field(description="起因，为什么开始这个阶段")
+    conflict: str = Field(description="冲突，主要矛盾是什么")
+    key_characters: list[str] = Field(default_factory=list, description="关键人物")
+    twist: str = Field(default="", description="反转，剧情转折点")
+    climax: str = Field(default="", description="高潮，最激烈的冲突")
+    reward: str = Field(default="", description="收益，完成后的收获")
+    chapter_range: list[int] = Field(default_factory=lambda: [1, 10], description="预计章节范围 [开始, 结束]")
+
+class _SubmitMacroOutlineInput(BaseModel):
+    story: StoryInfo
+    macro_phases: list[MacroPhase]
+    core_characters: list[CoreCharacterBrief]
+    meso_stages: list[MesoStage] = Field(default_factory=list, description="中纲阶段（可选，与宏观阶段一起生成）")
+    ending: dict = Field(default_factory=dict, description="整体结局方向（可选）")
+
+
+
+
+class _SubmitMesoOutlineInput(BaseModel):
+    meso_doc: str = Field(description="中纲自然语言文档：当前阶段的详细信息，包含剧情走向、角色安排、情感脉络等")
+
+
+class MicroScene(BaseModel):
+    id: str = Field(description="场景ID，如 S1、S2")
+    meso_stage_id: str = Field(description="关联的中纲阶段ID")
+    chapter_number: int = Field(description="章节号")
+    scene_number: int = Field(default=1, description="场景号")
+    characters: list[str] = Field(default_factory=list, description="出场人物")
+    location: str = Field(default="", description="地点")
+    conflict: str = Field(default="", description="冲突")
+    info_points: list[str] = Field(default_factory=list, description="信息点")
+    emotion_points: list[str] = Field(default_factory=list, description="爽点/笑点/情绪点")
+    hook: str = Field(default="", description="结尾钩子")
+
+
+class _SubmitMicroOutlineInput(BaseModel):
+    micro_doc: str = Field(description="小纲自然语言文档：近几章的场景安排、出场人物、冲突设计、情感节奏等")
 
 
 def _submit_story_tool(**kwargs) -> str:
@@ -300,7 +359,10 @@ def _submit_character_details_tool(**kwargs) -> str:
             "skills": detail.get("skills", ""),
             "current_status": detail.get("current_status", "存活"),
             "current_goal": detail.get("current_goal", ""),
-            "first_chapter": brief.get("first_chapter", 1),
+            "first_appearance_stage": (
+                detail.get("first_appearance_stage")
+                or brief.get("first_appearance_stage", "M1")
+            ),
         })
     _commit_outline_section(ctx, "characters", characters)
     _upsert_outline_characters(ctx, characters)
@@ -336,6 +398,124 @@ def _submit_character_links_tool(**kwargs) -> str:
     return "character_links_persisted"
 
 
+def _submit_macro_outline_tool(**kwargs) -> str:
+    """提交大纲（Macro Outline）"""
+    ctx = _outline_ctx()
+    if not ctx:
+        return "macro_outline_received"
+    db: Session = ctx["db"]
+    
+    # 解析输入
+    story = kwargs.get("story", {})
+    macro_phases = kwargs.get("macro_phases", [])
+    core_characters = kwargs.get("core_characters", [])
+    ending = kwargs.get("ending", {})
+    meso_stages = kwargs.get("meso_stages", [])
+
+    # 校验：关键数据不可为空
+    if not story or not story.get("title"):
+        raise ValueError("story 缺失或未包含 title，无法提交大纲。")
+    if not macro_phases:
+        raise ValueError("macro_phases 为空，无法提交大纲。至少需要一个宏观阶段。")
+    if not core_characters:
+        raise ValueError("core_characters 为空，无法提交大纲。至少需要一个核心角色。")
+    
+    # 创建或更新作品
+    work_id = ctx.get("work_id")
+    work = db.query(Work).filter_by(id=work_id).first() if work_id else None
+    if not work:
+        work = Work(
+            user_id=ctx["user_id"],
+            title=story.get("title", "未命名作品"),
+            genre=story.get("genre", "未分类"),
+            idea=ctx["idea"],
+            tags=ctx["tags_list"],
+            outline_tree=_empty_outline(story),
+            status="草稿",
+        )
+        db.add(work)
+        db.flush()
+        ctx["work_id"] = work.id
+    
+    # 更新大纲结构
+    outline = dict(work.outline_tree or _empty_outline())
+    outline["story"] = story
+    outline["outline"] = {
+        "story": story,
+        "macro_phases": macro_phases,
+        "core_characters": core_characters,
+        "ending": ending,
+    }
+    if meso_stages:
+        outline["meso"] = {"meso_stages": meso_stages}
+    work.outline_tree = outline
+    work.title = story.get("title", work.title)
+    work.genre = story.get("genre", work.genre)
+    flag_modified(work, "outline_tree")
+    db.commit()
+    return "macro_outline_persisted"
+
+
+def _submit_meso_outline_tool(**kwargs) -> str:
+    """提交中纲（Meso Outline）：写入自然语言文档 meso_doc"""
+    ctx = _outline_ctx()
+    if not ctx:
+        return "meso_outline_received"
+    meso_doc = kwargs.get("meso_doc", "")
+    if not meso_doc or not meso_doc.strip():
+        raise ValueError("meso_doc 为空，无法提交中纲。需要提供自然语言的中纲文档。")
+    db: Session = ctx["db"]
+    work_id = ctx.get("work_id")
+    work = db.query(Work).filter_by(id=work_id).first() if work_id else None
+    if not work:
+        raise ValueError("作品不存在，无法提交中纲。")
+    work.meso_doc = meso_doc
+    flag_modified(work, "meso_doc")
+    db.commit()
+    return "meso_outline_persisted"
+
+
+def _submit_micro_outline_tool(**kwargs) -> str:
+    """提交小纲（Micro Outline）：写入自然语言文档 micro_doc"""
+    ctx = _outline_ctx()
+    if not ctx:
+        return "micro_outline_received"
+    micro_doc = kwargs.get("micro_doc", "")
+    if not micro_doc or not micro_doc.strip():
+        raise ValueError("micro_doc 为空，无法提交小纲。需要提供自然语言的小纲文档。")
+    db: Session = ctx["db"]
+    work_id = ctx.get("work_id")
+    work = db.query(Work).filter_by(id=work_id).first() if work_id else None
+    if not work:
+        raise ValueError("作品不存在，无法提交小纲。")
+    work.micro_doc = micro_doc
+    flag_modified(work, "micro_doc")
+    db.commit()
+    return "micro_outline_persisted"
+
+
+SUBMIT_MACRO_OUTLINE_TOOL = StructuredTool.from_function(
+    func=_submit_macro_outline_tool,
+    name="submit_macro_outline",
+    description="提交大纲（Macro Outline）：包含 story、macro_phases、core_characters、ending。",
+    args_schema=_SubmitMacroOutlineInput,
+)
+
+SUBMIT_MESO_OUTLINE_TOOL = StructuredTool.from_function(
+    func=_submit_meso_outline_tool,
+    name="submit_meso_outline",
+    description="提交中纲（Meso Outline）：包含 meso_stages。",
+    args_schema=_SubmitMesoOutlineInput,
+)
+
+SUBMIT_MICRO_OUTLINE_TOOL = StructuredTool.from_function(
+    func=_submit_micro_outline_tool,
+    name="submit_micro_outline",
+    description="提交小纲（Micro Outline）：包含 micro_scenes。",
+    args_schema=_SubmitMicroOutlineInput,
+)
+
+
 SUBMIT_STORY_TOOL = StructuredTool.from_function(
     func=_submit_story_tool,
     name="submit_story",
@@ -353,7 +533,7 @@ SUBMIT_TIMELINE_TOOL = StructuredTool.from_function(
 SUBMIT_CHARACTER_BRIEFS_TOOL = StructuredTool.from_function(
     func=_submit_character_briefs_tool,
     name="submit_character_briefs",
-    description="提交角色骨架列表：所有角色的 name/role_type/gender/age/first_chapter/brief。",
+    description="提交角色骨架列表：所有角色的 name/role_type/gender/age/first_appearance_stage/brief。",
     args_schema=_SubmitCharacterBriefsInput,
 )
 
@@ -413,6 +593,15 @@ def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
         "submit_branches": _submit_branches_tool,
         "submit_foreshadowing": _submit_foreshadowing_tool,
         "submit_character_links": _submit_character_links_tool,
+        "submit_macro_outline": _submit_macro_outline_tool,
+        "submit_meso_outline": _submit_meso_outline_tool,
+        "submit_micro_outline": _submit_micro_outline_tool,
+    }
+    # 三层大纲：field_name 到实际 schema 字段的映射
+    _field_aliases = {
+        "macro_outline": None,  # macro_outline 返回整个 args
+        "meso_outline": "meso_stages",
+        "micro_outline": "micro_scenes",
     }
     tool_calls = _extract_tool_calls(ai_msg)
     for call in tool_calls:
@@ -427,12 +616,21 @@ def _parse_section_from_tool_call(ai_msg, *, tool_name: str, field_name: str):
         if tool_name == "submit_character_details" and isinstance(args.get(field_name), list):
             args = dict(args)
             args[field_name] = _coerce_character_age(args[field_name])
-        if field_name not in args:
-            raise ValueError(f"{tool_name} missing field: {field_name}")
+
+        # 确定要返回的字段
+        actual_field = _field_aliases.get(field_name, field_name)
+        if actual_field is None:
+            # macro_outline: 返回整个 args（包含 story, macro_phases, core_characters, ending）
+            handler = submit_handlers.get(tool_name)
+            if handler:
+                handler(**args)
+            return args
+        if actual_field not in args:
+            raise ValueError(f"{tool_name} missing field: {actual_field}")
         handler = submit_handlers.get(tool_name)
         if handler:
             handler(**args)
-        return args[field_name]
+        return args[actual_field]
 
     raise ValueError(f"LLM did not call {tool_name}")
 
@@ -517,10 +715,21 @@ class WorkService:
             [SUBMIT_CHARACTER_LINKS_TOOL],
             max_tokens=131072,
         )
-        # NOTE: chat_edit_model (with_structured_output) removed — chat_edit / chat_edit_async
-        # now use native Tool-Calling via self.chat_model.bind_tools(ALL_OUTLINE_TOOLS).
-        # chapter_chat_model kept for backward compatibility with deprecated chapter_chat_edit API.
-        self.chapter_chat_model = base_model.with_structured_output(ChapterChatResponse, strict=True)
+        # 三层大纲 LLM 实例
+        self.outline_macro_llm = outline_model.bind_tools(
+            [SUBMIT_MACRO_OUTLINE_TOOL],
+            max_tokens=131072,
+        )
+        self.outline_meso_llm = outline_model.bind_tools(
+            [SUBMIT_MESO_OUTLINE_TOOL],
+            max_tokens=131072,
+        )
+        self.outline_micro_llm = outline_model.bind_tools(
+            [SUBMIT_MICRO_OUTLINE_TOOL],
+            max_tokens=131072,
+        )
+        # NOTE: chat_edit_model (with_structured_output) removed — chat_edit_async
+        # now uses native Tool-Calling via self.chat_model.bind_tools(ALL_OUTLINE_TOOLS).
 
     def _read_prompt(self, file_name: str) -> str:
         path = PROMPT_DIR / file_name
@@ -650,7 +859,7 @@ class WorkService:
                     f"timeline：{_compact(timeline, limit=12)}\n"
                     f"{_QUOTE_CONSTRAINT}"
                     "必须调用 submit_character_briefs，不要输出普通文本。\n"
-                    "为每个角色提供 name、role_type、gender、age、first_chapter、brief。\n"
+                    "为每个角色提供 name、role_type、gender、age、first_appearance_stage、brief。\n"
                     "brief 是一句话角色定位，如'与主角共同成长的挚友'。\n"
                     "角色数量按故事需要与用户约束设置，优先列出会影响主线推进或长期出场的核心角色。"
                 ),
@@ -714,7 +923,10 @@ class WorkService:
                     "skills": detail.get("skills", ""),
                     "current_status": detail.get("current_status", "存活"),
                     "current_goal": detail.get("current_goal", ""),
-                    "first_chapter": brief.get("first_chapter", 1),
+                    "first_appearance_stage": (
+                        detail.get("first_appearance_stage")
+                        or brief.get("first_appearance_stage", "M1")
+                    ),
                 })
 
             _status("generating_branches", "正在生成支线...")
@@ -794,11 +1006,175 @@ class WorkService:
             if token is not None:
                 _OUTLINE_GENERATION_CTX.reset(token)
 
+    # DEPRECATED: 未来删除，由独立工具 generate_macro/meso/micro_outline + generate_character_details 替代
+    async def _generate_three_level_outline(
+        self,
+        idea: str,
+        tags: str,
+        emit=None,
+        db: Session | None = None,
+        user_id: str | None = None,
+        tags_list: list[str] | None = None,
+    ) -> dict:
+        """生成三层大纲：大纲（Macro） → 中纲（Meso） → 小纲（Micro）"""
+        token = None
+        if db is not None and user_id is not None:
+            token = _OUTLINE_GENERATION_CTX.set({
+                "db": db,
+                "user_id": user_id,
+                "idea": idea,
+                "tags_list": tags_list or [],
+            })
+
+        def _status(phase: str, message: str):
+            if emit:
+                emit("outline_status", {"phase": phase, "message": message})
+
+        def _compact(items: object, limit: int = 8) -> str:
+            if isinstance(items, list):
+                slim = items[:limit]
+                return json.dumps(slim, ensure_ascii=False)
+            if isinstance(items, dict):
+                return json.dumps(items, ensure_ascii=False)
+            return json.dumps(items, ensure_ascii=False)
+
+        async def _ainvoke_section(llm, prompt_text: str, tool_name: str, field_name: str):
+            attempts = 3
+            last_exc: Exception | None = None
+            for i in range(1, attempts + 1):
+                retry_prompt = prompt_text
+                if i > 1:
+                    retry_prompt = (
+                        f"{prompt_text}\n\n"
+                        "【强约束】你上一次输出未被系统识别。"
+                        "这一次只允许输出工具调用，不允许解释性文字。"
+                        f"必须且只调用 {tool_name}，并确保 {field_name} 是合法 JSON。"
+                    )
+                try:
+                    msg = await llm.ainvoke([("human", retry_prompt)])
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "outline section llm invoke failed tool=%s attempt=%s/%s err=%s",
+                        tool_name, i, attempts, exc,
+                    )
+                    if emit and i < attempts:
+                        emit(
+                            "outline_status",
+                            {"phase": "retrying", "message": f"{tool_name} 调用失败，正在重试（{i}/{attempts - 1}）..."},
+                        )
+                    continue
+                try:
+                    return _parse_section_from_tool_call(msg, tool_name=tool_name, field_name=field_name)
+                except Exception as exc:
+                    last_exc = exc
+                    logger.warning(
+                        "outline section tool-call parse failed tool=%s attempt=%s/%s text_preview=%r tool_calls=%r err=%s",
+                        tool_name,
+                        i,
+                        attempts,
+                        _llm_message_text(msg),
+                        getattr(msg, "tool_calls", None),
+                        exc,
+                    )
+                    if emit and i < attempts:
+                        emit(
+                            "outline_status",
+                            {"phase": "retrying", "message": f"{tool_name} 结构生成异常，正在重试（{i}/{attempts - 1}）..."},
+                        )
+            assert last_exc is not None
+            raise last_exc
+
+        try:
+            requirement_context = (
+                f"原始用户需求（必须严格遵循）：\n"
+                f"- 灵感：{idea}\n"
+                f"- 标签：{tags}\n"
+            )
+
+            # ── 第一步：生成大纲（Macro Outline） ──
+            _status("generating_macro_outline", "正在生成大纲（Macro Outline）...")
+            macro_outline = await _ainvoke_section(
+                self.outline_macro_llm,
+                (
+                    "你是网络小说策划编辑。请基于用户灵感生成大纲（Macro Outline）。\n"
+                    f"{requirement_context}"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "大纲包含：story（标题、类型、卷名）、macro_phases（宏观阶段数组）、core_characters（核心角色简介）、ending（结局方向，可选）。\n"
+                    "macro_phases 每个阶段需包含：id、name、goal、core_setting、ending_direction（可选）、chapter_range。\n"
+                    "必须调用 submit_macro_outline，不要输出普通文本。"
+                ),
+                "submit_macro_outline",
+                "macro_outline",
+            )
+
+            # ── 第二步：生成中纲（Meso Outline） ──
+            _status("generating_meso_outline", "正在生成中纲（Meso Outline）...")
+            meso_outline = await _ainvoke_section(
+                self.outline_meso_llm,
+                (
+                    "你是网络小说策划编辑。请基于大纲生成中纲（Meso Outline）。\n"
+                    f"{requirement_context}"
+                    f"大纲：{_compact({'story': macro_outline.get('story', {}), 'macro_phases': macro_outline.get('macro_phases', [])}, limit=20)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "中纲包含 meso_stages 数组，每个阶段对应一个副本/地图/案件/赛事/战争/感情阶段/商业阶段。\n"
+                    "每个阶段需包含：id、macro_phase_id（关联的大纲阶段ID）、name、type、cause、conflict、key_characters、twist、climax、reward、chapter_range。\n"
+                    "必须调用 submit_meso_outline，不要输出普通文本。"
+                ),
+                "submit_meso_outline",
+                "meso_outline",
+            )
+
+            # ── 第三步：生成小纲（Micro Outline） ──
+            _status("generating_micro_outline", "正在生成小纲（Micro Outline）...")
+            micro_outline = await _ainvoke_section(
+                self.outline_micro_llm,
+                (
+                    "你是网络小说策划编辑。请基于中纲生成小纲（Micro Outline）。\n"
+                    f"{requirement_context}"
+                    f"大纲：{_compact({'story': macro_outline.get('story', {}), 'macro_phases': macro_outline.get('macro_phases', [])}, limit=10)}\n"
+                    f"中纲：{_compact(meso_outline, limit=15)}\n"
+                    f"{_QUOTE_CONSTRAINT}"
+                    "小纲包含 micro_scenes 数组，每个场景对应章节或场景级细节。\n"
+                    "每个场景需包含：id、meso_stage_id（关联的中纲阶段ID）、chapter_number、scene_number、characters、location、conflict、info_points、emotion_points、hook。\n"
+                    "必须调用 submit_micro_outline，不要输出普通文本。"
+                ),
+                "submit_micro_outline",
+                "micro_outline",
+            )
+
+            # ── 构建最终结果 ──
+            # macro_outline 是整个 args dict（含 story, macro_phases, core_characters, ending）
+            # meso_outline 是 meso_stages 列表
+            # micro_outline 是 micro_scenes 列表
+            result = {
+                "story": macro_outline.get("story", {}),
+                "outline": {
+                    "macro_phases": macro_outline.get("macro_phases", []),
+                    "core_characters": macro_outline.get("core_characters", []),
+                    "ending": macro_outline.get("ending", {}),
+                },
+                "meso": {"meso_stages": meso_outline},
+                "micro": {"micro_scenes": micro_outline},
+                "characters": macro_outline.get("core_characters", []),
+                "character_links": [],
+            }
+            ctx = _outline_ctx()
+            if ctx and ctx.get("work_id") and ctx.get("db"):
+                work = ctx["db"].query(Work).filter_by(id=ctx["work_id"]).first()
+                if work:
+                    result = dict(work.outline_tree or result)
+                    result["_work_id"] = work.id
+            return result
+        finally:
+            if token is not None:
+                _OUTLINE_GENERATION_CTX.reset(token)
+
     @staticmethod
     def _apply_operations(outline: dict, operations: list[dict]) -> dict:
         """Apply a list of tool-call operations to an outline tree."""
-        timeline = outline.get("timeline", [])
-        branches = outline.get("branches", [])
+        macroPhases = outline.get("outline", {}).get("macro_phases", [])
+        mesoStages = outline.get("meso", {}).get("meso_stages", [])
         foreshadowing = outline.get("foreshadowing", [])
         story = outline.get("story", {})
 
@@ -806,38 +1182,40 @@ class WorkService:
             tool = op.get("tool", "")
             args = op.get("args", {})
 
-            if tool == "add_timeline_node":
-                new_id = f"N{len(timeline) + 1}"
-                order = args.get("order", len(timeline) + 1)
-                timeline.append({
+            if tool == "add_timeline_node" or tool == "add_macro_phase":
+                new_id = f"P{len(macroPhases) + 1}"
+                order = args.get("order", len(macroPhases) + 1)
+                chapter_start = int(args.get("chapter_start", args.get("chapter_range", [1, 10])[0] if isinstance(args.get("chapter_range"), list) else 1))
+                chapter_end = int(args.get("chapter_end", args.get("chapter_range", [1, 10])[1] if isinstance(args.get("chapter_range"), list) else 10))
+                macroPhases.append({
                     "id": new_id,
                     "order": order,
-                    "development_node": args.get("development_node", "新主线节点"),
-                    "summary": args.get("summary", ""),
-                    "time_node": args.get("time_node", f"阶段{len(timeline) + 1}"),
-                    "chapter_start": int(args.get("chapter_start", 1)),
-                    "chapter_end": int(args.get("chapter_end", 10)),
+                    "name": args.get("name", args.get("development_node", "新宏观阶段")),
+                    "goal": args.get("goal", args.get("summary", "")),
+                    "core_setting": args.get("core_setting", ""),
+                    "chapter_range": [chapter_start, chapter_end],
                 })
-                # Re-sort by order
-                timeline.sort(key=lambda n: n.get("order", 0))
+                macroPhases.sort(key=lambda n: n.get("order", 0))
 
-            elif tool == "add_branch_node":
-                new_id = f"B{len(branches) + 1}"
-                branches.append({
+            elif tool == "add_branch_node" or tool == "add_meso_stage":
+                new_id = f"M{len(mesoStages) + 1}"
+                chapter_start = int(args.get("chapter_start", args.get("chapter_range", [1, 10])[0] if isinstance(args.get("chapter_range"), list) else 1))
+                chapter_end = int(args.get("chapter_end", args.get("chapter_range", [1, 10])[1] if isinstance(args.get("chapter_range"), list) else 10))
+                mesoStages.append({
                     "id": new_id,
-                    "attach_to": args.get("attach_to", timeline[0]["id"] if timeline else "N1"),
-                    "side": args.get("side", "right"),
-                    "name": args.get("name", "新支线"),
-                    "summary": args.get("summary", ""),
-                    "chapter_start": int(args.get("chapter_start", 1)),
-                    "chapter_end": int(args.get("chapter_end", 10)),
+                    "macro_phase_id": args.get("macro_phase_id", args.get("attach_to", macroPhases[0]["id"] if macroPhases else "P1")),
+                    "type": args.get("type", args.get("side", "right")),
+                    "name": args.get("name", "新中纲阶段"),
+                    "cause": args.get("cause", args.get("summary", "")),
+                    "conflict": args.get("conflict", ""),
+                    "key_characters": args.get("key_characters", []),
+                    "chapter_range": [chapter_start, chapter_end],
                 })
 
             elif tool == "update_node":
                 node_id = args.get("node_id", "")
                 fields = args.get("fields", {})
-                # Search in timeline, branches, foreshadowing
-                for node_list in [timeline, branches, foreshadowing]:
+                for node_list in [macroPhases, mesoStages, foreshadowing]:
                     for node in node_list:
                         if node.get("id") == node_id:
                             node.update(fields)
@@ -845,51 +1223,28 @@ class WorkService:
 
             elif tool == "delete_node":
                 node_id = args.get("node_id", "")
-                timeline = [n for n in timeline if n.get("id") != node_id]
-                branches = [n for n in branches if n.get("id") != node_id]
+                macroPhases = [n for n in macroPhases if n.get("id") != node_id]
+                mesoStages = [n for n in mesoStages if n.get("id") != node_id]
                 foreshadowing = [n for n in foreshadowing if n.get("id") != node_id]
 
             elif tool == "update_story":
                 fields = args.get("fields", {})
                 story.update(fields)
 
+        outline_data = outline.get("outline", {})
+        outline_data["macro_phases"] = macroPhases
+        meso_data = outline.get("meso", {})
+        meso_data["meso_stages"] = mesoStages
+
         return {
             **outline,
             "story": story,
-            "timeline": timeline,
-            "branches": branches,
+            "outline": outline_data,
+            "meso": meso_data,
             "foreshadowing": foreshadowing,
         }
 
-    def generate_outline(
-        self, payload: OutlineQuickGenerateRequest, db: Session, *, user_id: str
-    ) -> OutlineGenerateResponse:
-        try:
-            tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
-            result_dict = asyncio.run(
-                self._generate_outline_sections(
-                    payload.idea.strip(),
-                    tags_str,
-                    db=db,
-                    user_id=user_id,
-                    tags_list=payload.tags,
-                )
-            )
-            work_id = result_dict.pop("_work_id", None)
-            outline_tree = OutlineTreeData.model_validate(result_dict)
-            if not work_id:
-                raise ValueError("大纲生成工具执行完成后未返回 work_id")
-
-            return OutlineGenerateResponse(outline_tree=outline_tree, work_id=work_id)
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"LLM outline generation failed: {exc}"
-            ) from exc
-
+    # DEPRECATED: 未来删除，用户只有 supervisor agent 对话入口
     async def generate_outline_stream(self, payload: OutlineQuickGenerateRequest, emit, *, user_id: str):
         """Stream outline generation progress via SSE, then return the final result.
 
@@ -909,7 +1264,7 @@ class WorkService:
             )
             emit("outline_status", {"phase": "generating_story", "message": "正在生成故事设定..."})
             tags_str = "、".join(payload.tags) if payload.tags else "无特殊要求"
-            result_dict = await self._generate_outline_sections(
+            result_dict = await self._generate_three_level_outline(
                 payload.idea.strip(),
                 tags_str,
                 emit=emit,
@@ -926,9 +1281,9 @@ class WorkService:
             outline_data = outline_tree.model_dump(mode="json")
             story = outline_data["story"]
             logger.info(
-                "work.generate_outline_stream validate_done timeline=%s branches=%s foreshadowing=%s characters=%s character_links=%s",
-                len(outline_data.get("timeline", [])),
-                len(outline_data.get("branches", [])),
+                "work.generate_outline_stream validate_done macro_phases=%s meso_stages=%s foreshadowing=%s characters=%s character_links=%s",
+                len(outline_data.get("outline", {}).get("macro_phases", [])),
+                len(outline_data.get("meso", {}).get("meso_stages", [])),
                 len(outline_data.get("foreshadowing", [])),
                 len(outline_data.get("characters", [])),
                 len(outline_data.get("character_links", [])),
@@ -940,18 +1295,18 @@ class WorkService:
                 "total": 1,
                 "node": story,
             })
-            for i, node in enumerate(outline_data.get("timeline", []), start=1):
+            for i, node in enumerate(outline_data.get("outline", {}).get("macro_phases", []), start=1):
                 emit("outline_tree_progress", {
-                    "section": "timeline",
+                    "section": "macro_phases",
                     "index": i,
-                    "total": len(outline_data.get("timeline", [])),
+                    "total": len(outline_data.get("outline", {}).get("macro_phases", [])),
                     "node": node,
                 })
-            for i, node in enumerate(outline_data.get("branches", []), start=1):
+            for i, node in enumerate(outline_data.get("meso", {}).get("meso_stages", []), start=1):
                 emit("outline_tree_progress", {
-                    "section": "branches",
+                    "section": "meso_stages",
                     "index": i,
-                    "total": len(outline_data.get("branches", [])),
+                    "total": len(outline_data.get("meso", {}).get("meso_stages", [])),
                     "node": node,
                 })
             for i, node in enumerate(outline_data.get("foreshadowing", []), start=1):
@@ -1007,156 +1362,53 @@ class WorkService:
         db.refresh(work)
         return WorkOut.model_validate(work)
 
-    def chat_edit(
-        self, work_id: str, user_message: str, history: list[dict], db: Session,
-        session_id: str | None = None, *, user_id: str,
-    ) -> ChatEditResponse:
-        """Synchronous outline chat edit using Tool-Calling loop."""
-        from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
-
-        from app.services.outline_tools import ALL_OUTLINE_TOOLS
-
+    @staticmethod
+    def update_requirements_doc(
+        work_id: str,
+        content: str,
+        db: Session,
+        *,
+        user_id: str,
+    ) -> dict[str, str]:
         work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
         if not work:
             raise HTTPException(status_code=404, detail="作品不存在")
+        work.requirements_doc = content
+        db.commit()
+        db.refresh(work)
+        return {"content": work.requirements_doc or ""}
 
-        from app.services.session_service import create_session, touch_session, get_session
-        if session_id:
-            existing = get_session(db, session_id)
-            if not existing:
-                session_id = None
-        if not session_id:
-            session_id = new_session_id()
+    @staticmethod
+    def update_meso_doc(
+        work_id: str,
+        content: str,
+        db: Session,
+        *,
+        user_id: str,
+    ) -> dict[str, str]:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
+        work.meso_doc = content
+        db.commit()
+        db.refresh(work)
+        return {"content": work.meso_doc or ""}
 
-        # Ensure a session record exists
-        chat_s = get_session(db, session_id)
-        if not chat_s:
-            create_session(
-                db, work_id=work_id, session_id=session_id,
-            )
-        else:
-            touch_session(db, session_id)
-
-        # Log user message
-        log_event(db, work_id=work_id, session_id=session_id,
-                  session_type="outline_chat", role="user", content=user_message)
-
-        current_outline = json.dumps(work.outline_tree, ensure_ascii=False, indent=2)
-        history_str = "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}" for m in history
-        ) if history else "（无）"
-
-        # Build characters context
-        from app.models.work_model import Character
-        characters = db.query(Character).filter_by(work_id=work_id).order_by(Character.first_chapter).all()
-        characters_info = self._format_characters_for_prompt(characters)
-
-        # Build system prompt
-        template = self._read_prompt("outline_system.txt")
-        system_text = template.format(
-            current_outline=current_outline,
-            characters_info=characters_info,
-            history=history_str,
-            user_message=user_message.strip(),
-        )
-
-        # Prepare mutable outline_tree for tools to modify in-place
-        outline_tree = work.outline_tree
-        tools_map = {t.name: t for t in ALL_OUTLINE_TOOLS}
-        tool_config = {
-            "configurable": {
-                "outline_tree": outline_tree,
-                "db": db,
-                "work_id": work_id,
-            },
-        }
-
-        # Build message list
-        messages = [
-            SystemMessage(content=system_text),
-            HumanMessage(content=user_message.strip()),
-        ]
-
-        # LLM bound with tools
-        llm_with_tools = self.chat_model.bind_tools(ALL_OUTLINE_TOOLS)
-
-        all_operations = []
-        max_iterations = 10
-
-        try:
-            for _ in range(max_iterations):
-                ai_msg = llm_with_tools.invoke(messages)
-                messages.append(ai_msg)
-
-                # No tool_calls → LLM is done
-                if not ai_msg.tool_calls:
-                    break
-
-                # Execute each tool_call sequentially
-                for tc in ai_msg.tool_calls:
-                    tool_name = tc["name"]
-                    tool_args = tc["args"]
-                    tool_call_id = tc["id"]
-
-                    all_operations.append({
-                        "tool": tool_name,
-                        "args": tool_args,
-                    })
-
-                    tool_fn = tools_map.get(tool_name)
-                    if tool_fn:
-                        try:
-                            result = tool_fn.invoke(tool_args, config=tool_config)
-                            tool_response = str(result)
-                        except Exception as tool_exc:
-                            tool_response = f"工具执行错误: {tool_exc}"
-                            logger.warning("Tool %s execution error: %s", tool_name, tool_exc)
-                    else:
-                        tool_response = f"未知工具: {tool_name}"
-
-                    messages.append(
-                        ToolMessage(content=tool_response, tool_call_id=tool_call_id)
-                    )
-
-            # Extract assistant message
-            assistant_message = ""
-            for msg in reversed(messages):
-                if isinstance(msg, AIMessage) and msg.content:
-                    assistant_message = msg.content
-                    break
-            if not assistant_message:
-                assistant_message = "已完成修改。" if all_operations else "请告诉我你想修改什么？"
-
-            # Save updated outline
-            from sqlalchemy.orm.attributes import flag_modified
-
-            updated_outline = tool_config["configurable"]["outline_tree"]
-            story = updated_outline.get("story", {})
-            work.outline_tree = updated_outline
-            flag_modified(work, "outline_tree")
-            work.title = story.get("title", work.title)
-            work.genre = story.get("genre", work.genre)
-            db.commit()
-
-            # Log assistant response
-            log_event(db, work_id=work_id, session_id=session_id,
-                      session_type="outline_chat", role="assistant",
-                      content=assistant_message,
-                      meta={"operations": all_operations})
-
-            return ChatEditResponse(
-                assistant_message=assistant_message,
-                operations=all_operations,
-                outline_tree=updated_outline,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"LLM chat edit failed: {exc}"
-            ) from exc
+    @staticmethod
+    def update_micro_doc(
+        work_id: str,
+        content: str,
+        db: Session,
+        *,
+        user_id: str,
+    ) -> dict[str, str]:
+        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
+        if not work:
+            raise HTTPException(status_code=404, detail="作品不存在")
+        work.micro_doc = content
+        db.commit()
+        db.refresh(work)
+        return {"content": work.micro_doc or ""}
 
     async def chat_edit_async(
         self, work_id: str, user_message: str, history: list[dict], db: Session,
@@ -1208,7 +1460,7 @@ class WorkService:
         ) if history else "（无）"
 
         from app.models.work_model import Character
-        characters = db.query(Character).filter_by(work_id=work_id).order_by(Character.first_chapter).all()
+        characters = db.query(Character).filter_by(work_id=work_id).order_by(Character.first_appearance_stage).all()
         characters_info = self._format_characters_for_prompt(characters)
 
         # Build system prompt
@@ -1391,7 +1643,7 @@ class WorkService:
                             skills=args.get("skills", ""),
                             current_status=args.get("current_status", "存活"),
                             current_goal=args.get("current_goal", ""),
-                            first_chapter=int(args.get("first_chapter", 1)),
+                            first_appearance_stage=str(args.get("first_appearance_stage", "M1")),
                             notes=args.get("notes", ""),
                         )
                         db.add(char)
@@ -1406,103 +1658,32 @@ class WorkService:
     @staticmethod
     def _find_chapter_outline(outline_tree: dict, chapter_number: int) -> str:
         """Extract the outline info relevant to a specific chapter number."""
-        timeline = outline_tree.get("timeline", [])
-        branches = outline_tree.get("branches", [])
+        macro_phases = outline_tree.get("outline", {}).get("macro_phases", [])
+        meso_stages = outline_tree.get("meso", {}).get("meso_stages", [])
+        micro_scenes = outline_tree.get("micro", {}).get("micro_scenes", [])
 
         relevant = []
-        for node in timeline:
-            if node.get("chapter_start", 0) <= chapter_number <= node.get("chapter_end", 0):
-                summary = node.get("summary") or (node.get("mainline") if isinstance(node.get("mainline"), str) else "")
-                relevant.append(f"[主线] {node.get('time_node', '')}：{node.get('development_node', '')}。{summary}（第{node['chapter_start']}-{node['chapter_end']}章）")
-        for node in branches:
-            if node.get("chapter_start", 0) <= chapter_number <= node.get("chapter_end", 0):
-                relevant.append(f"[支线·{node.get('name', '')}] {node.get('summary', '')}（第{node['chapter_start']}-{node['chapter_end']}章）")
+        for phase in macro_phases:
+            cr = phase.get("chapter_range", [0, 0])
+            if cr[0] <= chapter_number <= cr[1]:
+                relevant.append(f"[大纲] {phase.get('name', '')}：{phase.get('goal', '')}（第{cr[0]}-{cr[1]}章）")
+        for stage in meso_stages:
+            cr = stage.get("chapter_range", [0, 0])
+            if cr[0] <= chapter_number <= cr[1]:
+                relevant.append(
+                    f"[中纲·{stage.get('name', '')}] "
+                    f"起因：{stage.get('cause', '')}，冲突：{stage.get('conflict', '')}，"
+                    f"关键人物：{'、'.join(stage.get('key_characters', []))}（第{cr[0]}-{cr[1]}章）"
+                )
+        for scene in micro_scenes:
+            if scene.get("chapter_number") == chapter_number:
+                relevant.append(
+                    f"[小纲·第{scene.get('chapter_number', '')}章场景{scene.get('scene_number', '')}] "
+                    f"人物：{'、'.join(scene.get('characters', []))}，地点：{scene.get('location', '')}，"
+                    f"冲突：{scene.get('conflict', '')}，钩子：{scene.get('hook', '')}"
+                )
 
         return "\n".join(relevant) if relevant else "（无匹配纲要，请根据整体大纲自行推进）"
-
-    def generate_chapter(self, work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterGenerateResponse:
-        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
-        if not work:
-            raise HTTPException(status_code=404, detail="作品不存在")
-
-        outline_tree = work.outline_tree
-
-        # Collect previous chapters' content (up to 3 most recent before this one)
-        prev_chapters = (
-            db.query(Chapter)
-            .filter_by(work_id=work_id)
-            .filter(Chapter.chapter_number < chapter_number)
-            .filter(Chapter.content != "")
-            .order_by(Chapter.chapter_number.desc())
-            .limit(3)
-            .all()
-        )
-        prev_chapters.reverse()
-
-        previous_text = ""
-        if prev_chapters:
-            parts = []
-            for ch in prev_chapters:
-                summary = ch.content
-                parts.append(f"--- 第{ch.chapter_number}章 {ch.title} ---\n{summary}")
-            previous_text = "\n\n".join(parts)
-        else:
-            previous_text = "（这是第一章，暂无前文）"
-
-        story_info = json.dumps(outline_tree.get("story", {}), ensure_ascii=False)
-        outline_text = json.dumps(outline_tree, ensure_ascii=False, indent=2)
-        chapter_outline = self._find_chapter_outline(outline_tree, chapter_number)
-
-        template = self._read_prompt("work_generate_chapter.txt")
-        prompt = PromptTemplate.from_template(template)
-
-        chain = prompt | self.chat_model
-        try:
-            result = chain.invoke({
-                "story_info": story_info,
-                "outline_tree": outline_text,
-                "chapter_number": str(chapter_number),
-                "chapter_outline": chapter_outline,
-                "previous_chapters": previous_text,
-            })
-
-            content = result.content if hasattr(result, "content") else str(result)
-
-            # Extract title from first line if it matches "第X章 ..." pattern
-            lines = content.strip().split("\n", 1)
-            title = ""
-            body = content.strip()
-            if lines and lines[0].startswith("第") and "章" in lines[0][:10]:
-                title = lines[0].strip()
-                body = lines[1].strip() if len(lines) > 1 else ""
-
-            # Upsert: update if exists, create if not
-            chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-            if chapter:
-                chapter.title = title or chapter.title
-                chapter.content = body
-                chapter.status = "已保存"
-            else:
-                chapter = Chapter(
-                    work_id=work_id,
-                    chapter_number=chapter_number,
-                    title=title or f"第{chapter_number}章",
-                    content=body,
-                    status="已保存",
-                )
-                db.add(chapter)
-
-            db.commit()
-            db.refresh(chapter)
-            return ChapterGenerateResponse(chapter=ChapterOut.model_validate(chapter))
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            db.rollback()
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"LLM chapter generation failed: {exc}"
-            ) from exc
 
     @staticmethod
     def list_chapters(work_id: str, db: Session, *, user_id: str) -> list[ChapterOut]:
@@ -1516,16 +1697,6 @@ class WorkService:
             .all()
         )
         return [ChapterOut.model_validate(c) for c in chapters]
-
-    @staticmethod
-    def get_chapter(work_id: str, chapter_number: int, db: Session, *, user_id: str) -> ChapterOut:
-        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
-        if not work:
-            raise HTTPException(status_code=404, detail="作品不存在")
-        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-        if not chapter:
-            raise HTTPException(status_code=404, detail="章节不存在")
-        return ChapterOut.model_validate(chapter)
 
     @staticmethod
     def update_chapter(work_id: str, chapter_number: int, payload: ChapterUpdateRequest, db: Session, *, user_id: str) -> ChapterOut:
@@ -1618,7 +1789,6 @@ class WorkService:
                 key_plot_points=[],
                 outline_links=[],
                 involved_characters=[],
-                foreshadows=[],
                 facts=[],
                 updated_at=None,
                 chapter_updated_at=chapter.updated_at,
@@ -1631,92 +1801,10 @@ class WorkService:
             key_plot_points=list(metadata.key_plot_points or []),
             outline_links=list(metadata.outline_links or []),
             involved_characters=list(metadata.involved_characters or []),
-            foreshadows=list(metadata.foreshadows or []),
             facts=list(metadata.facts or []),
             updated_at=metadata.updated_at,
             chapter_updated_at=chapter.updated_at,
         )
-
-    # DEPRECATED: chapter_chat_edit is no longer actively called by the frontend.
-    # The SupervisorAgent's edit_chapter tool uses EditChapterAgent instead.
-    # This method is retained for API backward compatibility.
-    def chapter_chat_edit(
-        self,
-        work_id: str,
-        chapter_number: int,
-        user_message: str,
-        history: list[dict],
-        db: Session,
-        *, user_id: str,
-    ) -> ChapterChatResponse:
-        """Use LLM to edit chapter content via conversation (DEPRECATED — use edit_chapter via SupervisorAgent)."""
-        work = db.query(Work).filter_by(id=work_id, user_id=user_id).first()
-        if not work:
-            raise HTTPException(status_code=404, detail="作品不存在")
-
-        session_id = new_session_id()
-
-        # Log user message
-        log_event(db, work_id=work_id, session_id=session_id,
-                  session_type="chapter_chat", role="user",
-                  content=user_message, chapter_number=chapter_number)
-
-        chapter = db.query(Chapter).filter_by(work_id=work_id, chapter_number=chapter_number).first()
-        current_content = chapter.content if chapter else ""
-        current_title = chapter.title if chapter else ""
-
-        outline_tree = work.outline_tree
-        story_info = json.dumps(outline_tree.get("story", {}), ensure_ascii=False)
-        outline_text = json.dumps(outline_tree, ensure_ascii=False, indent=2)
-        chapter_outline = self._find_chapter_outline(outline_tree, chapter_number)
-
-        history_str = "\n".join(
-            f"{m.get('role', 'user')}: {m.get('content', '')}" for m in history
-        ) if history else "（无）"
-
-        template = self._read_prompt("work_chapter_chat_edit.txt")
-        prompt = PromptTemplate.from_template(template)
-
-        chain = prompt | self.chapter_chat_model
-        try:
-            result = chain.invoke({
-                "story_info": story_info,
-                "outline_tree": outline_text,
-                "chapter_number": str(chapter_number),
-                "chapter_outline": chapter_outline,
-                "current_content": current_content or "（尚未生成正文）",
-                "history": history_str,
-                "user_message": user_message.strip(),
-            })
-
-            # result is already ChapterChatResponse instance
-            result_dict = result.model_dump() if hasattr(result, "model_dump") else dict(result)
-            assistant_message = result_dict.get("assistant_message", "已完成修改。")
-            proposed_content = result_dict.get("proposed_content", current_content)
-            proposed_title = result_dict.get("proposed_title")
-
-            # Log assistant response
-            log_event(db, work_id=work_id, session_id=session_id,
-                      session_type="chapter_chat", role="assistant",
-                      content=assistant_message, chapter_number=chapter_number,
-                      meta={"proposed_title": proposed_title,
-                            "proposed_content_preview": (proposed_content or "")})
-
-            return ChapterChatResponse(
-                assistant_message=assistant_message,
-                proposed_content=proposed_content,
-                proposed_title=proposed_title if proposed_title else None,
-            )
-        except HTTPException:
-            raise
-        except Exception as exc:  # noqa: BLE001
-            log_event(db, work_id=work_id, session_id=session_id,
-                      session_type="chapter_chat", role="system",
-                      content=f"错误：{exc}", chapter_number=chapter_number)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"LLM chapter chat edit failed: {exc}"
-            ) from exc
 
     @staticmethod
     def list_works(user_id: str, db: Session) -> list[WorkOut]:
@@ -1737,7 +1825,7 @@ class WorkService:
         chars = (
             db.query(Character)
             .filter_by(work_id=work_id)
-            .order_by(Character.first_chapter.asc(), Character.created_at.asc())
+            .order_by(Character.first_appearance_stage.asc(), Character.created_at.asc())
             .all()
         )
         outline = work.outline_tree or {}
@@ -1753,7 +1841,7 @@ class WorkService:
                 "skills": c.skills or "",
                 "current_status": c.current_status or "",
                 "current_goal": c.current_goal or "",
-                "first_chapter": c.first_chapter or 1,
+                "first_appearance_stage": c.first_appearance_stage or "M1",
             }
             for c in chars
         ]

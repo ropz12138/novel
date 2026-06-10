@@ -212,7 +212,7 @@ POLICY_EXEMPT_TOOLS = {
     "grep_chapter_meta", "grep", "read_outline", "read_chapter",
     "query_characters_by_chapter", "grep_in_chapter",
     "query_chapter_outline", "query_outline_related_chapters",
-    "query_previous_chapters", "query_foreshadowing",
+    "query_previous_chapters",
     "read_work_context", "read_chat_history",
     "dispatch_requirements_planner",
 }

@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import re
 from contextvars import ContextVar
+from types import SimpleNamespace
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -34,13 +35,6 @@ class InvolvedCharacter(BaseModel):
     status_change: str | None = None
 
 
-class Foreshadow(BaseModel):
-    type: str
-    content: str
-    plant_node: str | None = None
-    payoff_node: str | None = None
-
-
 class Fact(BaseModel):
     key: str
     value: str
@@ -51,7 +45,6 @@ class ChapterMetadataOutput(BaseModel):
     key_plot_points: list[str] = Field(default_factory=list)
     outline_links: list[OutlineLink] = Field(default_factory=list)
     involved_characters: list[InvolvedCharacter] = Field(default_factory=list)
-    foreshadows: list[Foreshadow] = Field(default_factory=list)
     facts: list[Fact] = Field(default_factory=list)
 
 
@@ -90,7 +83,6 @@ def _upsert_metadata_row(
     row.key_plot_points = [str(x) for x in (metadata.key_plot_points or [])]
     row.outline_links = [x.model_dump() for x in (metadata.outline_links or [])]
     row.involved_characters = [x.model_dump() for x in (metadata.involved_characters or [])]
-    row.foreshadows = [x.model_dump() for x in (metadata.foreshadows or [])]
     row.facts = [x.model_dump() for x in (metadata.facts or [])]
     return row
 
@@ -122,7 +114,7 @@ SUBMIT_CHAPTER_METADATA_TOOL = StructuredTool.from_function(
     name="submit_chapter_metadata",
     description=(
         "提交章节元数据。必须严格提供 ChapterMetadataOutput 结构："
-        "summary、key_plot_points、outline_links、involved_characters、foreshadows、facts。"
+        "summary、key_plot_points、outline_links、involved_characters、facts。"
     ),
     args_schema=_SubmitChapterMetadataInput,
 )
@@ -230,13 +222,24 @@ class ChapterOutlineSyncService:
                 excerpt_lines.append(f"- 第{ch.chapter_number}章原文片段：{excerpt}")
 
         outline = _as_dict(work.outline_tree) if work else {}
-        timeline = outline.get("timeline") if isinstance(outline, dict) else []
+        macro_phases = outline.get("outline", {}).get("macro_phases", []) if isinstance(outline, dict) else []
+        meso_stages = outline.get("meso", {}).get("meso_stages", []) if isinstance(outline, dict) else []
         timeline_lines = []
-        for node in timeline or []:
+        for phase in macro_phases:
             try:
-                if int(node.get("chapter_start", 10**9)) <= chapter_number <= int(node.get("chapter_end", -1)):
+                cr = phase.get("chapter_range", [0, 0])
+                if int(cr[0]) <= chapter_number <= int(cr[1]):
                     timeline_lines.append(
-                        f"- 节点{node.get('id', '')}：{node.get('development_node', '')}；摘要：{node.get('summary', '')}"
+                        f"- 大纲{phase.get('id', '')}：{phase.get('name', '')}；目标：{phase.get('goal', '')}"
+                    )
+            except Exception:
+                continue
+        for stage in meso_stages:
+            try:
+                cr = stage.get("chapter_range", [0, 0])
+                if int(cr[0]) <= chapter_number <= int(cr[1]):
+                    timeline_lines.append(
+                        f"- 中纲{stage.get('id', '')}：{stage.get('name', '')}；冲突：{stage.get('conflict', '')}"
                     )
             except Exception:
                 continue
@@ -270,9 +273,8 @@ class ChapterOutlineSyncService:
             [SUBMIT_CHAPTER_METADATA_TOOL],
         )
 
-        timeline = (outline_tree or {}).get("timeline", []) if isinstance(outline_tree, dict) else []
-        branches = (outline_tree or {}).get("branches", []) if isinstance(outline_tree, dict) else []
-        foreshadowing = (outline_tree or {}).get("foreshadowing", []) if isinstance(outline_tree, dict) else []
+        macro_phases = (outline_tree or {}).get("outline", {}).get("macro_phases", []) if isinstance(outline_tree, dict) else []
+        meso_stages = (outline_tree or {}).get("meso", {}).get("meso_stages", []) if isinstance(outline_tree, dict) else []
 
         characters_payload = [
             {
@@ -290,7 +292,6 @@ class ChapterOutlineSyncService:
             {
                 "chapter_number": m.chapter_number,
                 "summary": m.summary,
-                "foreshadows": m.foreshadows,
             }
             for m in previous_metadata
         ]
@@ -301,7 +302,6 @@ class ChapterOutlineSyncService:
             "要求：summary 为100-200字中文摘要；key_plot_points 3-8条；"
             "outline_links 仅保留本章真实关联，且每项必须包含 type、id、relevance；"
             "involved_characters 仅列本章实际出场角色，且每项必须是对象，包含 name、actions，可选 status_change；"
-            "foreshadows 包含 planted/paid_off/mentioned 等 type 和 content，可选 plant_node/payoff_node；"
             "facts 提取高价值设定事实，且每项必须是对象，包含 key、value。"
         )
 
@@ -309,9 +309,8 @@ class ChapterOutlineSyncService:
             "chapter_number": chapter_number,
             "chapter_title": title,
             "chapter_content": content,
-            "timeline": timeline,
-            "branches": branches,
-            "foreshadowing": foreshadowing,
+            "macro_phases": macro_phases,
+            "meso_stages": meso_stages,
             "characters": characters_payload,
             "previous_metadata": prev_payload,
         }
@@ -319,9 +318,8 @@ class ChapterOutlineSyncService:
         human_content = (
             f"## 第{chapter_number}章「{title}」正文\n\n"
             f"{content}\n\n"
-            f"## 大纲时间线\n{json.dumps(timeline, ensure_ascii=False, indent=2) if timeline else '（无）'}\n\n"
-            f"## 大纲支线\n{json.dumps(branches, ensure_ascii=False, indent=2) if branches else '（无）'}\n\n"
-            f"## 大纲伏笔设定\n{json.dumps(foreshadowing, ensure_ascii=False, indent=2) if foreshadowing else '（无）'}\n\n"
+            f"## 大纲（宏观阶段）\n{json.dumps(macro_phases, ensure_ascii=False, indent=2) if macro_phases else '（无）'}\n\n"
+            f"## 中纲（故事阶段）\n{json.dumps(meso_stages, ensure_ascii=False, indent=2) if meso_stages else '（无）'}\n\n"
             f"## 角色状态\n{json.dumps(characters_payload, ensure_ascii=False, indent=2) if characters_payload else '（无）'}\n\n"
             f"## 前文元数据摘要\n{json.dumps(prev_payload, ensure_ascii=False, indent=2) if prev_payload else '（无）'}"
         )
@@ -348,12 +346,13 @@ class ChapterOutlineSyncService:
         )
 
     @staticmethod
-    async def generate_and_persist(
+    def build_generation_inputs(
         db: Session,
         *,
         work: Work,
         chapter: Chapter,
-    ) -> ChapterMetadata:
+    ) -> dict[str, Any]:
+        """Collect DB-backed context, then return detached values for LLM generation."""
         chars = db.query(Character).filter_by(work_id=work.id).all()
         prev_meta = (
             db.query(ChapterMetadata)
@@ -362,30 +361,59 @@ class ChapterOutlineSyncService:
             .limit(12)
             .all()
         )
-        token = _METADATA_PERSIST_CTX.set({
-            "db": db,
-            "work_id": work.id,
+        return {
             "chapter_number": chapter.chapter_number,
-        })
-        try:
-            await ChapterOutlineSyncService.generate_metadata(
-                chapter_number=chapter.chapter_number,
-                title=chapter.title or f"第{chapter.chapter_number}章",
-                content=chapter.content or "",
-                outline_tree=work.outline_tree or {},
-                characters=chars,
-                previous_metadata=prev_meta,
-            )
-        finally:
-            _METADATA_PERSIST_CTX.reset(token)
+            "title": chapter.title or f"第{chapter.chapter_number}章",
+            "content": chapter.content or "",
+            "outline_tree": work.outline_tree or {},
+            "characters": [
+                SimpleNamespace(
+                    name=c.name,
+                    role_type=c.role_type,
+                    current_status=c.current_status,
+                    current_goal=c.current_goal,
+                    last_location=c.last_location,
+                    last_chapter=c.last_chapter,
+                )
+                for c in chars
+            ],
+            "previous_metadata": [
+                SimpleNamespace(
+                    chapter_number=m.chapter_number,
+                    summary=m.summary,
+                )
+                for m in prev_meta
+            ],
+        }
 
-        row = (
-            db.query(ChapterMetadata)
-            .filter_by(work_id=work.id, chapter_number=chapter.chapter_number)
-            .first()
+    @staticmethod
+    async def generate_for_chapter(
+        db: Session,
+        *,
+        work: Work,
+        chapter: Chapter,
+    ) -> ChapterMetadataOutput:
+        inputs = ChapterOutlineSyncService.build_generation_inputs(db, work=work, chapter=chapter)
+        return await ChapterOutlineSyncService.generate_metadata(**inputs)
+
+    @staticmethod
+    async def generate_and_persist(
+        db: Session,
+        *,
+        work: Work,
+        chapter: Chapter,
+    ) -> ChapterMetadata:
+        metadata = await ChapterOutlineSyncService.generate_for_chapter(
+            db,
+            work=work,
+            chapter=chapter,
         )
-        if not row:
-            raise ValueError("章节元数据提交后未写入数据库")
+        row = ChapterOutlineSyncService.persist_metadata(
+            db,
+            work_id=work.id,
+            chapter_number=chapter.chapter_number,
+            metadata=metadata,
+        )
         return row
 
 

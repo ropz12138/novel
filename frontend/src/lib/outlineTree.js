@@ -16,11 +16,11 @@ function splitSections(outlineText) {
   for (const raw of lines) {
     const line = raw.trim();
     if (!line) continue;
-    if (line.includes("主线")) {
+    if (line.includes("主线") || line.includes("宏观")) {
       mode = "main";
       continue;
     }
-    if (line.includes("支线")) {
+    if (line.includes("支线") || line.includes("中纲")) {
       mode = "side";
       continue;
     }
@@ -42,7 +42,7 @@ function splitSections(outlineText) {
 function buildChapterRange(index) {
   const start = index * 12 + 1;
   const end = start + 11;
-  return `第${start}-${end}章`;
+  return [start, end];
 }
 
 function buildTimeLabel(index) {
@@ -55,22 +55,34 @@ export function buildTreeFromOutline(outlineText) {
   const mainRaw = main.length ? main : ["主角卷入核心冲突", "阵营对抗持续升级", "阶段高潮与反转"];
   const sideRaw = side.length ? side : ["同伴成长线", "势力博弈线", "伏笔回收线"];
 
-  const timeline = mainRaw.map((text, idx) => ({
-    id: `N${idx + 1}`,
-    devNode: shortText(text),
-    timeNode: buildTimeLabel(idx),
-    chapterRange: buildChapterRange(idx),
-    sideNodes: []
+  const macroPhases = mainRaw.map((text, idx) => ({
+    id: `P${idx + 1}`,
+    name: shortText(text),
+    goal: text,
+    core_setting: "",
+    chapter_range: buildChapterRange(idx),
   }));
 
-  sideRaw.forEach((text, idx) => {
-    const attachIndex = idx % timeline.length;
-    timeline[attachIndex].sideNodes.push({
-      id: `S${idx + 1}`,
-      text: shortText(text),
-      direction: idx % 2 === 0 ? "left" : "right"
-    });
+  const mesoStages = sideRaw.map((text, idx) => {
+    const attachIndex = idx % macroPhases.length;
+    return {
+      id: `M${idx + 1}`,
+      name: shortText(text),
+      type: "支线",
+      cause: text,
+      conflict: "",
+      key_characters: [],
+      twist: "",
+      climax: "",
+      outcome: "",
+      macro_phase_id: macroPhases[attachIndex].id,
+      chapter_range: buildChapterRange(attachIndex),
+    };
   });
 
-  return { timeline };
+  return {
+    outline: { macro_phases: macroPhases, core_characters: [], ending: {} },
+    meso: { meso_stages: mesoStages },
+    foreshadowing: [],
+  };
 }

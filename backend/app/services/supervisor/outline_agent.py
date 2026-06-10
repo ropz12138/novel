@@ -19,8 +19,10 @@ from langgraph.prebuilt import ToolNode
 from sqlalchemy.orm import Session
 
 from app.services.supervisor.outline_tools import build_outline_tools
+from app.services.supervisor.prompt_builder import inject_child_todolist_sections
 from app.services.supervisor.sub_agent_base import (
-    chunk_to_ai_message,
+    astream_agent_llm_to_message,
+    bind_agent_llm_with_tools,
     get_llm,
 )
 
@@ -35,11 +37,20 @@ class OutlineState(MessagesState):
     user_message: str
 
 
-def _build_outline_system_prompt(work_id: str, user_message: str, *, auto_mode: bool = False) -> str:
+def _build_outline_system_prompt(
+    work_id: str,
+    user_message: str,
+    *,
+    auto_mode: bool = False,
+    enable_child_todolist: bool = False,
+) -> str:
     if auto_mode:
         template = (PROMPT_DIR / "outline_agent_system_auto.txt").read_text(encoding="utf-8")
     else:
         template = (PROMPT_DIR / "outline_agent_system.txt").read_text(encoding="utf-8")
+    template = inject_child_todolist_sections(
+        template, enabled=enable_child_todolist, outline_auto=auto_mode,
+    )
     return template.format(work_id=work_id or "（新建作品）", user_message=user_message)
 
 
@@ -50,10 +61,11 @@ class OutlineAgent:
         self.emit = emit
         self.user_id = user_id
 
-    def _build_graph(self, *, auto_mode: bool = False):
-        tools = build_outline_tools(auto_mode=auto_mode)
+    def _build_graph(self, *, auto_mode: bool = False, enable_child_todolist: bool = False):
+        tools = build_outline_tools(auto_mode=auto_mode, enable_child_todolist=enable_child_todolist)
         llm = get_llm(temperature=0.7)
-        llm_with_tools = llm.bind_tools(tools)
+        llm_with_tools = bind_agent_llm_with_tools(llm, tools)
+        emit = self.emit
 
         async def outline_agent_node(state: OutlineState) -> dict:
             messages = state.get("messages", [])
@@ -64,19 +76,18 @@ class OutlineAgent:
                     work_id=state.get("work_id", ""),
                     user_message=state.get("user_message", ""),
                     auto_mode=auto_mode,
+                    enable_child_todolist=enable_child_todolist,
                 )
                 full_messages = [SystemMessage(content=system_prompt)] + messages
             else:
                 full_messages = messages
 
-            aggregated = None
-            async for chunk in llm_with_tools.astream(full_messages):
-                aggregated = chunk if aggregated is None else aggregated + chunk
-
-            if aggregated is None:
-                raise RuntimeError("OutlineAgent LLM 未返回任何流式分片")
-
-            response = chunk_to_ai_message(aggregated)
+            response = await astream_agent_llm_to_message(
+                llm_with_tools,
+                full_messages,
+                emit=emit,
+                stream_event="thinking_stream",
+            )
             return {"messages": [response]}
 
         def should_continue(state: OutlineState) -> str:
@@ -106,14 +117,17 @@ class OutlineAgent:
     ) -> dict:
         """创建新大纲 — 通过 Tool-Calling 让 LLM 自主调用 generate_outline"""
 
-        graph = self._build_graph(auto_mode=True)
+        enable_child_todolist = bool((base_configurable or {}).get("enable_child_todolist", False))
+        graph = self._build_graph(auto_mode=True, enable_child_todolist=enable_child_todolist)
         configurable = dict(base_configurable or {})
         configurable.update({"db": db, "emit": self.emit, "auto_mode": True, "user_id": self.user_id})
         if db_lock is not None:
             configurable["db_lock"] = db_lock
         config = {"configurable": configurable, "recursion_limit": 100}
 
-        system_prompt = _build_outline_system_prompt(work_id="", user_message=idea, auto_mode=True)
+        system_prompt = _build_outline_system_prompt(
+            work_id="", user_message=idea, auto_mode=True, enable_child_todolist=enable_child_todolist,
+        )
 
         initial_state = {
             "messages": [
@@ -196,7 +210,8 @@ class OutlineAgent:
         自动模式（auto_mode=True）：LLM 可自行调用 commit_or_rollback。
         """
 
-        graph = self._build_graph(auto_mode=auto_mode)
+        enable_child_todolist = bool((base_configurable or {}).get("enable_child_todolist", False))
+        graph = self._build_graph(auto_mode=auto_mode, enable_child_todolist=enable_child_todolist)
         configurable = dict(base_configurable or {})
         configurable.update({
             "db": db,
@@ -211,6 +226,7 @@ class OutlineAgent:
 
         system_prompt = _build_outline_system_prompt(
             work_id=work_id, user_message=message, auto_mode=auto_mode,
+            enable_child_todolist=enable_child_todolist,
         )
 
         initial_state = {

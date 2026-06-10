@@ -89,11 +89,7 @@ async def test_metadata_sync_failure_returns_warning_after_body_saved():
 
         result = await _generate_chapter_content_coroutine(
             chapter_number=1,
-            user_instruction="写第一章",
-            story_info="作品信息",
-            chapter_outline="本章大纲",
-            context_pack="上下文",
-            previous_chapters="暂无前文",
+            chapter_brief="写第一章：主角出场",
             config=config,
         )
 
@@ -116,7 +112,6 @@ async def test_metadata_sync_success_returns_synced_note():
     mock_metadata.key_plot_points = []
     mock_metadata.outline_links = []
     mock_metadata.involved_characters = []
-    mock_metadata.foreshadows = []
     mock_metadata.facts = []
     mock_metadata.updated_at = None
 
@@ -134,11 +129,7 @@ async def test_metadata_sync_success_returns_synced_note():
 
         result = await _generate_chapter_content_coroutine(
             chapter_number=1,
-            user_instruction="写第一章",
-            story_info="作品信息",
-            chapter_outline="本章大纲",
-            context_pack="上下文",
-            previous_chapters="暂无前文",
+            chapter_brief="写第一章：主角出场",
             config=config,
         )
 

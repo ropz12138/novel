@@ -286,7 +286,7 @@ class TestStateGraphBuild:
         mock_db = MagicMock()
         mock_emit = MagicMock()
         agent = SupervisorAgent(emit=mock_emit, db=mock_db, work_id="w1")
-        graph = agent._build_graph()
+        graph = agent._build_graph(enable_todolist=True, enable_evaluation=True)
         assert graph is not None
 
     def test_should_continue_with_tool_calls(self):
@@ -320,7 +320,9 @@ class TestSystemPrompt:
 
     def test_system_prompt_without_work(self):
         from app.services.supervisor.supervisor_agent import _build_system_message
-        msg = _build_system_message(work_id=None, db=MagicMock())
+        msg = _build_system_message(
+            work_id=None, db=MagicMock(), enable_todolist=False, enable_evaluation=False,
+        )
         assert "未绑定作品" in msg.content
         assert "AI小说写作助手" in msg.content
 
@@ -334,12 +336,16 @@ class TestSystemPrompt:
         mock_work.outline_tree = {"story": {"title": "测试", "genre": "科幻"}, "timeline": [{"chapter_start": 1, "chapter_end": 3}]}
         mock_db.query.return_value.filter_by.return_value.first.return_value = mock_work
 
-        msg = _build_system_message(work_id="w1", db=mock_db)
+        msg = _build_system_message(
+            work_id="w1", db=mock_db, enable_todolist=False, enable_evaluation=False,
+        )
         assert "测试小说" in msg.content
 
     def test_system_prompt_mentions_execute_todo_task(self):
         """system prompt 应强调 execute_todo_task，并说明 Supervisor 无 dispatch 工具"""
         from app.services.supervisor.supervisor_agent import _build_system_message
-        msg = _build_system_message(work_id=None, db=MagicMock())
+        msg = _build_system_message(
+            work_id=None, db=MagicMock(), enable_todolist=True, enable_evaluation=True,
+        )
         assert "execute_todo_task" in msg.content
         assert "没有" in msg.content and "dispatch" in msg.content

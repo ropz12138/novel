@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import {
   ArrowLeft,
@@ -12,38 +12,25 @@ import {
 import { Button } from "../components/ui/button";
 import { Textarea } from "../components/ui/textarea";
 import { SessionSidebar } from "../components/SessionSidebar";
-import { sessionApi } from "../lib/api";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "../components/supervisor/ChatTimeline";
+import { AgentFeatureToggles } from "../components/supervisor/AgentFeatureToggles";
 import { useSmartScroll } from "../hooks/useSmartScroll";
 
-
-function intentBadge(intent) {
-  const map = {
-    create_outline: { text: "创建大纲", color: "bg-purple-100 text-purple-700" },
-    edit_outline: { text: "编辑大纲", color: "bg-blue-100 text-blue-700" },
-    write_chapter: { text: "撰写章节", color: "bg-green-100 text-green-700" },
-    edit_chapter: { text: "修改章节", color: "bg-amber-100 text-amber-700" },
-    chat: { text: "对话", color: "bg-slate-100 text-slate-600" },
-  };
-  const info = map[intent] || map.chat;
-  return (
-    <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-medium ${info.color}`}>
-      {info.text}
-    </span>
-  );
-}
 
 export function UnifiedAgentPage() {
   const navigate = useNavigate();
   const [workId, setWorkId] = useState(null);
   const [workTitle, setWorkTitle] = useState(null);
-  const [currentIntent, setCurrentIntent] = useState(null);
   const [sessionSidebarOpen, setSessionSidebarOpen] = useState(false);
+  const [enableTodolist, setEnableTodolist] = useState(false);
+  const [enableEvaluation, setEnableEvaluation] = useState(false);
 
   const chat = useSupervisorChat({
     workId,
     autoMode: true,
+    enableTodolist,
+    enableEvaluation,
     callbacks: {
       onWorkCreated: (data) => {
         setWorkId(data.work_id);
@@ -52,29 +39,27 @@ export function UnifiedAgentPage() {
     },
   });
 
-  // Track currentIntent from timeline changes
-  useEffect(() => {
-    const lastUserMsg = [...chat.timeline].reverse().find((m) => m.role === "user");
-    if (!lastUserMsg) return;
-    // Intent is detected by the supervisor, but we can track it from stage events
-  }, [chat.timeline]);
-
-  // Smart auto-scroll
   const scrollContainerRef = useRef(null);
   const { stickToBottom, scrollToBottom } = useSmartScroll(scrollContainerRef, [
-    chat.timeline, chat.assistantDraft, chat.editDiff, chat.outlineDiff, chat.characterDiff, chat.running,
+    chat.timeline, chat.assistantReasoningDraft, chat.assistantDraft, chat.editDiff, chat.outlineDiff, chat.characterDiff, chat.running,
   ]);
 
   const resetState = () => {
     chat.resetState();
     setWorkId(null);
     setWorkTitle(null);
-    setCurrentIntent(null);
+    setEnableTodolist(false);
+    setEnableEvaluation(false);
+  };
+
+  const handleSelectSession = async (session) => {
+    setEnableTodolist(Boolean(session?.enable_todolist));
+    setEnableEvaluation(Boolean(session?.enable_evaluation));
+    await chat.handleSelectSession(session);
   };
 
   return (
     <main className="flex h-screen flex-col bg-white">
-      {/* Top bar */}
       <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-2.5">
         <div className="flex items-center gap-3">
           <Button asChild variant="ghost" size="sm" className="h-7 px-2">
@@ -94,9 +79,15 @@ export function UnifiedAgentPage() {
               </span>
             </>
           )}
-          {currentIntent && intentBadge(currentIntent)}
         </div>
         <div className="flex items-center gap-2">
+          <AgentFeatureToggles
+            enableTodolist={enableTodolist}
+            enableEvaluation={enableEvaluation}
+            onEnableTodolistChange={setEnableTodolist}
+            onEnableEvaluationChange={setEnableEvaluation}
+            disabled={chat.running}
+          />
           {chat.sessionId && !chat.running && (
             <Button variant="ghost" size="sm" className="h-7 text-xs text-slate-500" onClick={resetState}>
               新对话
@@ -105,25 +96,19 @@ export function UnifiedAgentPage() {
         </div>
       </header>
 
-      {/* Body */}
       <div className="flex flex-1 overflow-hidden">
-        {/* Left: session sidebar */}
         <SessionSidebar
           workId={workId}
-          type="supervisor"
           activeId={chat.sessionId}
-          onSelect={(session) => chat.handleSelectSession(session)}
+          onSelect={handleSelectSession}
           onNew={resetState}
           collapsed={!sessionSidebarOpen}
           onToggle={() => setSessionSidebarOpen(!sessionSidebarOpen)}
         />
 
-        {/* Chat area */}
         <div className="flex flex-1 flex-col overflow-hidden">
-          {/* Messages */}
           <div ref={scrollContainerRef} className="flex-1 overflow-y-auto px-4 py-4">
             <div className="mx-auto max-w-3xl space-y-4">
-              {/* Empty state */}
               {chat.timeline.length === 0 && !chat.running && (
                 <div className="flex flex-col items-center justify-center py-20 text-center">
                   <div className="rounded-full bg-blue-100 p-4 mb-4">
@@ -155,9 +140,9 @@ export function UnifiedAgentPage() {
                 </div>
               )}
 
-              {/* Timeline: messages + steps interleaved */}
               <ChatTimeline
                 timeline={chat.timeline}
+                assistantReasoningDraft={chat.assistantReasoningDraft}
                 assistantDraft={chat.assistantDraft}
                 editDiff={chat.editDiff}
                 outlineDiff={chat.outlineDiff}
@@ -169,19 +154,22 @@ export function UnifiedAgentPage() {
                 onConfirmOutline={chat.handleConfirmOutline}
               />
 
-              {/* "查看作品" link for outline_created messages */}
-              {chat.timeline.filter((m) => m.workId).map((m) => (
-                <div key={`link-${m.id}`} className="pt-2 border-t border-slate-200/50">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-6 text-[10px] text-blue-600"
-                    onClick={() => navigate(`/works/${m.workId}`)}
-                  >
-                    查看作品
-                  </Button>
-                </div>
-              ))}
+              {(() => {
+                const created = chat.timeline.find((m) => m.type === "outline_created" && m.workId);
+                if (!created) return null;
+                return (
+                  <div key={`link-${created.id}`} className="pt-2 border-t border-slate-200/50">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-6 text-[10px] text-blue-600"
+                      onClick={() => navigate(`/works/${created.workId}`)}
+                    >
+                      查看作品
+                    </Button>
+                  </div>
+                );
+              })()}
 
               {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.editDiff && !chat.outlineDiff && !chat.characterDiff && (
                 <div className="flex gap-3 justify-start">
@@ -234,4 +222,3 @@ export function UnifiedAgentPage() {
     </main>
   );
 }
-

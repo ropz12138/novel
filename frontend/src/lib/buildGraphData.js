@@ -13,11 +13,20 @@ function formatEdgeLabel(text, maxPerLine = 8, maxLines = 2) {
 }
 
 export function buildGraphData(tree, characters) {
-  const timeline = Array.isArray(tree?.timeline) ? sortTimelineNodes(tree.timeline) : [];
-  const branches = Array.isArray(tree?.branches) ? tree.branches : [];
+  // 新数据结构：outline.macro_phases / meso.meso_stages / foreshadowing / character_links
+  const macroPhases = Array.isArray(tree?.outline?.macro_phases) ? tree.outline.macro_phases : [];
+  const mesoStages = Array.isArray(tree?.meso?.meso_stages) ? tree.meso.meso_stages : [];
   const foreshadowing = Array.isArray(tree?.foreshadowing) ? tree.foreshadowing : [];
   const characterLinks = Array.isArray(tree?.character_links) ? tree.character_links : [];
   const chars = Array.isArray(characters) ? characters : [];
+
+  // 兼容旧数据结构
+  const legacyTimeline = Array.isArray(tree?.timeline) ? sortTimelineNodes(tree.timeline) : [];
+  const legacyBranches = Array.isArray(tree?.branches) ? tree.branches : [];
+
+  const useNewStructure = macroPhases.length > 0 || mesoStages.length > 0;
+  const timeline = useNewStructure ? macroPhases : legacyTimeline;
+  const branches = useNewStructure ? mesoStages : legacyBranches;
 
   const nodes = [];
   const edges = [];
@@ -30,14 +39,15 @@ export function buildGraphData(tree, characters) {
     edges.push({ id, from, to, ...attrs });
   };
 
+  // 宏观阶段（蓝色椭圆）
   const timelineIdMap = new Map();
   timeline.forEach((t, idx) => {
-    const rawId = String(t.id || `T${idx + 1}`);
+    const rawId = String(t.id || `P${idx + 1}`);
     const nodeId = `t:${idx + 1}:${rawId}`;
     if (!timelineIdMap.has(rawId)) timelineIdMap.set(rawId, nodeId);
     nodes.push({
       id: nodeId,
-      label: `${rawId}\n${t.development_node || "主线节点"}`,
+      label: `${rawId}\n${useNewStructure ? (t.name || "宏观阶段") : (t.development_node || "主线节点")}`,
       group: "mainStory",
       shape: "ellipse",
     });
@@ -45,25 +55,28 @@ export function buildGraphData(tree, characters) {
       const prev = timeline[idx - 1];
       addEdge(
         `seq:${idx}`,
-        `t:${idx}:${String(prev.id || `T${idx}`)}`,
+        `t:${idx}:${String(prev.id || `P${idx}`)}`,
         nodeId,
         { color: { color: "#2563eb" }, arrows: "to", width: 2 },
       );
     }
   });
 
+  // 中纲阶段（绿色方框，挂载到宏观阶段）
   const branchIdMap = new Map();
   branches.forEach((b, idx) => {
-    const rawId = String(b.id || `B${idx + 1}`);
+    const rawId = String(b.id || `M${idx + 1}`);
     const nodeId = `b:${idx + 1}:${rawId}`;
     if (!branchIdMap.has(rawId)) branchIdMap.set(rawId, nodeId);
     nodes.push({
       id: nodeId,
-      label: `${rawId}\n${b.name || "支线"}`,
+      label: `${rawId}\n${useNewStructure ? (b.name || "中纲阶段") : (b.name || "支线")}`,
       group: "branchStory",
       shape: "box",
     });
-    const attachTarget = timelineIdMap.get(String(b.attach_to || "")) || null;
+    // 挂载到宏观阶段（macro_phase_id）或主线节点（attach_to）
+    const attachKey = useNewStructure ? b.macro_phase_id : b.attach_to;
+    const attachTarget = timelineIdMap.get(String(attachKey || "")) || null;
     addEdge(
       `attach:${idx}`,
       attachTarget,
@@ -75,6 +88,7 @@ export function buildGraphData(tree, characters) {
   // Combined lookup: timeline first, then branch
   const allNodeIdMap = new Map([...timelineIdMap, ...branchIdMap]);
 
+  // 伏笔（橙色圆）
   foreshadowing.forEach((f, idx) => {
     const rawId = String(f.id || `F${idx + 1}`);
     const nodeId = `f:${idx + 1}:${rawId}`;
@@ -101,6 +115,7 @@ export function buildGraphData(tree, characters) {
     );
   });
 
+  // 角色节点（方框）
   chars.forEach((c, idx) => {
     const cid = `c:${idx + 1}:${c.id || c.name || "unknown"}`;
     nodes.push({
@@ -114,6 +129,7 @@ export function buildGraphData(tree, characters) {
 
   const byName = new Map(chars.map((c, i) => [c.name, `c:${i + 1}:${c.id || c.name || "unknown"}`]));
 
+  // 角色-剧情关联线
   if (characterLinks.length > 0) {
     characterLinks.forEach((link, i) => {
       if (!link || typeof link !== "object") return;
@@ -145,17 +161,12 @@ export function buildGraphData(tree, characters) {
       );
     });
   } else {
+    // 没有显式关联时，按 first_appearance_stage 直接匹配 meso_stage id
     chars.forEach((c, idx) => {
       const cid = `c:${idx + 1}:${c.id || c.name || "unknown"}`;
-      const first = Number.parseInt(String(c.first_chapter ?? ""), 10);
-      if (Number.isFinite(first)) {
-        const hit = timeline.find(
-          (t) =>
-            Number.isFinite(Number(t.chapter_start)) &&
-            Number.isFinite(Number(t.chapter_end)) &&
-            first >= Number(t.chapter_start) &&
-            first <= Number(t.chapter_end),
-        );
+      const stage = String(c.first_appearance_stage ?? "").trim();
+      if (stage) {
+        const hit = timeline.find((t) => String(t.id || "") === stage || String(t.meso_stage_id || "") === stage);
         if (hit) {
           addEdge(
             `appear:${idx}`,
@@ -168,6 +179,7 @@ export function buildGraphData(tree, characters) {
     });
   }
 
+  // 角色关系线
   chars.forEach((c, idx) => {
     const sourceId = `c:${idx + 1}:${c.id || c.name || "unknown"}`;
     const rel = c.relationships && typeof c.relationships === "object" ? c.relationships : {};

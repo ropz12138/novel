@@ -11,7 +11,6 @@ from app.core.observability import setup_langsmith
 from app.routers import (
     auth_router,
     character_router,
-    evaluation_router,
     session_router,
     supervisor_router,
     work_router,
@@ -65,9 +64,8 @@ app.include_router(work_router.router, prefix="/api")
 app.include_router(character_router.router, prefix="/api")
 app.include_router(supervisor_router.router, prefix="/api")
 app.include_router(session_router.router, prefix="/api")
-app.include_router(evaluation_router.router, prefix="/api")
 
 
-@app.get("/health")
+@app.post("/health")
 def health_check() -> dict[str, str]:
     return {"status": "ok"}

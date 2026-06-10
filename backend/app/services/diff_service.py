@@ -21,21 +21,21 @@ def compute_outline_diff(old: dict, new: dict) -> dict:
     Returns:
         {
             "story": [StoryFieldChange, ...],
-            "timeline": [TimelineChange, ...],
-            "branches": [BranchChange, ...],
+            "macro_phases": [MacroPhaseChange, ...],
+            "meso_stages": [MesoStageChange, ...],
             "foreshadowing": [ForeshadowingChange, ...],
         }
-        每个变更项包含：
-        - story: {"type": "added"|"modified"|"removed", "field": str, "old": ..., "new": ...}
-        - timeline/branches/foreshadowing:
-            - added:   {"type": "added", "node_id": str, "data": dict}
-            - removed: {"type": "removed", "node_id": str, "data": dict}
-            - modified: {"type": "modified", "node_id": str, "changes": [FieldChange, ...]}
     """
     return {
         "story": _diff_story(old.get("story", {}), new.get("story", {})),
-        "timeline": _diff_node_list(old.get("timeline", []), new.get("timeline", [])),
-        "branches": _diff_node_list(old.get("branches", []), new.get("branches", [])),
+        "macro_phases": _diff_node_list(
+            old.get("outline", {}).get("macro_phases", []),
+            new.get("outline", {}).get("macro_phases", []),
+        ),
+        "meso_stages": _diff_node_list(
+            old.get("meso", {}).get("meso_stages", []),
+            new.get("meso", {}).get("meso_stages", []),
+        ),
         "foreshadowing": _diff_node_list(old.get("foreshadowing", []), new.get("foreshadowing", [])),
     }
 
@@ -158,7 +158,7 @@ def summarize_outline_diff(diff: dict) -> dict:
         elif t == "removed":
             removed += 1
 
-    for section in ("timeline", "branches", "foreshadowing"):
+    for section in ("macro_phases", "meso_stages", "foreshadowing"):
         for item in diff.get(section, []):
             t = item.get("type")
             if t == "added":

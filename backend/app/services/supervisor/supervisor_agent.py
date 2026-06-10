@@ -27,7 +27,14 @@ from app.models.agent_model import SupervisorSession
 from app.services import message_service
 from app.services.message_langchain import db_messages_to_langchain
 from app.services.supervisor.state import SupervisorState
-from app.services.supervisor.tools import ALL_TOOLS
+from app.services.supervisor.tool_registry import build_supervisor_tools
+from app.services.supervisor.prompt_builder import build_supervisor_system_prompt
+from app.services.supervisor.sub_agent_base import (
+    chunk_to_ai_message as _chunk_to_ai_message,
+    emit_llm_stream_deltas,
+    stream_text_delta as _supervisor_stream_text_delta,
+)
+from app.services.stream_trace import gap_log
 
 logger = logging.getLogger(__name__)
 
@@ -38,71 +45,19 @@ def _utcnow():
     return datetime.now(timezone.utc)
 
 
-def _supervisor_stream_text_delta(chunk: AIMessageChunk) -> str:
-    """从 LLM 流式 chunk 取出应对用户展示的正文增量；不展示纯 tool-call 分片。"""
-    if chunk is None:
-        return ""
-    # 仅有 tool 分片、无正文时跳过（避免把 arguments JSON 当正文刷给前端）
-    if getattr(chunk, "tool_call_chunks", None) and not (getattr(chunk, "content", None) or ""):
-        return ""
-    c = getattr(chunk, "content", None)
-    if c is None or c == "":
-        return ""
-    if isinstance(c, str):
-        return c
-    if isinstance(c, list):
-        parts: list[str] = []
-        for part in c:
-            if isinstance(part, str):
-                parts.append(part)
-            elif isinstance(part, dict):
-                if part.get("type") == "text":
-                    parts.append(str(part.get("text") or ""))
-                # 忽略 tool_call / refusal 等块，避免 JSON 泄漏到聊天区
-            elif hasattr(part, "text"):
-                parts.append(str(getattr(part, "text", "") or ""))
-        return "".join(parts)
-    return str(c)
+from app.services.supervisor.sub_agent_base import AGENT_THINKING_EXTRA_BODY
+
+SUPERVISOR_THINKING_EXTRA_BODY = AGENT_THINKING_EXTRA_BODY
 
 
-def _chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
-    """将累计的 AIMessageChunk 转为 AIMessage，供 LangGraph 状态与 tool 路由使用。"""
-    if isinstance(full, AIMessage):
-        return full
-    raw_tc = list(full.tool_calls) if getattr(full, "tool_calls", None) else []
-    tc: list[dict[str, Any]] = []
-    for idx, call in enumerate(raw_tc):
-        call_id = call.get("id")
-        if not call_id:
-            call_id = f"call_auto_{uuid.uuid4().hex[:12]}"
-            logger.warning(
-                "supervisor chunk missing tool_call id; generated id=%s name=%s idx=%s",
-                call_id,
-                call.get("name"),
-                idx,
-            )
-        args = call.get("args")
-        if not isinstance(args, dict):
-            args = {}
-        tc.append(
-            {
-                "name": call.get("name", ""),
-                "args": args,
-                "id": call_id,
-                "type": call.get("type", "tool_call"),
-            }
-        )
-    kwargs: dict[str, Any] = {"content": full.content or "", "tool_calls": tc}
-    _id = getattr(full, "id", None)
-    if _id:
-        kwargs["id"] = _id
-    return AIMessage(**kwargs)
-
-
-def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
-    """构建 system prompt，注入作品上下文"""
-    template = (PROMPT_DIR / "system.txt").read_text(encoding="utf-8")
-
+def _build_system_message(
+    work_id: str | None,
+    db: Session,
+    *,
+    enable_todolist: bool,
+    enable_evaluation: bool,
+) -> SystemMessage:
+    """构建 system prompt，注入作品上下文与 feature flags。"""
     work_context = "（未绑定作品）"
     requirements_doc = "（暂无需求记录）"
     if work_id:
@@ -118,18 +73,19 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
             if story.get("volume"):
                 parts.append(f"卷: {story['volume']}")
 
-            characters = db.query(Character).filter_by(work_id=work_id).order_by(Character.first_chapter).all()
+            characters = db.query(Character).filter_by(work_id=work_id).order_by(Character.first_appearance_stage).all()
             if characters:
                 char_summary = []
                 for c in characters:
                     char_summary.append(f"- {c.name}（{c.role_type}，{c.gender}，{c.age}）")
                 parts.append("角色: " + "、".join(char_summary))
 
-            timeline = outline.get("timeline", [])
-            if timeline:
-                parts.append(f"大纲时间线节点数: {len(timeline)}")
+            macro_phases = outline.get("outline", {}).get("macro_phases", [])
+            if macro_phases:
+                parts.append(f"宏观阶段数: {len(macro_phases)}")
 
-            chapters_count = len(outline.get("timeline", []))
+            meso_stages = outline.get("meso", {}).get("meso_stages", [])
+            chapters_count = len(meso_stages) or len(macro_phases)
             parts.append(f"预计总章节数: {chapters_count}")
 
             work_context = "\n".join(parts)
@@ -139,7 +95,13 @@ def _build_system_message(work_id: str | None, db: Session) -> SystemMessage:
         else:
             work_context = "（当前绑定作品不存在）"
 
-    return SystemMessage(content=template.format(work_context=work_context, requirements_doc=requirements_doc))
+    content = build_supervisor_system_prompt(
+        enable_todolist=enable_todolist,
+        enable_evaluation=enable_evaluation,
+        work_context=work_context,
+        requirements_doc=requirements_doc,
+    )
+    return SystemMessage(content=content)
 
 
 def _should_continue(state: SupervisorState) -> str:
@@ -156,14 +118,23 @@ def _should_continue(state: SupervisorState) -> str:
 class SupervisorAgent:
     """统筹 Agent — 使用 LangGraph StateGraph 编排 LLM 和工具调用"""
 
-    def __init__(self, emit: Callable, db: Session, work_id: str | None = None, user_id: str | None = None):
+    def __init__(
+        self,
+        emit: Callable,
+        db: Session,
+        work_id: str | None = None,
+        user_id: str | None = None,
+        *,
+        gap_trace_t0: float | None = None,
+    ):
         self.emit = emit
         self.db = db
         self.work_id = work_id
         self.user_id = user_id
+        self.gap_trace_t0 = gap_trace_t0
         self._graph = None
 
-    def _build_graph(self) -> StateGraph:
+    def _build_graph(self, *, enable_todolist: bool, enable_evaluation: bool) -> StateGraph:
         """构建 LangGraph StateGraph"""
         model_conf = settings.get_model_config()
         llm = DeepSeekChatOpenAI(
@@ -186,18 +157,35 @@ class SupervisorAgent:
                 max_retries=0,
             )
             llm = FallbackLLM(llm, fallback)
-        llm_with_tools = llm.bind_tools(ALL_TOOLS)
+        tools = build_supervisor_tools(
+            enable_todolist=enable_todolist,
+            enable_evaluation=enable_evaluation,
+        )
+        llm_with_tools = llm.bind_tools(tools, extra_body=SUPERVISOR_THINKING_EXTRA_BODY)
 
-        tool_node = ToolNode(ALL_TOOLS)
+        tool_node = ToolNode(tools)
 
         async def agent_node(state: SupervisorState) -> dict:
             """LLM 节点：接收 messages，流式输出正文到 SSE，并返回完整 AIMessage。"""
             messages = state.get("messages", [])
-            system_msg = _build_system_message(state.get("work_id"), self.db)
+            system_msg = _build_system_message(
+                state.get("work_id"),
+                self.db,
+                enable_todolist=enable_todolist,
+                enable_evaluation=enable_evaluation,
+            )
 
             full_messages = [system_msg] + messages
 
             self.emit("stage_start", {"stage": "thinking", "label": "AI 思考中"})
+
+            session_id = state.get("session_id")
+            gap_log(
+                "agent_llm_astream_begin",
+                session_id=session_id,
+                t0=self.gap_trace_t0,
+                input_messages=len(full_messages),
+            )
 
             # 记录输入上下文规模
             _log_msg_summary = []
@@ -217,14 +205,21 @@ class SupervisorAgent:
             chunk_count = 0
             text_chunk_count = 0
             tool_chunk_count = 0
+            first_chunk_logged = False
             t_stream = time.perf_counter()
             async for chunk in llm_with_tools.astream(full_messages):
+                if not first_chunk_logged:
+                    first_chunk_logged = True
+                    gap_log(
+                        "agent_llm_first_chunk",
+                        session_id=session_id,
+                        t0=self.gap_trace_t0,
+                    )
                 aggregated = chunk if aggregated is None else aggregated + chunk
                 chunk_count += 1
-                delta = _supervisor_stream_text_delta(chunk)
-                if delta:
+                emit_llm_stream_deltas(self.emit, "supervisor_stream", chunk)
+                if _supervisor_stream_text_delta(chunk):
                     text_chunk_count += 1
-                    self.emit("supervisor_stream", {"chunk": delta})
                 # 检测 tool_call 分片
                 if getattr(chunk, "tool_call_chunks", None):
                     tool_chunk_count += 1
@@ -284,7 +279,14 @@ class SupervisorAgent:
 
         return graph.compile()
 
-    async def start(self, message: str, *, auto_mode: bool = True) -> dict:
+    async def start(
+        self,
+        message: str,
+        *,
+        auto_mode: bool = True,
+        enable_todolist: bool = False,
+        enable_evaluation: bool = False,
+    ) -> dict:
         """启动新会话"""
         t0 = time.perf_counter()
 
@@ -295,6 +297,8 @@ class SupervisorAgent:
             stage="running",
             status="running",
             auto_mode=auto_mode,
+            enable_todolist=enable_todolist,
+            enable_evaluation=enable_evaluation,
         )
         self.db.add(session)
         self.db.flush()
@@ -319,6 +323,7 @@ class SupervisorAgent:
             raise
 
         self.emit("session_created", {"session_id": session.id})
+        gap_log("session_created", session_id=session.id, t0=self.gap_trace_t0)
 
         result = await self._run_graph(session, message)
 
@@ -328,12 +333,24 @@ class SupervisorAgent:
         )
         return result
 
-    async def resume(self, session_id: str, message: str) -> dict:
+    async def resume(
+        self,
+        session_id: str,
+        message: str,
+        *,
+        enable_todolist: bool | None = None,
+        enable_evaluation: bool | None = None,
+    ) -> dict:
         """继续已有会话"""
         session = self.db.query(SupervisorSession).filter_by(id=session_id).first()
         if not session:
             self.emit("error", {"message": f"会话 {session_id} 不存在"})
             return {"error": "会话不存在"}
+
+        if enable_todolist is not None:
+            session.enable_todolist = enable_todolist
+        if enable_evaluation is not None:
+            session.enable_evaluation = enable_evaluation
 
         # 用户消息写入 messages 表
         next_order = message_service.get_next_sort_order(self.db, session_id)
@@ -348,6 +365,7 @@ class SupervisorAgent:
 
         session.status = "running"
         session.stage = "running"
+        session.interrupted = False
         try:
             self.db.commit()
         except Exception:
@@ -356,6 +374,13 @@ class SupervisorAgent:
 
         if session.work_id:
             self.work_id = session.work_id
+
+        gap_log(
+            "resume_graph_begin",
+            session_id=session.id,
+            t0=self.gap_trace_t0,
+            message_len=len(message or ""),
+        )
 
         result = await self._run_graph(session, message)
 
@@ -371,8 +396,12 @@ class SupervisorAgent:
                 "db_lock": threading.Lock(),
                 "emit": self.emit,
                 "supervisor_session_id": session.id,
+                "gap_trace_t0": self.gap_trace_t0,
                 "work_id": session.work_id or self.work_id or "",
                 "auto_mode": session.auto_mode,
+                "enable_todolist": session.enable_todolist,
+                "enable_evaluation": session.enable_evaluation,
+                "enable_child_todolist": session.enable_todolist,
                 "user_id": session.user_id or self.user_id,
                 "sub_agent_memories": {},
             },
@@ -381,6 +410,12 @@ class SupervisorAgent:
 
         db_messages = message_service.get_messages_by_session(self.db, session.id)
         langchain_messages = db_messages_to_langchain(db_messages)
+        gap_log(
+            "run_graph_begin",
+            session_id=session.id,
+            t0=self.gap_trace_t0,
+            history_messages=len(langchain_messages),
+        )
 
         initial_state = {
             "messages": langchain_messages,
@@ -391,7 +426,10 @@ class SupervisorAgent:
         }
 
         try:
-            graph = self._build_graph()
+            graph = self._build_graph(
+                enable_todolist=session.enable_todolist,
+                enable_evaluation=session.enable_evaluation,
+            )
 
             # 流式执行
             final_state = None
@@ -400,6 +438,12 @@ class SupervisorAgent:
                 async for event in graph.astream(initial_state, config=config):
                     # event 是 dict: {node_name: node_output}
                     for node_name, node_output in event.items():
+                        gap_log(
+                            "graph_node_done",
+                            session_id=session.id,
+                            t0=self.gap_trace_t0,
+                            node=node_name,
+                        )
                         self._process_graph_event(node_name, node_output)
 
                         if node_name == "tools":

@@ -94,6 +94,90 @@ class TestCountChapterWords:
         assert "count_chapter_words" in names
 
     def test_tool_registered_in_chapter_agent_tools(self):
-        from app.services.supervisor.chapter_agent import CHAPTER_AGENT_TOOLS
-        names = {t.name for t in CHAPTER_AGENT_TOOLS}
+        from app.services.supervisor.tool_registry import build_chapter_agent_tools
+
+        names = {t.name for t in build_chapter_agent_tools()}
         assert "count_chapter_words" in names
+
+    def test_with_expected_word_count_match(self):
+        from app.services.supervisor.tools import count_chapter_words
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.title = "开篇"
+        mock_chapter.content = "一二三四五"
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_chapter
+
+        result = count_chapter_words.invoke(
+            {"chapter_number": 1, "work_id": "w1", "expected_word_count": 5},
+            config=self._make_config(mock_db),
+        )
+        assert "字数：5 字" in result
+        assert "建议" in result
+        assert "一致" in result
+
+    def test_with_expected_word_count_too_short(self):
+        from app.services.supervisor.tools import count_chapter_words
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.title = "开篇"
+        mock_chapter.content = "一二三四五"
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_chapter
+
+        result = count_chapter_words.invoke(
+            {"chapter_number": 1, "work_id": "w1", "expected_word_count": 3000},
+            config=self._make_config(mock_db),
+        )
+        assert "字数：5 字" in result
+        assert "建议" in result
+        assert "少" in result
+        assert "补充" in result
+
+    def test_with_expected_word_count_too_long(self):
+        from app.services.supervisor.tools import count_chapter_words
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.title = "开篇"
+        mock_chapter.content = "一二三四五六七八九十"
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_chapter
+
+        result = count_chapter_words.invoke(
+            {"chapter_number": 1, "work_id": "w1", "expected_word_count": 5},
+            config=self._make_config(mock_db),
+        )
+        assert "字数：10 字" in result
+        assert "建议" in result
+        assert "多" in result
+        assert "删减" in result
+
+    def test_without_expected_word_count_no_advice(self):
+        from app.services.supervisor.tools import count_chapter_words
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.title = "开篇"
+        mock_chapter.content = "测试"
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_chapter
+
+        result = count_chapter_words.invoke(
+            {"chapter_number": 1, "work_id": "w1"},
+            config=self._make_config(mock_db),
+        )
+        assert "建议" not in result
+
+    def test_invalid_expected_word_count(self):
+        from app.services.supervisor.tools import count_chapter_words
+
+        mock_db = MagicMock()
+        mock_chapter = MagicMock()
+        mock_chapter.title = "开篇"
+        mock_chapter.content = "测试"
+        mock_db.query.return_value.filter_by.return_value.first.return_value = mock_chapter
+
+        result = count_chapter_words.invoke(
+            {"chapter_number": 1, "work_id": "w1", "expected_word_count": 0},
+            config=self._make_config(mock_db),
+        )
+        assert "期望字数" in result

@@ -25,4 +25,4 @@
 5. 角色操作中，name 必须与角色库中已有角色名完全匹配（update_character / delete_character）。
 6. 当用户要求修改角色信息（如改名、改性格、改状态等），使用角色工具而不是大纲工具。
 7. 如果一次需要执行多个修改（如同时改大纲和角色），你可以连续调用多个工具。
-8. 新增角色（add_character）时，必须初始化角色动态状态字段：current_status、current_goal、last_location、first_chapter。若用户没有明确提供，请使用合理默认值（例如 current_status="存活"、current_goal=""、last_location="未知"、first_chapter=1）。关键约束：角色的所有字段都必须描述**故事开始前**的状态，即角色还没有经历任何大纲中列出的剧情事件时的初始面貌——appearance 禁止包含故事发展后才出现的外貌变化，personality 禁止包含经历事件后才形成的性格转变，skills 禁止列出来自故事后续成长才获得的能力，current_status 禁止包含大纲中任何剧情事件发生后才出现的状态，current_goal 禁止填入剧情推进后才产生的新目标。
+8. 新增角色（add_character）时，必须初始化角色动态状态字段：current_status、current_goal、last_location、first_appearance_stage。若用户没有明确提供，请使用合理默认值（例如 current_status="存活"、current_goal=""、last_location="未知"、first_appearance_stage="M1"）。关键约束：角色的所有字段都必须描述**故事开始前**的状态，即角色还没有经历任何大纲中列出的剧情事件时的初始面貌——appearance 禁止包含故事发展后才出现的外貌变化，personality 禁止包含经历事件后才形成的性格转变，skills 禁止列出来自故事后续成长才获得的能力，current_status 禁止包含大纲中任何剧情事件发生后才出现的状态，current_goal 禁止填入剧情推进后才产生的新目标。

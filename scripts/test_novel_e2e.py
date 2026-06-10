@@ -205,7 +205,7 @@ class NovelTestClient:
             print("  ❌ 没有指定的作品ID")
             return None
         
-        resp = self.session.get(f"{API_BASE}/works/{self.work_id}")
+        resp = self.session.post(f"{API_BASE}/works/get", json={"work_id": self.work_id})
         if resp.status_code != 200:
             print(f"  ❌ 获取作品失败: {resp.text}")
             return None
@@ -218,7 +218,7 @@ class NovelTestClient:
             print("  ❌ 没有指定的作品ID")
             return None
         
-        resp = self.session.get(f"{API_BASE}/works/{self.work_id}/chapters")
+        resp = self.session.post(f"{API_BASE}/works/chapters/list", json={"work_id": self.work_id})
         if resp.status_code != 200:
             print(f"  ❌ 获取章节列表失败: {resp.text}")
             return None
@@ -227,16 +227,13 @@ class NovelTestClient:
     
     def get_chapter(self, chapter_number: int) -> Optional[dict]:
         """获取章节内容"""
-        if not self.work_id:
-            print("  ❌ 没有指定的作品ID")
+        chapters = self.list_chapters()
+        if not chapters:
             return None
-        
-        resp = self.session.get(f"{API_BASE}/works/{self.work_id}/chapters/{chapter_number}")
-        if resp.status_code != 200:
-            print(f"  ❌ 获取章节失败: {resp.text}")
-            return None
-        
-        return resp.json()
+        for ch in chapters:
+            if ch.get("chapter_number") == chapter_number:
+                return ch
+        return None
 
 def main():
     """主测试流程"""

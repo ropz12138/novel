@@ -195,7 +195,7 @@ class TestOutlineEditMode:
             tool_names = {t.name for t in tools}
             assert "read_outline" in tool_names
             assert "query_outline_characters" in tool_names
-            assert "edit_outline" in tool_names
+            assert "edit_outline_by_suggestion" in tool_names
             assert "compute_diff" not in tool_names
 
 

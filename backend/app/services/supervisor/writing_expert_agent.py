@@ -11,7 +11,11 @@ from langgraph.graph import MessagesState
 from langgraph.prebuilt import ToolNode
 from sqlalchemy.orm import Session
 
-from app.services.supervisor.sub_agent_base import chunk_to_ai_message, get_llm
+from app.services.supervisor.sub_agent_base import (
+    astream_agent_llm_to_message,
+    bind_agent_llm_with_tools,
+    get_llm,
+)
 from app.services.supervisor.writing_expert_tools import WRITING_EXPERT_TOOLS
 
 logger = logging.getLogger(__name__)
@@ -37,27 +41,28 @@ SYSTEM_PROMPT = """你是一位写作专家，擅长为小说写作提供具体�
 请使用你的工具完成分析和建议生成。"""
 
 
-async def _writing_expert_agent_node(state: WritingExpertState) -> dict:
-    llm = get_llm(temperature=0.5)
-    llm_with_tools = llm.bind_tools(WRITING_EXPERT_TOOLS)
+def _make_writing_expert_agent_node(*, emit):
+    async def _writing_expert_agent_node(state: WritingExpertState) -> dict:
+        llm = get_llm(temperature=0.5)
+        llm_with_tools = bind_agent_llm_with_tools(llm, WRITING_EXPERT_TOOLS)
 
-    messages = state.get("messages", [])
+        messages = state.get("messages", [])
 
-    has_system = any(isinstance(m, SystemMessage) for m in messages)
-    if not has_system:
-        full_messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
-    else:
-        full_messages = messages
+        has_system = any(isinstance(m, SystemMessage) for m in messages)
+        if not has_system:
+            full_messages = [SystemMessage(content=SYSTEM_PROMPT)] + messages
+        else:
+            full_messages = messages
 
-    aggregated = None
-    async for chunk in llm_with_tools.astream(full_messages):
-        aggregated = chunk if aggregated is None else aggregated + chunk
+        response = await astream_agent_llm_to_message(
+            llm_with_tools,
+            full_messages,
+            emit=emit,
+            stream_event="thinking_stream",
+        )
+        return {"messages": [response]}
 
-    if aggregated is None:
-        raise RuntimeError("WritingExpertAgent LLM 未返回任何流式分片")
-
-    response = chunk_to_ai_message(aggregated)
-    return {"messages": [response]}
+    return _writing_expert_agent_node
 
 
 def _should_continue(state: WritingExpertState) -> str:
@@ -78,7 +83,7 @@ class WritingExpertAgent:
 
     def _build_graph(self):
         graph = StateGraph(WritingExpertState)
-        graph.add_node("agent", _writing_expert_agent_node)
+        graph.add_node("agent", _make_writing_expert_agent_node(emit=self.emit))
         graph.add_node("tools", ToolNode(WRITING_EXPERT_TOOLS))
         graph.add_edge(START, "agent")
         graph.add_conditional_edges("agent", _should_continue, {"tools": "tools", END: END})

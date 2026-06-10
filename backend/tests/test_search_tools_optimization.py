@@ -90,11 +90,10 @@ class TestQueryCharacters:
     """验证 query_characters 返回完整信息"""
 
     def test_query_characters_schema(self):
-        """QueryCharactersInput schema 应包含必要字段"""
+        """QueryCharactersInput schema 应包含 filters 字段"""
         from app.services.supervisor.tools import QueryCharactersInput
         schema = QueryCharactersInput.model_json_schema()
         props = schema["properties"]
-        assert "work_id" in props
         assert "filters" in props
 
     def test_query_characters_returns_formatted_info(self):
@@ -117,7 +116,7 @@ class TestQueryCharacters:
                     "current_status": "存活",
                     "current_goal": "生存",
                     "last_location": "S市",
-                    "first_chapter": 1,
+                    "first_appearance_stage": "M1",
                 }
             ]
 
