@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, SystemMessage
+from langsmith import traceable
 from app.core.deepseek_llm import DeepSeekChatOpenAI
 from langgraph.graph import END, START, StateGraph
 from langgraph.prebuilt import ToolNode, tools_condition
@@ -279,6 +280,11 @@ class SupervisorAgent:
 
         return graph.compile()
 
+    @traceable(
+        name="supervisor.start",
+        run_type="chain",
+        metadata={"component": "supervisor"},
+    )
     async def start(
         self,
         message: str,
@@ -333,6 +339,11 @@ class SupervisorAgent:
         )
         return result
 
+    @traceable(
+        name="supervisor.resume",
+        run_type="chain",
+        metadata={"component": "supervisor"},
+    )
     async def resume(
         self,
         session_id: str,
@@ -386,6 +397,11 @@ class SupervisorAgent:
 
         return result
 
+    @traceable(
+        name="supervisor._run_graph",
+        run_type="chain",
+        metadata={"component": "supervisor"},
+    )
     async def _run_graph(self, session: SupervisorSession, user_message: str) -> dict:
         """执行 LangGraph StateGraph"""
         import threading

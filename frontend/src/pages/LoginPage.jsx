@@ -21,7 +21,7 @@ export function LoginPage() {
   };
 
   if (localStorage.getItem("novel_token")) {
-    return <Navigate to="/dashboard" replace />;
+    return <Navigate to="/canvas" replace />;
   }
 
   const onSubmit = async (event) => {
@@ -44,7 +44,7 @@ export function LoginPage() {
       }
       localStorage.setItem("novel_token", data.token);
       localStorage.setItem("novel_user", data?.user?.username || form.email.split("@")[0] || "创作者");
-      navigate("/dashboard", { replace: true });
+      navigate("/canvas", { replace: true });
     } catch (err) {
       setError(err.message || "登录失败");
     } finally {

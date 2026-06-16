@@ -1649,6 +1649,7 @@ async def _dispatch_chapter_coroutine(
         word_count = _word_count(chapter.content or "")
         metadata_note = "已同步章节元数据。" if metadata_row else "章节元数据稍后可重新同步。"
         message = f"第{chapter_number}章写作完成，字数：{word_count} 字。{metadata_note}"
+        emit("nodes_updated", {"action": "chapter_created", "work_id": work_id, "chapter_number": chapter_number})
         return _dispatch_tool_result(
             ok=True,
             status="completed",
@@ -1707,12 +1708,14 @@ async def _dispatch_chapter_coroutine(
             "diff": diff,
             "new_content": new_content,
         })
+        emit("nodes_updated", {"action": "chapter_edited", "work_id": work_id, "chapter_number": chapter_number})
         memories: dict[str, list[str]] = config.get("configurable", {}).get("sub_agent_memories", {})
         _store_memory(memories, "chapter", f"自动编辑第{chapter_number}章：+{summary.get('lines_added', 0)}行/-{summary.get('lines_removed', 0)}行")
         message = (
             f"第{chapter_number}章修改已完成，字数：{word_count} 字"
             f"（+{summary.get('lines_added', 0)}行 / -{summary.get('lines_removed', 0)}行）。"
         )
+        emit("nodes_updated", {"action": "chapter_edited", "work_id": work_id, "chapter_number": chapter_number})
         return _dispatch_tool_result(
             ok=True,
             status="completed",

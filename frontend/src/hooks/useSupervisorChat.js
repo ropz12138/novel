@@ -21,6 +21,7 @@ import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards"
  * @param {Function}    [options.callbacks.onCharactersUpdated]
  * @param {Function}    [options.callbacks.onChapterIntelUpdate]
  * @param {Function}    [options.callbacks.onWorkCreated]
+ * @param {Function}    [options.callbacks.onNodesUpdate]
  */
 export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodolist = false, enableEvaluation = false, callbacks = {} }) {
   const {
@@ -29,6 +30,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     onCharactersUpdated,
     onChapterIntelUpdate,
     onWorkCreated,
+    onNodesUpdate,
   } = callbacks;
 
   // ── State ──
@@ -150,6 +152,10 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       }
 
       case "tool_result":
+        if (d.content) {
+          finalizeLastRunningStep();
+          addMessage("assistant", d.content, { type: "tool_result" });
+        }
         break;
 
       case "tool_executed":
@@ -307,6 +313,11 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       case "characters_updated":
         if (d?.message) pushExecStepDone(d.message);
         if (onCharactersUpdated) onCharactersUpdated();
+        break;
+
+      case "nodes_updated":
+        // 节点/边创建、更新、删除时触发画布刷新
+        if (onNodesUpdate) onNodesUpdate();
         break;
 
       case "todolist_generated": {
@@ -615,7 +626,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     syncSessionId, freezeDraft, pushExecStep, pushExecStepDone,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
     onWorkCreated, onOutlineUpdated, onChapterUpdated, onCharactersUpdated,
-    onChapterIntelUpdate, workId, autoMode,
+    onChapterIntelUpdate, onNodesUpdate, workId, autoMode,
   ]);
 
   // ── SSE connection ──

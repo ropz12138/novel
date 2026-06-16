@@ -1045,6 +1045,7 @@ async def _generate_outline_coroutine(idea: str, tags: list[str], config: Runnab
                 db.rollback()
                 raise
 
+    emit("nodes_updated", {"action": "outline_created", "work_id": result["work_id"]})
     return f"大纲创建成功。作品「{result.get('title', '')}」"
 
 
@@ -1181,6 +1182,7 @@ async def _generate_macro_outline_coroutine(
         title = args.get("story", {}).get("title", "未命名作品")
 
         _emit_outline_done(emit, work_id=work_id, title=title)
+        emit("nodes_updated", {"action": "macro_outline_created", "work_id": work_id})
 
         return _atomic_result(
             status="applied",
@@ -1310,6 +1312,7 @@ async def _generate_meso_outline_coroutine(
 
         doc_text = args if isinstance(args, str) else str(args)
         _emit_outline_done(emit, work_id=work_id, title=work.title, stage="meso")
+        emit("nodes_updated", {"action": "meso_outline_created", "work_id": work_id})
 
         return _atomic_result(
             status="applied",
@@ -1435,6 +1438,7 @@ async def _generate_micro_outline_coroutine(
 
         doc_text = args if isinstance(args, str) else str(args)
         _emit_outline_done(emit, work_id=work_id, title=work.title, stage="micro")
+        emit("nodes_updated", {"action": "micro_outline_created", "work_id": work_id})
 
         return _atomic_result(
             status="applied",
@@ -1582,6 +1586,7 @@ async def _generate_character_details_coroutine(
         _emit_outline_done(
             emit, work_id=work_id, title=work.title, stage="character_details",
         )
+        emit("nodes_updated", {"action": "character_details_created", "work_id": work_id})
 
         return _atomic_result(
             status="applied",
@@ -1738,6 +1743,7 @@ async def _edit_macro_outline_coroutine(
         )
 
         phase_count = len(args.get("macro_phases", []))
+        emit("nodes_updated", {"action": "macro_outline_edited", "work_id": work_id})
         return _atomic_result(
             status="applied",
             tool="edit_macro_outline",
@@ -1857,6 +1863,7 @@ async def _edit_meso_outline_coroutine(
         )
 
         stage_count = len(args) if isinstance(args, list) else 0
+        emit("nodes_updated", {"action": "meso_outline_edited", "work_id": work_id})
         return _atomic_result(
             status="applied",
             tool="edit_meso_outline",
@@ -1976,6 +1983,7 @@ async def _edit_micro_outline_coroutine(
         )
 
         scene_count = len(args) if isinstance(args, list) else 0
+        emit("nodes_updated", {"action": "micro_outline_edited", "work_id": work_id})
         return _atomic_result(
             status="applied",
             tool="edit_micro_outline",
@@ -2166,6 +2174,7 @@ async def _edit_character_details_coroutine(
         )
 
         char_count = len(args) if isinstance(args, list) else 0
+        emit("nodes_updated", {"action": "character_details_edited", "work_id": work_id})
         return _atomic_result(
             status="applied",
             tool="edit_character_details",
@@ -2574,6 +2583,7 @@ def commit_or_rollback(action: str, config: RunnableConfig, work_id: str | None 
                 db.rollback()
             return f"大纲变更提交失败：{exc!r}"
         emit("outline_edit_committed", {"work_id": work_id})
+        emit("nodes_updated", {"action": "outline_committed", "work_id": work_id})
         return "大纲变更已提交。"
     elif action == "rollback":
         with _with_lock(config):

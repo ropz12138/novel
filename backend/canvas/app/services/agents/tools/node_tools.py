@@ -1,0 +1,552 @@
+"""节点操作工具"""
+import json
+import uuid
+import asyncio
+import logging
+from typing import Optional
+from functools import partial
+
+from langchain_core.tools import StructuredTool
+from pydantic import BaseModel, Field
+from sqlalchemy.orm import Session
+
+from app.models.node import Node
+from app.models.edge import Edge
+
+logger = logging.getLogger(__name__)
+
+
+def _get_db():
+    """获取数据库会话"""
+    from app.database import SessionLocal
+    return SessionLocal()
+
+
+def _get_current_work_id():
+    """获取当前work_id"""
+    try:
+        from app.services.agents.supervisor import get_context
+        return get_context().get("work_id")
+    except:
+        return None
+
+
+def _get_emit():
+    """获取事件发射函数"""
+    try:
+        from app.services.agents.supervisor import get_context
+        return get_context().get("emit")
+    except:
+        return None
+
+
+VALID_NODE_TYPES = [
+    "idea", "outline", "chapter", "character", "style",
+    "conflict", "foreshadow", "theme", "worldbuilding",
+    "event", "question", "constraint",
+    # 三层大纲节点
+    "macro_outline",   # 宏观大纲（故事阶段）
+    "meso_outline",    # 中纲（场景/事件）
+    "micro_outline",   # 小纲（具体情节点）
+]
+
+VALID_EDGE_TYPES = [
+    "uses", "hints", "conflict", "inherits", "contains", "reverses",
+    "character_appears", "mood", "forbids_reveal"
+]
+
+# 保留类型：用于布局和排序，不允许自定义
+RESERVED_EDGE_TYPES = {"inherits", "contains"}
+
+
+# 输入Schema
+class CreateNodeInput(BaseModel):
+    node_type: str = Field(description="节点类型")
+    title: str = Field(description="节点标题")
+    content: str = Field(default="", description="节点内容")
+    position_x: float = Field(default=0.0, description="画布X坐标")
+    position_y: float = Field(default=0.0, description="画布Y坐标")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class UpdateNodeInput(BaseModel):
+    node_id: str = Field(description="节点ID")
+    title: Optional[str] = Field(default=None, description="新标题")
+    content: Optional[str] = Field(default=None, description="新内容")
+    node_type: Optional[str] = Field(default=None, description="新类型")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class DeleteNodeInput(BaseModel):
+    node_id: str = Field(description="节点ID")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class CreateEdgeInput(BaseModel):
+    source_id: str = Field(description="源节点ID")
+    target_id: str = Field(description="目标节点ID")
+    edge_type: str = Field(default="uses", description="连线类型：保留类型（inherits/contains）用于布局排序，其他类型用简短自然语言描述（如'角色参与'、'伏笔埋设'、'场景关联'等，不超过100字符）")
+    label: str = Field(default="", description="连线标签说明")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class DeleteEdgeInput(BaseModel):
+    edge_id: str = Field(description="连线ID")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class BatchCreateNodesInput(BaseModel):
+    nodes_data: list[dict] = Field(description="节点数据列表")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class BatchCreateEdgesInput(BaseModel):
+    edges_data: list[dict] = Field(description="连线数据列表")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+# 同步实现
+def _create_node_sync(node_type, title, content="", position_x=0.0, position_y=0.0, reason=None):
+    if node_type not in VALID_NODE_TYPES:
+        return json.dumps({"error": f"无效的节点类型: {node_type}"}, ensure_ascii=False)
+    
+    work_id = _get_current_work_id()
+    if not work_id:
+        return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
+    
+    db = _get_db()
+    try:
+        # 如果position_x为0，自动计算最右边的位置
+        if position_x == 0.0:
+            max_x_node = db.query(Node).filter(Node.work_id == work_id).order_by(Node.position_x.desc()).first()
+            if max_x_node:
+                position_x = max_x_node.position_x + 350
+            else:
+                position_x = 50
+        
+        # 如果position_y为0，根据节点类型设置默认值
+        if position_y == 0.0:
+            if node_type == "macro_outline":
+                position_y = 50
+            elif node_type == "meso_outline":
+                position_y = 250
+            elif node_type == "micro_outline":
+                position_y = 450
+            else:
+                position_y = 650
+
+        node = Node(
+            id=str(uuid.uuid4()),
+            work_id=work_id,
+            type=node_type,
+            title=title,
+            content=content,
+            position_x=position_x,
+            position_y=position_y,
+        )
+        db.add(node)
+        db.commit()
+        db.refresh(node)
+        return json.dumps({
+            "success": True,
+            "node": {"id": node.id, "type": node.type, "title": node.title, "content": node.content, "position_x": node.position_x, "position_y": node.position_y}
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _update_node_sync(node_id, title=None, content=None, node_type=None, reason=None):
+    if node_type and node_type not in VALID_NODE_TYPES:
+        return json.dumps({"error": f"无效的节点类型: {node_type}"}, ensure_ascii=False)
+    db = _get_db()
+    try:
+        node = db.query(Node).filter(Node.id == node_id).first()
+        if not node:
+            return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        if title is not None:
+            node.title = title
+        if content is not None:
+            node.content = content
+        if node_type is not None:
+            node.type = node_type
+        db.commit()
+        db.refresh(node)
+        return json.dumps({
+            "success": True,
+            "node": {"id": node.id, "type": node.type, "title": node.title, "content": node.content}
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _delete_node_sync(node_id, reason=None):
+    db = _get_db()
+    try:
+        node = db.query(Node).filter(Node.id == node_id).first()
+        if not node:
+            return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        db.query(Edge).filter((Edge.source_id == node_id) | (Edge.target_id == node_id)).delete()
+        db.delete(node)
+        db.commit()
+        return json.dumps({"success": True, "message": f"已删除节点: {node.title}"}, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _create_edge_sync(source_id, target_id, edge_type="uses", label="", reason=None):
+    # 保留类型用于布局和排序，不允许自定义含义
+    if edge_type in RESERVED_EDGE_TYPES and edge_type not in VALID_EDGE_TYPES:
+        return json.dumps({"error": f"保留类型 {edge_type} 不能自定义使用"}, ensure_ascii=False)
+    
+    # 非保留类型允许自然语言，限制长度
+    if edge_type not in RESERVED_EDGE_TYPES:
+        if len(edge_type) > 100:
+            return json.dumps({"error": "连线类型不能超过100字符"}, ensure_ascii=False)
+        if len(edge_type.strip()) == 0:
+            return json.dumps({"error": "连线类型不能为空"}, ensure_ascii=False)
+    
+    work_id = _get_current_work_id()
+    if not work_id:
+        return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
+    
+    db = _get_db()
+    try:
+        source = db.query(Node).filter(Node.id == source_id, Node.work_id == work_id).first()
+        target = db.query(Node).filter(Node.id == target_id, Node.work_id == work_id).first()
+        if not source:
+            return json.dumps({"error": "源节点不存在"}, ensure_ascii=False)
+        if not target:
+            return json.dumps({"error": "目标节点不存在"}, ensure_ascii=False)
+        existing = db.query(Edge).filter(
+            Edge.source_id == source_id, Edge.target_id == target_id, Edge.edge_type == edge_type
+        ).first()
+        if existing:
+            return json.dumps({"error": "该连线已存在"}, ensure_ascii=False)
+        edge = Edge(
+            id=str(uuid.uuid4()),
+            work_id=work_id,
+            source_id=source_id,
+            target_id=target_id,
+            edge_type=edge_type,
+            label=label
+        )
+        db.add(edge)
+        db.commit()
+        db.refresh(edge)
+        return json.dumps({
+            "success": True,
+            "edge": {"id": edge.id, "source_id": source_id, "source_title": source.title, "target_id": target_id, "target_title": target.title, "edge_type": edge_type, "label": label}
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _delete_edge_sync(edge_id, reason=None):
+    db = _get_db()
+    try:
+        edge = db.query(Edge).filter(Edge.id == edge_id).first()
+        if not edge:
+            return json.dumps({"error": "连线不存在"}, ensure_ascii=False)
+        db.delete(edge)
+        db.commit()
+        return json.dumps({"success": True, "message": "已删除连线"}, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _batch_create_nodes_sync(nodes_data, reason=None):
+    work_id = _get_current_work_id()
+    if not work_id:
+        return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
+    
+    db = _get_db()
+    try:
+        created_nodes = []
+        # 获取当前最大 X 坐标
+        max_x_node = db.query(Node).filter(Node.work_id == work_id).order_by(Node.position_x.desc()).first()
+        current_max_x = max_x_node.position_x if max_x_node else 50
+        
+        for i, data in enumerate(nodes_data):
+            node_type = data.get("node_type") or data.get("type", "idea")
+            if node_type not in VALID_NODE_TYPES:
+                continue
+            
+            # 自动计算位置
+            position_x = data.get("position_x", 0)
+            position_y = data.get("position_y", 0)
+            
+            if position_x == 0:
+                position_x = current_max_x + 350 + (i * 350)
+            if position_y == 0:
+                # 根据节点类型设置默认 Y 坐标
+                if node_type == "macro_outline":
+                    position_y = 50
+                elif node_type == "meso_outline":
+                    position_y = 250
+                elif node_type == "micro_outline":
+                    position_y = 450
+                else:
+                    position_y = 650
+            
+            node = Node(
+                id=str(uuid.uuid4()),
+                work_id=work_id,
+                type=node_type,
+                title=data.get("title", "未命名"),
+                content=data.get("content", ""),
+                position_x=position_x,
+                position_y=position_y,
+            )
+            db.add(node)
+            created_nodes.append(node)
+        
+        db.commit()
+        for node in created_nodes:
+            db.refresh(node)
+        return json.dumps({
+            "success": True,
+            "nodes": [{"id": n.id, "type": n.type, "title": n.title} for n in created_nodes],
+            "count": len(created_nodes),
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+def _batch_create_edges_sync(edges_data, reason=None):
+    work_id = _get_current_work_id()
+    if not work_id:
+        return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
+    
+    db = _get_db()
+    try:
+        created_edges = []
+        for data in edges_data:
+            source_id = data.get("source_id")
+            target_id = data.get("target_id")
+            edge_type = data.get("edge_type", "uses")
+            if not source_id or not target_id:
+                continue
+            if edge_type not in RESERVED_EDGE_TYPES:
+                if len(edge_type) > 100 or len(edge_type.strip()) == 0:
+                    continue
+            source = db.query(Node).filter(Node.id == source_id, Node.work_id == work_id).first()
+            target = db.query(Node).filter(Node.id == target_id, Node.work_id == work_id).first()
+            if not source or not target:
+                continue
+            edge = Edge(
+                id=str(uuid.uuid4()),
+                work_id=work_id,
+                source_id=source_id,
+                target_id=target_id,
+                edge_type=edge_type,
+                label=data.get("label", ""),
+            )
+            db.add(edge)
+            created_edges.append(edge)
+        db.commit()
+        for edge in created_edges:
+            db.refresh(edge)
+        return json.dumps({
+            "success": True,
+            "edges": [{"id": e.id, "source_id": e.source_id, "target_id": e.target_id, "edge_type": e.edge_type} for e in created_edges],
+            "count": len(created_edges),
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+# 异步包装
+async def _create_node_async(node_type, title, content="", position_x=0.0, position_y=0.0, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, position_x, position_y, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "create", "node_type": node_type})
+    except:
+        pass
+    return result
+
+
+async def _update_node_async(node_id, title=None, content=None, node_type=None, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "update", "node_id": node_id})
+    except:
+        pass
+    return result
+
+
+async def _delete_node_async(node_id, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_delete_node_sync, node_id, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "delete", "node_id": node_id})
+    except:
+        pass
+    return result
+
+
+async def _create_edge_async(source_id, target_id, edge_type="uses", label="", reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_create_edge_sync, source_id, target_id, edge_type, label, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "edge_create", "edge_type": edge_type})
+    except:
+        pass
+    return result
+
+
+async def _delete_edge_async(edge_id, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_delete_edge_sync, edge_id, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "edge_delete", "edge_id": edge_id})
+    except:
+        pass
+    return result
+
+
+async def _batch_create_nodes_async(nodes_data, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_batch_create_nodes_sync, nodes_data, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "batch_create", "count": data.get("count", 0)})
+    except:
+        pass
+    return result
+
+
+async def _batch_create_edges_async(edges_data, reason=None):
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, partial(_batch_create_edges_sync, edges_data, reason))
+    # 触发画布更新事件
+    try:
+        data = json.loads(result)
+        if data.get("success"):
+            emit = _get_emit()
+            if emit:
+                await emit("nodes_updated", {"action": "batch_edge_create", "count": data.get("count", 0)})
+    except:
+        pass
+    return result
+
+
+# 创建工具
+create_node = StructuredTool.from_function(
+    coroutine=_create_node_async,
+    func=_create_node_sync,
+    name="create_node",
+    description="创建新节点。会自动计算位置，新节点出现在画布最右侧。",
+    args_schema=CreateNodeInput,
+)
+
+update_node = StructuredTool.from_function(
+    coroutine=_update_node_async,
+    func=_update_node_sync,
+    name="update_node",
+    description="更新现有节点的标题、内容或类型。",
+    args_schema=UpdateNodeInput,
+)
+
+delete_node = StructuredTool.from_function(
+    coroutine=_delete_node_async,
+    func=_delete_node_sync,
+    name="delete_node",
+    description="删除指定节点及其所有连线。",
+    args_schema=DeleteNodeInput,
+)
+
+create_edge = StructuredTool.from_function(
+    coroutine=_create_edge_async,
+    func=_create_edge_sync,
+    name="create_edge",
+    description="在两个节点之间创建连线。",
+    args_schema=CreateEdgeInput,
+)
+
+delete_edge = StructuredTool.from_function(
+    coroutine=_delete_edge_async,
+    func=_delete_edge_sync,
+    name="delete_edge",
+    description="删除指定连线。",
+    args_schema=DeleteEdgeInput,
+)
+
+batch_create_nodes = StructuredTool.from_function(
+    coroutine=_batch_create_nodes_async,
+    func=_batch_create_nodes_sync,
+    name="batch_create_nodes",
+    description="批量创建多个节点。",
+    args_schema=BatchCreateNodesInput,
+)
+
+batch_create_edges = StructuredTool.from_function(
+    coroutine=_batch_create_edges_async,
+    func=_batch_create_edges_sync,
+    name="batch_create_edges",
+    description="批量创建多个连线。",
+    args_schema=BatchCreateEdgesInput,
+)
+
+
+# 导出所有节点操作工具
+node_tools = [
+    create_node,
+    update_node,
+    delete_node,
+    create_edge,
+    delete_edge,
+    batch_create_nodes,
+    batch_create_edges,
+]

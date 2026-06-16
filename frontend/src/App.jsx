@@ -1,6 +1,7 @@
 import { Navigate, Route, Routes } from "react-router-dom";
 import { AgentArchPage } from "./pages/AgentArchPage";
 import { AuthGuard } from "./components/AuthGuard";
+import { CanvasPage } from "./pages/CanvasPage";
 import { CharacterListPage } from "./pages/CharacterListPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { LoginPage } from "./pages/LoginPage";
@@ -62,7 +63,15 @@ export default function App() {
           </AuthGuard>
         }
       />
-      <Route path="*" element={<Navigate to="/dashboard" replace />} />
+      <Route
+        path="/canvas"
+        element={
+          <AuthGuard>
+            <CanvasPage />
+          </AuthGuard>
+        }
+      />
+      <Route path="*" element={<Navigate to="/canvas" replace />} />
     </Routes>
   );
 }
