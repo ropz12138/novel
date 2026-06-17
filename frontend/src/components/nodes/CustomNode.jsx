@@ -2,11 +2,6 @@ import { memo, useCallback } from "react";
 import { Handle, Position } from "@xyflow/react";
 
 const nodeStyles = {
-  // 三层大纲节点
-  macro_outline: { bg: "#fee2e2", border: "#dc2626", icon: "🏗️", label: "宏观" },
-  meso_outline: { bg: "#ffedd5", border: "#ea580c", icon: "📋", label: "中纲" },
-  micro_outline: { bg: "#fef3c7", border: "#d97706", icon: "📝", label: "小纲" },
-  // 其他节点
   idea: { bg: "#fef3c7", border: "#f59e0b", icon: "💡", label: "灵感" },
   outline: { bg: "#dbeafe", border: "#3b82f6", icon: "📋", label: "大纲" },
   chapter: { bg: "#dcfce7", border: "#22c55e", icon: "📖", label: "章节" },
@@ -21,7 +16,6 @@ const nodeStyles = {
 
 const CustomNode = memo(({ id, data, selected, onNodeClick }) => {
   const style = nodeStyles[data.type] || nodeStyles.idea;
-  const isOutlineNode = ["macro_outline", "meso_outline", "micro_outline"].includes(data.type);
 
   const handleClick = useCallback((e) => {
     e.stopPropagation();
@@ -32,7 +26,7 @@ const CustomNode = memo(({ id, data, selected, onNodeClick }) => {
     <div
       className={`px-4 py-3 rounded-lg shadow-md border-2 min-w-[150px] max-w-[250px] cursor-pointer hover:shadow-lg transition-shadow ${
         selected ? "ring-2 ring-blue-500" : ""
-      } ${isOutlineNode ? "border-l-4" : ""}`}
+      }`}
       style={{
         backgroundColor: style.bg,
         borderColor: style.border,
