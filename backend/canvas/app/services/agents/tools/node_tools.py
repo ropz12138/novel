@@ -40,10 +40,8 @@ def _get_emit():
         return None
 
 
-VALID_NODE_TYPES = [
-    "idea", "outline", "chapter", "character", "style",
-    "conflict", "foreshadow", "theme", "worldbuilding", "event",
-]
+# 节点类型由 agent 自由定义，不再枚举限制
+VALID_NODE_TYPES = []  # 保留空列表以兼容旧代码引用
 
 
 # 输入Schema
@@ -51,7 +49,9 @@ class CreateNodeInput(BaseModel):
     node_type: str = Field(description="节点类型")
     title: str = Field(description="节点标题")
     content: str = Field(default="", description="节点内容")
-    layer: int = Field(default=0, description="垂直布局层级（整数，数字小的在上，同 layer 排一行）")
+    layer: int = Field(default=0, description="垂直布局层级（整数，数字小的在上）")
+    position_x: Optional[float] = Field(default=None, description="X坐标（可选，不传则自动计算）")
+    position_y: Optional[float] = Field(default=None, description="Y坐标（可选，不传则自动计算）")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -81,6 +81,13 @@ class CreateEdgeInput(BaseModel):
 
 class DeleteEdgeInput(BaseModel):
     edge_id: str = Field(description="连线ID")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class UpdateEdgeInput(BaseModel):
+    edge_id: str = Field(description="连线ID")
+    edge_type: Optional[str] = Field(default=None, description="新的连线类型，短自然语言描述关系（不超过100字符）")
+    label: Optional[str] = Field(default=None, description="新的连线标签")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -127,9 +134,9 @@ def _neighbor_items(db, node_id, work_id):
 
 
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, reason=None):
-    if node_type not in VALID_NODE_TYPES:
-        return json.dumps({"error": f"无效的节点类型: {node_type}"}, ensure_ascii=False)
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, reason=None):
+    if not node_type or not node_type.strip():
+        return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
     
     work_id = _get_current_work_id()
     if not work_id:
@@ -144,6 +151,9 @@ def _create_node_sync(node_type, title, content="", layer=0, reason=None):
             title=title,
             content=content,
             layer=layer,
+            position_x=position_x if position_x is not None else 0.0,
+            position_y=position_y if position_y is not None else 0.0,
+            manually_positioned=position_x is not None,
         )
         db.add(node)
         db.commit()
@@ -161,8 +171,8 @@ def _create_node_sync(node_type, title, content="", layer=0, reason=None):
 
 
 def _update_node_sync(node_id, title=None, content=None, node_type=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
-    if node_type and node_type not in VALID_NODE_TYPES:
-        return json.dumps({"error": f"无效的节点类型: {node_type}"}, ensure_ascii=False)
+    if node_type is not None and not node_type.strip():
+        return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
     db = _get_db()
     try:
         node = db.query(Node).filter(Node.id == node_id).first()
@@ -295,6 +305,37 @@ def _delete_edge_sync(edge_id, reason=None):
         db.close()
 
 
+def _update_edge_sync(edge_id, edge_type=None, label=None, reason=None):
+    db = _get_db()
+    try:
+        edge = db.query(Edge).filter(Edge.id == edge_id).first()
+        if not edge:
+            return json.dumps({"error": "连线不存在"}, ensure_ascii=False)
+        if edge_type is not None:
+            if len(edge_type) > 100 or len(edge_type.strip()) == 0:
+                return json.dumps({"error": "连线类型不能为空且不超过100字符"}, ensure_ascii=False)
+            edge.edge_type = edge_type
+        if label is not None:
+            edge.label = label
+        db.commit()
+        db.refresh(edge)
+        endpoints = []
+        for nid in (edge.source_id, edge.target_id):
+            n = db.query(Node).filter(Node.id == nid).first()
+            if n:
+                endpoints.append(_compact(n))
+        return json.dumps({
+            "success": True,
+            "edge": {"id": edge.id, "source_id": edge.source_id, "target_id": edge.target_id, "edge_type": edge.edge_type, "label": edge.label},
+            "neighbors": endpoints,
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
 def _batch_create_nodes_sync(nodes_data, reason=None):
     work_id = _get_current_work_id()
     if not work_id:
@@ -305,9 +346,11 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
         created_nodes = []
         for data in nodes_data:
             node_type = data.get("node_type") or data.get("type", "idea")
-            if node_type not in VALID_NODE_TYPES:
+            if not node_type or not node_type.strip():
                 continue
             layer = data.get("layer", 0)
+            position_x = data.get("position_x")
+            position_y = data.get("position_y")
             node = Node(
                 id=str(uuid.uuid4()),
                 work_id=work_id,
@@ -315,6 +358,9 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 title=data.get("title", "未命名"),
                 content=data.get("content", ""),
                 layer=layer,
+                position_x=position_x if position_x is not None else 0.0,
+                position_y=position_y if position_y is not None else 0.0,
+                manually_positioned=position_x is not None,
             )
             db.add(node)
             created_nodes.append(node)
@@ -391,9 +437,9 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 
 # 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, reason=None):
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, reason=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, reason))
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -463,6 +509,13 @@ async def _delete_edge_async(edge_id, reason=None):
                 await emit("nodes_updated", {"action": "edge_delete", "edge_id": edge_id})
     except:
         pass
+
+
+async def _update_edge_async(edge_id, edge_type=None, label=None, reason=None):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, partial(_update_edge_sync, edge_id, edge_type, label, reason)
+    )
     return result
 
 
@@ -509,7 +562,7 @@ update_node = StructuredTool.from_function(
     coroutine=_update_node_async,
     func=_update_node_sync,
     name="update_node",
-    description="更新现有节点的标题、内容或类型。",
+    description="更新节点的任意属性，包括标题、内容、类型、坐标和层级。可用于调整布局（position_x/y）或重新分类（node_type）。",
     args_schema=UpdateNodeInput,
 )
 
@@ -537,6 +590,14 @@ delete_edge = StructuredTool.from_function(
     args_schema=DeleteEdgeInput,
 )
 
+update_edge = StructuredTool.from_function(
+    coroutine=_update_edge_async,
+    func=_update_edge_sync,
+    name="update_edge",
+    description="更新连线的类型或标签。不改变起止点。",
+    args_schema=UpdateEdgeInput,
+)
+
 batch_create_nodes = StructuredTool.from_function(
     coroutine=_batch_create_nodes_async,
     func=_batch_create_nodes_sync,
@@ -561,6 +622,7 @@ node_tools = [
     delete_node,
     create_edge,
     delete_edge,
+    update_edge,
     batch_create_nodes,
     batch_create_edges,
 ]

@@ -57,7 +57,7 @@ def test_update_node_returns_all_neighbors(monkeypatch):
         neighbor_ids = [nb["node"]["id"] for nb in result["neighbors"]]
         assert b.id in neighbor_ids
         nb_b = next(nb for nb in result["neighbors"] if nb["node"]["id"] == b.id)
-        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer"}
+        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer", "manually_positioned"}
         assert nb_b["edge"]["direction"] == "out"
         assert nb_b["edge"]["edge_type"] == "包含"
     finally:
@@ -158,7 +158,51 @@ def test_batch_create_edges_returns_endpoints(monkeypatch):
         db.close()
 
 
-def test_delete_edge_returns_affected_endpoints(monkeypatch):
+def test_update_edge_returns_endpoints(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(monkeypatch, db)
+        a = Node(work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        db.add_all([a, b])
+        db.commit()
+        e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="包含", label="旧标签")
+        db.add(e)
+        db.commit()
+
+        result = json.loads(nt._update_edge_sync(e.id, edge_type="引用", label="新标签"))
+        assert result["success"] is True
+        assert result["edge"]["edge_type"] == "引用"
+        assert result["edge"]["label"] == "新标签"
+        neighbor_ids = [nb["id"] for nb in result["neighbors"]]
+        assert set(neighbor_ids) == {a.id, b.id}
+    finally:
+        db.close()
+
+
+def test_update_edge_rejects_invalid_type(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(monkeypatch, db)
+        a = Node(work_id=work.id, type="idea", title="A", layer=0)
+        b = Node(work_id=work.id, type="idea", title="B", layer=0)
+        db.add_all([a, b])
+        db.commit()
+        e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="x")
+        db.add(e)
+        db.commit()
+
+        result = json.loads(nt._update_edge_sync(e.id, edge_type=""))
+        assert "error" in result
+        result2 = json.loads(nt._update_edge_sync(e.id, edge_type="a" * 101))
+        assert "error" in result2
+    finally:
+        db.close()
+
+
+def test_update_edge_nonexistent(monkeypatch):
+    result = json.loads(nt._update_edge_sync("不存在的id"))
+    assert "error" in result
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)

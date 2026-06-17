@@ -11,7 +11,8 @@ def test_supervisor_has_direct_node_ops():
     names = {t.name for t in agent._get_tools()}
     for required in (
         "create_node", "update_node", "delete_node",
-        "create_edge", "delete_edge", "batch_create_nodes",
+        "create_edge", "delete_edge", "update_edge",
+        "batch_create_nodes", "batch_create_edges",
         "write_chapter", "get_canvas_index",
         "query_nodes", "read_node_content",
     ):

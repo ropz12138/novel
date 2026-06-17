@@ -155,6 +155,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
           content: n.content,
           extra_data: n.extra_data,
           layer: n.layer ?? 0,
+          manuallyPositioned: n.manually_positioned ?? false,
         },
       }));
 
