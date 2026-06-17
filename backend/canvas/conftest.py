@@ -15,6 +15,14 @@ import pytest  # noqa: E402
 from app import database as db_module  # noqa: E402
 from app.database import Base  # noqa: E402
 
+# 注册全部 canvas 模型到 Base.metadata，确保 relationship 能解析、create_all 建全表
+import app.models.user  # noqa: E402, F401
+import app.models.work  # noqa: E402, F401
+import app.models.node  # noqa: E402, F401
+import app.models.edge  # noqa: E402, F401
+import app.models.chapter  # noqa: E402, F401
+import app.models.session  # noqa: E402, F401
+
 
 def _ensure_test_db(db_name: str = "novel_test") -> str:
     pg_url = (
@@ -49,6 +57,12 @@ def isolated_db(monkeypatch):
     monkeypatch.setattr(db_module, "engine", test_engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestSession)
 
+    # 彻底清空 schema，避免 main backend 残留表（共用 novel_test 库）
+    # 导致 create_all 不重建表、drop_all 被外键阻塞。保证 TDD 干净基线。
+    with test_engine.connect() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE"))
+        conn.execute(text("CREATE SCHEMA public"))
+        conn.commit()
     Base.metadata.create_all(bind=test_engine)
     yield
     Base.metadata.drop_all(bind=test_engine)

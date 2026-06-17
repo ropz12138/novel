@@ -165,16 +165,12 @@ class SupervisorAgent:
         )
 
     def _get_tools(self):
-        """获取所有工具"""
+        """单 Agent：直接挂全部操作工具，不再 dispatch 到子 agent。"""
         from app.services.agents.tools.query_tools import query_tools
+        from app.services.agents.tools.node_tools import node_tools
+        from app.services.agents.tools.chapter_tools import write_chapter
 
-        dispatch_tools = [
-            dispatch_outline_agent,
-            dispatch_chapter_agent,
-            dispatch_evaluation_agent,
-        ]
-
-        return query_tools + dispatch_tools
+        return query_tools + node_tools + [write_chapter]
 
     def _build_graph(self):
         """构建LangGraph"""

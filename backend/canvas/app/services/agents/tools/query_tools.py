@@ -316,6 +316,56 @@ get_canvas_overview = StructuredTool.from_function(
 )
 
 
+class CanvasIndexInput(BaseModel):
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+def _get_canvas_index_sync(reason=None):
+    db = _get_db()
+    try:
+        work_id = _get_current_work_id()
+        node_q = db.query(Node)
+        if work_id:
+            node_q = node_q.filter(Node.work_id == work_id)
+        nodes = node_q.all()
+        node_items = [
+            {"id": n.id, "type": n.type, "title": n.title, "layer": n.layer}
+            for n in nodes
+        ]
+
+        edge_q = db.query(Edge)
+        if work_id:
+            edge_q = edge_q.filter(Edge.work_id == work_id)
+        edges = edge_q.all()
+        edge_items = [
+            {"source_id": e.source_id, "target_id": e.target_id, "edge_type": e.edge_type}
+            for e in edges
+        ]
+
+        return json.dumps({
+            "nodes": node_items,
+            "edges": edge_items,
+            "total_nodes": len(node_items),
+            "total_edges": len(edge_items),
+        }, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+async def _get_canvas_index_async(reason=None):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_get_canvas_index_sync, reason))
+
+
+get_canvas_index = StructuredTool.from_function(
+    coroutine=_get_canvas_index_async,
+    func=_get_canvas_index_sync,
+    name="get_canvas_index",
+    description="获取画布全量精简目录（不含正文），供 agent 做索引定位。返回每个节点的 id/type/title/layer 和所有关系的 source/target/edge_type。",
+    args_schema=CanvasIndexInput,
+)
+
+
 # 导出所有查询工具
 query_tools = [
     query_nodes,
@@ -323,4 +373,5 @@ query_tools = [
     read_node_content,
     grep_nodes,
     get_canvas_overview,
+    get_canvas_index,
 ]

@@ -5,6 +5,7 @@ from typing import Optional
 from functools import partial
 
 from langchain_core.tools import StructuredTool
+from langchain_core.messages import SystemMessage, HumanMessage
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,7 @@ from app.models.edge import Edge
 from app.models.chapter import Chapter
 from app.services.context_builder import build_generation_context
 from app.services.chapter_generator import generate_chapter
+from app.services.agents.tools.node_tools import _compact, _neighbor_items
 
 
 def _get_db():
@@ -294,6 +296,70 @@ async def _check_chapter_consistency_async(chapter_node_id, reason=None):
     return await loop.run_in_executor(None, partial(_check_chapter_consistency_sync, chapter_node_id, reason))
 
 
+class WriteChapterInput(BaseModel):
+    chapter_node_id: str = Field(description="章节节点ID")
+    user_directive: str = Field(description="用户对本章的原始要求（原话，不准改写）")
+    context: str = Field(description="agent 用查询工具备齐的写作上下文（大纲/前文/角色/伏笔）")
+    extra: str = Field(default="", description="补充说明")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+_WRITE_CHAPTER_SYSTEM = """你是小说正文写手。根据给定的上下文与要求写出本章正文。
+
+【铁律】
+1. "用户对本章的原始要求"是用户原话，逐字遵守，禁止改写、扩写题材、增减用户明确指定的要素。
+2. 仅在写作技巧层面（风格/视角/连贯/篇幅）发挥作用，不碰内容决策。
+
+通用写作规范：第三人称叙事，视角统一，承接前文，本章篇幅约 2000-3500 字。"""
+
+
+def _build_write_chapter_messages(user_directive, context, extra):
+    human = (
+        "======= 用户对本章的原始要求（最高优先级，逐字遵守，禁止改写扩写）=======\n"
+        f"{user_directive}\n"
+        "=====================================================================\n\n"
+        "======= 写作上下文（agent 已备齐，直接使用）=======\n"
+        f"{context}\n"
+        "=================================================\n\n"
+        "======= 本章补充说明（参考）=======\n"
+        f"{extra}\n"
+        "================================="
+    )
+    return [SystemMessage(content=_WRITE_CHAPTER_SYSTEM), HumanMessage(content=human)]
+
+
+async def _write_chapter_coroutine(chapter_node_id, user_directive, context, extra="", reason=None) -> str:
+    from app.services.agents.llm import get_llm
+    db = _get_db()
+    try:
+        node = db.query(Node).filter(Node.id == chapter_node_id).first()
+        if not node:
+            return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        # 禁止查库：context 由 agent 传入，工具内部不查数据库补充上下文
+        llm = get_llm(temperature=0.7, streaming=False)
+        messages = _build_write_chapter_messages(user_directive, context, extra)
+        resp = await llm.ainvoke(messages)
+        content = getattr(resp, "content", str(resp))
+        if isinstance(content, list):
+            content = "".join(
+                b.get("text", "") for b in content if isinstance(b, dict)
+            )
+        node.content = content
+        db.commit()
+        db.refresh(node)
+        neighbors = _neighbor_items(db, node.id, node.work_id)
+        return json.dumps({
+            "success": True,
+            "node": _compact(node),
+            "neighbors": neighbors,
+        }, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
 # 创建工具
 create_chapter_under_micro = StructuredTool.from_function(
     coroutine=_create_chapter_under_micro_async,
@@ -344,8 +410,17 @@ check_chapter_consistency = StructuredTool.from_function(
 )
 
 
+write_chapter = StructuredTool.from_function(
+    coroutine=_write_chapter_coroutine,
+    name="write_chapter",
+    description="为章节节点生成正文。入参：chapter_node_id、user_directive（用户原话）、context（agent 备齐的写作上下文）、extra（补充）。工具内部不查库，上下文必须由调用方传入。返回章节节点（含正文）+ 一级邻居。",
+    args_schema=WriteChapterInput,
+)
+
+
 # 导出章节工具
 chapter_tools = [
+    write_chapter,
     create_chapter_under_micro,
     generate_chapter_content,
     edit_chapter_content,

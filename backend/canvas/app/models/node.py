@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Text, Float, DateTime, JSON, ForeignKey
+from sqlalchemy import Column, String, Text, Float, DateTime, JSON, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -12,6 +12,7 @@ class Node(Base):
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
     work_id = Column(String(36), ForeignKey("canvas_works.id", ondelete="CASCADE"), nullable=False, index=True)
     type = Column(String(30), nullable=False, index=True)
+    layer = Column(Integer, nullable=False, default=0)
     title = Column(String(200), nullable=False)
     content = Column(Text, default="")
     extra_data = Column(JSON, default=dict)
