@@ -60,6 +60,9 @@ class UpdateNodeInput(BaseModel):
     title: Optional[str] = Field(default=None, description="新标题")
     content: Optional[str] = Field(default=None, description="新内容")
     node_type: Optional[str] = Field(default=None, description="新类型")
+    position_x: Optional[float] = Field(default=None, description="X坐标")
+    position_y: Optional[float] = Field(default=None, description="Y坐标")
+    manually_positioned: Optional[bool] = Field(default=None, description="是否手动拖拽定位")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -93,7 +96,7 @@ class BatchCreateEdgesInput(BaseModel):
 
 def _compact(node):
     """节点精简字段（不含正文），供邻居/索引返回。"""
-    return {"id": node.id, "type": node.type, "title": node.title, "layer": node.layer}
+    return {"id": node.id, "type": node.type, "title": node.title, "layer": node.layer, "manually_positioned": node.manually_positioned}
 
 
 def _neighbor_items(db, node_id, work_id):
@@ -157,7 +160,7 @@ def _create_node_sync(node_type, title, content="", layer=0, reason=None):
         db.close()
 
 
-def _update_node_sync(node_id, title=None, content=None, node_type=None, reason=None):
+def _update_node_sync(node_id, title=None, content=None, node_type=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
     if node_type and node_type not in VALID_NODE_TYPES:
         return json.dumps({"error": f"无效的节点类型: {node_type}"}, ensure_ascii=False)
     db = _get_db()
@@ -171,6 +174,12 @@ def _update_node_sync(node_id, title=None, content=None, node_type=None, reason=
             node.content = content
         if node_type is not None:
             node.type = node_type
+        if position_x is not None:
+            node.position_x = position_x
+        if position_y is not None:
+            node.position_y = position_y
+        if manually_positioned is not None:
+            node.manually_positioned = manually_positioned
         db.commit()
         db.refresh(node)
         neighbors = _neighbor_items(db, node.id, node.work_id)
@@ -266,9 +275,19 @@ def _delete_edge_sync(edge_id, reason=None):
         edge = db.query(Edge).filter(Edge.id == edge_id).first()
         if not edge:
             return json.dumps({"error": "连线不存在"}, ensure_ascii=False)
+        # 删前拿端点（它们将失去这条连接）
+        endpoints = []
+        for nid in (edge.source_id, edge.target_id):
+            n = db.query(Node).filter(Node.id == nid).first()
+            if n:
+                endpoints.append(_compact(n))
         db.delete(edge)
         db.commit()
-        return json.dumps({"success": True, "message": "已删除连线"}, ensure_ascii=False)
+        return json.dumps({
+            "success": True,
+            "message": "已删除连线",
+            "neighbors": endpoints,
+        }, ensure_ascii=False)
     except Exception as e:
         db.rollback()
         return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -305,7 +324,8 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             db.refresh(node)
         return json.dumps({
             "success": True,
-            "nodes": [{"id": n.id, "type": n.type, "title": n.title} for n in created_nodes],
+            "nodes": [_compact(n) for n in created_nodes],
+            "neighbors": [],
             "count": len(created_nodes),
         }, ensure_ascii=False)
     except Exception as e:
@@ -348,9 +368,19 @@ def _batch_create_edges_sync(edges_data, reason=None):
         db.commit()
         for edge in created_edges:
             db.refresh(edge)
+        endpoint_ids = []
+        seen = set()
+        for e in created_edges:
+            for nid in (e.source_id, e.target_id):
+                if nid not in seen:
+                    seen.add(nid)
+                    n = db.query(Node).filter(Node.id == nid).first()
+                    if n:
+                        endpoint_ids.append(_compact(n))
         return json.dumps({
             "success": True,
             "edges": [{"id": e.id, "source_id": e.source_id, "target_id": e.target_id, "edge_type": e.edge_type} for e in created_edges],
+            "neighbors": endpoint_ids,
             "count": len(created_edges),
         }, ensure_ascii=False)
     except Exception as e:
@@ -376,9 +406,9 @@ async def _create_node_async(node_type, title, content="", layer=0, reason=None)
     return result
 
 
-async def _update_node_async(node_id, title=None, content=None, node_type=None, reason=None):
+async def _update_node_async(node_id, title=None, content=None, node_type=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, reason))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, position_x, position_y, manually_positioned, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)

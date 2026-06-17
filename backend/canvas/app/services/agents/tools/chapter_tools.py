@@ -350,7 +350,7 @@ async def _write_chapter_coroutine(chapter_node_id, user_directive, context, ext
         neighbors = _neighbor_items(db, node.id, node.work_id)
         return json.dumps({
             "success": True,
-            "node": _compact(node),
+            "node": {"id": node.id, "type": node.type, "title": node.title, "layer": node.layer, "content": node.content},
             "neighbors": neighbors,
         }, ensure_ascii=False)
     except Exception as e:

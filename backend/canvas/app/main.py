@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
 from app.observability import setup_langsmith
-from app.routers import auth, work, node, edge, generate, agent, supervisor, supervisor_sessions
+from app.routers import auth, work, node, edge, generate, supervisor, supervisor_sessions
 
 LOG_DIR = Path(__file__).resolve().parents[3] / ".run"
 LOG_DIR.mkdir(exist_ok=True)
@@ -62,7 +62,6 @@ app.include_router(work.router, prefix="/api")
 app.include_router(node.router, prefix="/api")
 app.include_router(edge.router, prefix="/api")
 app.include_router(generate.router, prefix="/api")
-app.include_router(agent.router, prefix="/api")
 app.include_router(supervisor.router, prefix="/api")
 app.include_router(supervisor_sessions.router, prefix="/api")
 

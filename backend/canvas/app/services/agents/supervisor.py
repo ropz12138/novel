@@ -12,10 +12,7 @@ from langgraph.prebuilt import ToolNode
 from langsmith import traceable
 
 from app.services.agents.llm import get_llm, bind_tools_to_llm, should_continue
-from app.services.agents.tools import get_supervisor_tools, get_all_tools
-from app.services.agents.outline_agent import outline_agent
-from app.services.agents.chapter_agent import chapter_agent
-from app.services.agents.evaluation_agent import evaluation_agent
+
 
 logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).parent / "prompts"
@@ -49,104 +46,10 @@ def get_context() -> Dict[str, Any]:
     return _current_context
 
 
-async def dispatch_outline_agent_async(user_message: str) -> str:
-    """将任务派发给大纲Agent处理"""
-    work_id = _current_context.get("work_id")
-    canvas_overview = get_canvas_overview_str(work_id)
-    result = await outline_agent.run(user_message, canvas_overview, work_id)
-    return json.dumps(result, ensure_ascii=False)
-
-
-async def dispatch_chapter_agent_async(user_message: str, chapter_context: str = "") -> str:
-    """将任务派发给章节Agent处理"""
-    work_id = _current_context.get("work_id")
-    result = await chapter_agent.run(user_message, chapter_context, work_id)
-    return json.dumps(result, ensure_ascii=False)
-
-
-async def dispatch_evaluation_agent_async(user_message: str) -> str:
-    """将任务派发给评估Agent处理"""
-    work_id = _current_context.get("work_id")
-    canvas_overview = get_canvas_overview_str(work_id)
-    result = await evaluation_agent.run(user_message, canvas_overview, work_id)
-    return json.dumps(result, ensure_ascii=False)
-
-
-# 使用StructuredTool创建异步工具
-from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
-
-
-class DispatchOutlineInput(BaseModel):
-    user_message: str = Field(description="用户的原始消息")
-
-
-class DispatchChapterInput(BaseModel):
-    user_message: str = Field(description="用户的原始消息")
-    chapter_context: str = Field(default="", description="章节上下文信息")
-
-
-class DispatchEvaluationInput(BaseModel):
-    user_message: str = Field(description="用户的原始消息")
-
-
-dispatch_outline_agent = StructuredTool.from_function(
-    coroutine=dispatch_outline_agent_async,
-    name="dispatch_outline_agent",
-    description="将任务派发给大纲Agent处理，用于创建/编辑大纲",
-    args_schema=DispatchOutlineInput,
-)
-
-dispatch_chapter_agent = StructuredTool.from_function(
-    coroutine=dispatch_chapter_agent_async,
-    name="dispatch_chapter_agent",
-    description="将任务派发给章节Agent处理，用于生成/编辑章节内容",
-    args_schema=DispatchChapterInput,
-)
-
-dispatch_evaluation_agent = StructuredTool.from_function(
-    coroutine=dispatch_evaluation_agent_async,
-    name="dispatch_evaluation_agent",
-    description="将任务派发给评估Agent处理，用于评估内容质量、一致性等",
-    args_schema=DispatchEvaluationInput,
-)
-
-
 class SupervisorState(MessagesState):
     """Supervisor状态"""
     user_message: str = ""
     canvas_overview: str = ""
-
-
-def _extract_tool_summary(tool_name: str, output: str) -> str:
-    """从工具输出中提取摘要消息"""
-    try:
-        data = json.loads(output) if isinstance(output, str) else output
-    except (json.JSONDecodeError, TypeError):
-        return ""
-
-    if not isinstance(data, dict):
-        return ""
-
-    # dispatch_outline_agent
-    if tool_name == "dispatch_outline_agent":
-        if data.get("success"):
-            return data.get("message", "大纲操作完成")
-        return f"大纲操作失败: {data.get('error', '未知错误')}"
-
-    # dispatch_chapter_agent
-    if tool_name == "dispatch_chapter_agent":
-        if data.get("success"):
-            return data.get("message", "章节操作完成")
-        return f"章节操作失败: {data.get('error', '未知错误')}"
-
-    # dispatch_evaluation_agent
-    if tool_name == "dispatch_evaluation_agent":
-        if data.get("success"):
-            return data.get("message", "评估完成")
-        return f"评估失败: {data.get('error', '未知错误')}"
-
-    return ""
 
 
 class SupervisorAgent:
@@ -275,7 +178,6 @@ class SupervisorAgent:
                 event_name = event.get("name", "")
                 
                 # 只处理 supervisor 自己的 agent 节点的 LLM 流式事件
-                # 排除子 agent（dispatch_outline_agent 等）的事件
                 if kind == "on_chat_model_stream" and event_name == agent_node_name:
                     chunk = event.get("data", {}).get("chunk")
                     if chunk and self.emit:

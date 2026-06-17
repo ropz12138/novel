@@ -357,6 +357,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
     updateNode(node.id, {
       position_x: node.position.x,
       position_y: node.position.y,
+      manually_positioned: true,
     }).catch((err) => console.error("Failed to persist node position:", err));
   }, [setNodes]);
 

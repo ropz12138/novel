@@ -129,6 +129,26 @@ def test_write_chapter_rejects_nonexistent_node(monkeypatch):
     assert "error" in result
 
 
+def test_write_chapter_result_contains_content(monkeypatch):
+    monkeypatch.setattr(
+        llm_mod, "get_llm",
+        lambda **kw: FakeLLM({}, AIMessage(content="生成的正文")),
+    )
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db)
+        node = Node(work_id=work.id, type="chapter", title="第1章", layer=3)
+        db.add(node)
+        db.commit()
+        result = json.loads(asyncio.run(
+            ct._write_chapter_coroutine(node.id, "写第一章", "前文", "")
+        ))
+        # 返回值必须含正文（设计要求"返回章节节点含正文"）
+        assert result["node"]["content"] == "生成的正文"
+    finally:
+        db.close()
+
+
 def test_write_chapter_tool_registered():
     names = [t.name for t in ct.chapter_tools]
     assert "write_chapter" in names

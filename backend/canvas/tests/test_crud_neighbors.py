@@ -120,3 +120,59 @@ def test_neighbor_incoming_direction(monkeypatch):
         assert nb_a["edge"]["direction"] == "in"
     finally:
         db.close()
+
+
+def test_batch_create_nodes_returns_layer(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        _make_work(monkeypatch, db)
+        result = json.loads(nt._batch_create_nodes_sync([
+            {"node_type": "outline", "title": "A", "layer": 1},
+            {"node_type": "chapter", "title": "B", "layer": 3},
+        ]))
+        assert result["success"] is True
+        assert len(result["nodes"]) == 2
+        assert all("layer" in n for n in result["nodes"])
+        # 新建节点无边，无邻居
+        assert result["neighbors"] == []
+    finally:
+        db.close()
+
+
+def test_batch_create_edges_returns_endpoints(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(monkeypatch, db)
+        a = Node(work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        db.add_all([a, b])
+        db.commit()
+
+        result = json.loads(nt._batch_create_edges_sync([
+            {"source_id": a.id, "target_id": b.id, "edge_type": "包含"},
+        ]))
+        assert result["success"] is True
+        neighbor_ids = [nb["id"] for nb in result["neighbors"]]
+        assert set(neighbor_ids) == {a.id, b.id}
+    finally:
+        db.close()
+
+
+def test_delete_edge_returns_affected_endpoints(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(monkeypatch, db)
+        a = Node(work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        db.add_all([a, b])
+        db.commit()
+        e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="包含")
+        db.add(e)
+        db.commit()
+
+        result = json.loads(nt._delete_edge_sync(e.id))
+        assert result["success"] is True
+        neighbor_ids = [nb["id"] for nb in result["neighbors"]]
+        assert set(neighbor_ids) == {a.id, b.id}
+    finally:
+        db.close()
