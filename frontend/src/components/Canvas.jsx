@@ -78,6 +78,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
+  const [focusedNodeId, setFocusedNodeId] = useState(null);
   const contextMenuRef = useRef(null);
 
   useEffect(() => {
@@ -193,6 +194,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
 
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
+    setFocusedNodeId(null);
   }, []);
 
   const onPaneContextMenu = useCallback((event) => {
@@ -273,6 +275,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
 
   const handleNodeClick = useCallback((nodeData) => {
     setSelectedNode(nodeData);
+    setFocusedNodeId(nodeData.id);
   }, []);
 
   const handleCloseDrawer = useCallback(() => {
@@ -300,8 +303,8 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
       <div className="flex-1 relative">
         <ReactFlow
           nodes={nodes}
-          edges={selectedNode
-            ? edges.filter((e) => e.source === selectedNode.id || e.target === selectedNode.id)
+          edges={focusedNodeId
+            ? edges.filter((e) => e.source === focusedNodeId || e.target === focusedNodeId)
             : edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
