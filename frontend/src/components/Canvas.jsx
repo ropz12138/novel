@@ -300,7 +300,9 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
       <div className="flex-1 relative">
         <ReactFlow
           nodes={nodes}
-          edges={edges}
+          edges={selectedNode
+            ? edges.filter((e) => e.source === selectedNode.id || e.target === selectedNode.id)
+            : edges}
           onNodesChange={onNodesChange}
           onEdgesChange={onEdgesChange}
           onConnect={onConnect}
