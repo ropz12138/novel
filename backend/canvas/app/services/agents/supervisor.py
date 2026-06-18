@@ -72,8 +72,9 @@ class SupervisorAgent:
         from app.services.agents.tools.query_tools import query_tools
         from app.services.agents.tools.node_tools import node_tools
         from app.services.agents.tools.chapter_tools import write_chapter
+        from app.services.agents.tools.canvas_evaluate import evaluate_layout_tool
 
-        return query_tools + node_tools + [write_chapter]
+        return query_tools + node_tools + [write_chapter, evaluate_layout_tool]
 
     def _build_graph(self):
         """构建LangGraph"""

@@ -116,14 +116,14 @@ export function mergeRefreshedNodes(currentNodes, fetchedRawNodes) {
         id: n.id,
         type: "custom",
         position: existing.position,
-        data: fetchedData,
+        data: { ...fetchedData, manuallyPositioned: existing.data?.manuallyPositioned ?? false },
       };
     }
     return {
       id: n.id,
       type: "custom",
       position: { x: n.position_x, y: n.position_y },
-      data: fetchedData,
+      data: { ...fetchedData, manuallyPositioned: n.manually_positioned ?? false },
     };
   });
 }
@@ -190,7 +190,8 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
         data: { edge_type: e.edge_type },
       }));
 
-      setNodes(flowNodes);
+      const layoutedNodes = autoLayout(flowNodes, flowEdges);
+      setNodes(layoutedNodes);
       setEdges(flowEdges);
     } catch (err) {
       console.error("Failed to load data:", err);
@@ -204,7 +205,10 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
         fetchNodes(workId),
         fetchEdges(workId),
       ]);
-      setNodes((prev) => mergeRefreshedNodes(prev, nodesData.nodes));
+      setNodes((prev) => {
+        const merged = mergeRefreshedNodes(prev, nodesData.nodes);
+        return autoLayout(merged, edgesData.edges);
+      });
       setEdges(buildFlowEdges(edgesData));
     } catch (err) {
       console.error("Failed to refresh data:", err);

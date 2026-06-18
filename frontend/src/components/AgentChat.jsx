@@ -4,6 +4,7 @@ import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "./supervisor/ChatTimeline";
 import { useSmartScroll } from "../hooks/useSmartScroll";
 import { sessionApi } from "../lib/api";
+import { getLatestSupervisorSession } from "../lib/supervisorSession";
 
 export default function AgentChat({ workId, onNodesUpdate }) {
   const chat = useSupervisorChat({
@@ -28,19 +29,41 @@ export default function AgentChat({ workId, onNodesUpdate }) {
   const [sessions, setSessions] = useState([]);
   const [sessionListOpen, setSessionListOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const latestSessionLoadedForWorkRef = useRef(null);
 
   const loadSessions = useCallback(async () => {
     try {
       const list = await sessionApi.listSupervisor(workId);
       setSessions(list || []);
+      return list || [];
     } catch {
-      // ignore
+      return [];
     }
   }, [workId]);
 
+  // 进入/切换作品时，自动加载该作品最新一次对话
   useEffect(() => {
-    loadSessions();
-  }, [loadSessions]);
+    if (!workId || chat.running) return;
+    if (latestSessionLoadedForWorkRef.current === workId) return;
+
+    let cancelled = false;
+    (async () => {
+      const list = await loadSessions();
+      if (cancelled) return;
+
+      latestSessionLoadedForWorkRef.current = workId;
+      const latest = getLatestSupervisorSession(list);
+      if (latest) {
+        await chat.handleSelectSession(latest);
+      } else {
+        chat.resetState();
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [workId, chat.running]);
 
   // session 创建后刷新列表
   useEffect(() => {

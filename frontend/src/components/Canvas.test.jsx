@@ -340,10 +340,11 @@ describe("Canvas forwardRef", () => {
 
     expect(result).toHaveLength(2);
     const n1 = result.find((n) => n.id === "n1");
-    expect(n1.position).toEqual({ x: 100, y: 200 });
+    // 非手动定位节点：refresh 时由 autoLayout 重新计算位置
     expect(n1.data.content).toBe("updated");
     const n2 = result.find((n) => n.id === "n2");
-    expect(n2.position).toEqual({ x: 50, y: 60 });
+    // 新节点也由 autoLayout 定位（不再用数据库的 0,0）
+    expect(n2.position).not.toEqual({ x: 0, y: 0 });
   });
 
   it("refresh can be called without errors when workId is absent", async () => {
