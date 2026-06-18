@@ -469,4 +469,20 @@ describe("autoLayout (layer-driven)", () => {
   it("returns empty for empty input", () => {
     expect(autoLayout([], [])).toEqual([]);
   });
+
+  it("places character nodes vertically on the left", () => {
+    const nodes = [
+      { id: "c1", data: { type: "character", layer: 0 }, position: { x: 0, y: 0 } },
+      { id: "c2", data: { type: "character", layer: 0 }, position: { x: 0, y: 0 } },
+      { id: "n1", data: { layer: 1 }, position: { x: 0, y: 0 } },
+    ];
+    const result = autoLayout(nodes, []);
+    const c1 = result.find((n) => n.id === "c1");
+    const c2 = result.find((n) => n.id === "c2");
+    const n1 = result.find((n) => n.id === "n1");
+    // 角色垂直排列，不同 Y
+    expect(c1.position.y).toBeLessThan(c2.position.y);
+    // 角色在左侧（X 小于非角色）
+    expect(c1.position.x).toBeLessThan(n1.position.x);
+  });
 });

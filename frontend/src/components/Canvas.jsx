@@ -52,22 +52,41 @@ export function autoLayout(nodes, edges) {
   const NODE_W = 200;
   const H_GAP = 60;
   const LAYER_HEIGHT = 200;
+  const CHAR_W = 200;
+  const CHAR_GAP = 20;
+  const LEFT_PANEL_W = 260;
 
-  const byLayer = new Map();
+  const characterNodes = [];
+  const otherNodes = [];
   for (const n of nodes) {
     if (n.data?.manuallyPositioned) continue;
+    if (n.data?.type === "character") {
+      characterNodes.push(n);
+    } else {
+      otherNodes.push(n);
+    }
+  }
+
+  // 角色垂直排列在左侧
+  const pos = {};
+  characterNodes.forEach((n, i) => {
+    pos[n.id] = { x: -LEFT_PANEL_W, y: i * (CHAR_W + CHAR_GAP) };
+  });
+
+  // 非角色按 layer 分行，整体右移
+  const byLayer = new Map();
+  for (const n of otherNodes) {
     const layer = n.data?.layer ?? 0;
     if (!byLayer.has(layer)) byLayer.set(layer, []);
     byLayer.get(layer).push(n);
   }
   const layers = [...byLayer.keys()].sort((a, b) => a - b);
 
-  const pos = {};
   for (const layer of layers) {
     const group = byLayer.get(layer);
     const y = layer * LAYER_HEIGHT;
     const totalWidth = group.length * NODE_W + (group.length - 1) * H_GAP;
-    let x = -totalWidth / 2;
+    let x = -totalWidth / 2 + LEFT_PANEL_W;
     for (const n of group) {
       pos[n.id] = { x, y };
       x += NODE_W + H_GAP;
@@ -422,16 +441,6 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
               </button>
             ))}
             <div className="border-t border-gray-100 mt-1 pt-1">
-              <button
-                onClick={() => {
-                  handleAutoLayout();
-                  closeContextMenu();
-                }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-purple-600 hover:bg-gray-50 transition-colors"
-              >
-                <span>📐</span>
-                <span>自动布局</span>
-              </button>
               <button
                 onClick={() => {
                   handleRefresh();
