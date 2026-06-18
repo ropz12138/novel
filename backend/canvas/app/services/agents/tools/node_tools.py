@@ -187,6 +187,9 @@ def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=N
             node.type = node_type
         if layer is not None:
             node.layer = layer
+            # 改 layer 意味着要求重新布局，自动解除手动定位标记
+            if manually_positioned is None:
+                node.manually_positioned = False
         if position_x is not None:
             node.position_x = position_x
         if position_y is not None:
