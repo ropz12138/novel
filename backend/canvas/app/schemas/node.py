@@ -10,7 +10,6 @@ class NodeCreate(BaseModel):
     extra_data: dict = {}
     position_x: float = 0.0
     position_y: float = 0.0
-    manually_positioned: bool = False
 
 
 class NodeUpdate(BaseModel):
@@ -20,7 +19,6 @@ class NodeUpdate(BaseModel):
     extra_data: Optional[dict] = None
     position_x: Optional[float] = None
     position_y: Optional[float] = None
-    manually_positioned: Optional[bool] = None
 
 
 class NodeResponse(BaseModel):
@@ -31,7 +29,6 @@ class NodeResponse(BaseModel):
     extra_data: dict
     position_x: float
     position_y: float
-    manually_positioned: bool
     created_at: datetime
     updated_at: datetime
 

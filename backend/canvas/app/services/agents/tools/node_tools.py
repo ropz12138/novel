@@ -50,8 +50,8 @@ class CreateNodeInput(BaseModel):
     title: str = Field(description="节点标题")
     content: str = Field(default="", description="节点内容")
     layer: int = Field(default=0, description="垂直布局层级（整数，数字小的在上）")
-    position_x: Optional[float] = Field(default=None, description="X坐标（可选，不传则自动计算）")
-    position_y: Optional[float] = Field(default=None, description="Y坐标（可选，不传则自动计算）")
+    position_x: float = Field(description="X坐标（画布水平位置）")
+    position_y: float = Field(description="Y坐标（画布垂直位置）")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -63,7 +63,6 @@ class UpdateNodeInput(BaseModel):
     layer: Optional[int] = Field(default=None, description="新的垂直层级")
     position_x: Optional[float] = Field(default=None, description="X坐标")
     position_y: Optional[float] = Field(default=None, description="Y坐标")
-    manually_positioned: Optional[bool] = Field(default=None, description="是否手动拖拽定位")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -104,7 +103,7 @@ class BatchCreateEdgesInput(BaseModel):
 
 def _compact(node):
     """节点精简字段（不含正文），供邻居/索引返回。"""
-    return {"id": node.id, "type": node.type, "title": node.title, "layer": node.layer, "manually_positioned": node.manually_positioned}
+    return {"id": node.id, "type": node.type, "title": node.title, "layer": node.layer}
 
 
 def _neighbor_items(db, node_id, work_id):
@@ -152,9 +151,8 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             title=title,
             content=content,
             layer=layer,
-            position_x=position_x if position_x is not None else 0.0,
-            position_y=position_y if position_y is not None else 0.0,
-            manually_positioned=position_x is not None,
+            position_x=position_x,
+            position_y=position_y,
         )
         db.add(node)
         db.commit()
@@ -171,7 +169,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.close()
 
 
-def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
+def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, reason=None):
     if node_type is not None and not node_type.strip():
         return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
     db = _get_db()
@@ -187,15 +185,10 @@ def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=N
             node.type = node_type
         if layer is not None:
             node.layer = layer
-            # 改 layer 意味着要求重新布局，自动解除手动定位标记
-            if manually_positioned is None:
-                node.manually_positioned = False
         if position_x is not None:
             node.position_x = position_x
         if position_y is not None:
             node.position_y = position_y
-        if manually_positioned is not None:
-            node.manually_positioned = manually_positioned
         db.commit()
         db.refresh(node)
         neighbors = _neighbor_items(db, node.id, node.work_id)
@@ -366,7 +359,6 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 layer=layer,
                 position_x=position_x if position_x is not None else 0.0,
                 position_y=position_y if position_y is not None else 0.0,
-                manually_positioned=position_x is not None,
             )
             db.add(node)
             created_nodes.append(node)
@@ -458,9 +450,9 @@ async def _create_node_async(node_type, title, content="", layer=0, position_x=N
     return result
 
 
-async def _update_node_async(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
+async def _update_node_async(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, reason=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, manually_positioned, reason))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)

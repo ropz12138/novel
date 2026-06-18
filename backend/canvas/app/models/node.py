@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Column, String, Text, Float, DateTime, JSON, ForeignKey, Integer, Boolean
+from sqlalchemy import Column, String, Text, Float, DateTime, JSON, ForeignKey, Integer
 from sqlalchemy.orm import relationship
 from app.database import Base
 
@@ -18,7 +18,6 @@ class Node(Base):
     extra_data = Column(JSON, default=dict)
     position_x = Column(Float, default=0.0)
     position_y = Column(Float, default=0.0)
-    manually_positioned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

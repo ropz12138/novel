@@ -57,7 +57,7 @@ def test_update_node_returns_all_neighbors(monkeypatch):
         neighbor_ids = [nb["node"]["id"] for nb in result["neighbors"]]
         assert b.id in neighbor_ids
         nb_b = next(nb for nb in result["neighbors"] if nb["node"]["id"] == b.id)
-        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer", "manually_positioned"}
+        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer"}
         assert nb_b["edge"]["direction"] == "out"
         assert nb_b["edge"]["edge_type"] == "包含"
     finally:
@@ -127,8 +127,8 @@ def test_batch_create_nodes_returns_layer(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
-            {"node_type": "outline", "title": "A", "layer": 1},
-            {"node_type": "chapter", "title": "B", "layer": 3},
+            {"node_type": "outline", "title": "A", "layer": 1, "position_x": 100, "position_y": 200},
+            {"node_type": "chapter", "title": "B", "layer": 3, "position_x": 300, "position_y": 600},
         ]))
         assert result["success"] is True
         assert len(result["nodes"]) == 2

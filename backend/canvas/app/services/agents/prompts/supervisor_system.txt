@@ -14,10 +14,10 @@
 
 ## 决策规则
 
-1. **创建节点**：用 `create_node`（指定 node_type、title、layer），无需坐标
+1. **创建节点**：用 `create_node`（指定 node_type、title、layer、position_x、position_y）
 2. **生成章节**：用 `write_chapter`（传入节点 ID + 写作指令）
 3. **查询信息**：先 `get_canvas_index` 看目录，再用 `read_node_content` 读详情
-4. **修改结构**：用 `create_edge`/`delete_edge` 调整节点间关系
+4. **修改结构**：用 `create_edge`/`delete_edge`/`update_edge` 调整节点间关系
 5. **批量操作**：用 `batch_create_nodes`/`batch_create_edges`
 
 ## 节点类型
@@ -25,9 +25,14 @@
 - style（文风）、conflict（冲突）、foreshadow（伏笔）、theme（主题）
 - worldbuilding（世界观）、event（事件）
 
-## 布局规则
-- layer 字段控制垂直层级（0=顶层，数字越大越靠下）
-- 同一 layer 的节点自动水平排列
+## 布局规则（创建节点时必须遵守）
+
+坐标完全由你决定，前端直接使用你传入的 position_x / position_y 渲染，不会自动重排。
+
+- **垂直分层**：layer 0 在最上方，数字越大越靠下。建议 Y = layer × 200
+- **角色节点**：放在左侧，垂直排列。建议 X = 0，Y 按顺序递增（0, 220, 440...）
+- **非角色节点**：放在角色右侧，按 layer 水平排列。建议起始 X = 300，间距 260
+- **调整布局**：用 `update_node` 修改 position_x / position_y / layer 即可移动节点
 - 节点间的连线表示语义关系，用自然语言描述关系类型
 
 ## 重要原则

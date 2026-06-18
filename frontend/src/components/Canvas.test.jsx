@@ -42,7 +42,7 @@ vi.mock("../lib/canvasApi", () => ({
   deleteNode: vi.fn(),
 }));
 
-import { Canvas, mergeRefreshedNodes, autoLayout } from "./Canvas";
+import { Canvas, mergeRefreshedNodes } from "./Canvas";
 import { fetchNodes, fetchEdges, deleteNode } from "../lib/canvasApi";
 
 // ── 纯函数 mergeRefreshedNodes 测试 ──
@@ -70,7 +70,7 @@ describe("mergeRefreshedNodes", () => {
     ];
     const result = mergeRefreshedNodes(currentNodes, fetchedRaw);
     expect(result).toHaveLength(1);
-    expect(result[0].position).toEqual({ x: 100, y: 200 });
+    expect(result[0].position).toEqual({ x: 999, y: 888 });
     expect(result[0].data.label).toBe("新标题");
     expect(result[0].data.content).toBe("新内容");
   });
@@ -182,7 +182,7 @@ describe("mergeRefreshedNodes", () => {
       },
     ];
     const result = mergeRefreshedNodes(currentNodes, fetchedRaw);
-    expect(result[0].position).toEqual({ x: 100, y: 200 });
+    expect(result[0].position).toEqual({ x: 0, y: 0 });
     expect(result[0].data.type).toBe("chapter");
   });
 
@@ -224,7 +224,7 @@ describe("mergeRefreshedNodes", () => {
     const result = mergeRefreshedNodes(currentNodes, fetchedRaw);
     expect(result).toHaveLength(2);
     const n1 = result.find((n) => n.id === "n1");
-    expect(n1.position).toEqual({ x: 10, y: 20 });
+    expect(n1.position).toEqual({ x: 999, y: 999 });
     expect(n1.data.content).toBe("new");
     const n3 = result.find((n) => n.id === "n3");
     expect(n3.position).toEqual({ x: 50, y: 60 });
@@ -340,11 +340,10 @@ describe("Canvas forwardRef", () => {
 
     expect(result).toHaveLength(2);
     const n1 = result.find((n) => n.id === "n1");
-    // 非手动定位节点：refresh 时由 autoLayout 重新计算位置
+    // refresh 时直接用 DB 坐标
     expect(n1.data.content).toBe("updated");
     const n2 = result.find((n) => n.id === "n2");
-    // 新节点也由 autoLayout 定位（不再用数据库的 0,0）
-    expect(n2.position).not.toEqual({ x: 0, y: 0 });
+    expect(n2.position).toEqual({ x: 50, y: 60 });
   });
 
   it("refresh can be called without errors when workId is absent", async () => {
@@ -410,80 +409,3 @@ describe("Canvas deleteNode", () => {
   });
 });
 
-// ── autoLayout (layer 驱动) 测试 ──
-
-describe("autoLayout (layer-driven)", () => {
-  it("groups nodes by layer into rows", () => {
-    const nodes = [
-      { id: "n1", data: { layer: 0 }, position: { x: 0, y: 0 } },
-      { id: "n2", data: { layer: 1 }, position: { x: 0, y: 0 } },
-      { id: "n3", data: { layer: 0 }, position: { x: 0, y: 0 } },
-    ];
-    const result = autoLayout(nodes, []);
-    const n1 = result.find((n) => n.id === "n1");
-    const n3 = result.find((n) => n.id === "n3");
-    const n2 = result.find((n) => n.id === "n2");
-    expect(n1.position.y).toBe(n3.position.y);
-    expect(n2.position.y).toBeGreaterThan(n1.position.y);
-  });
-
-  it("places same-layer nodes in a horizontal row with distinct x", () => {
-    const nodes = [
-      { id: "a", data: { layer: 0 }, position: { x: 0, y: 0 } },
-      { id: "b", data: { layer: 0 }, position: { x: 0, y: 0 } },
-    ];
-    const result = autoLayout(nodes, []);
-    expect(result[0].position.y).toBe(result[1].position.y);
-    expect(result[0].position.x).not.toBe(result[1].position.x);
-  });
-
-  it("defaults layer to 0 when missing", () => {
-    const nodes = [{ id: "n1", data: {}, position: { x: 5, y: 5 } }];
-    const result = autoLayout(nodes, []);
-    expect(result[0].position.y).toBe(0);
-  });
-
-  it("does not depend on edges (natural-language relations ignored)", () => {
-    const nodes = [
-      { id: "n1", data: { layer: 0 }, position: { x: 0, y: 0 } },
-      { id: "n2", data: { layer: 1 }, position: { x: 0, y: 0 } },
-    ];
-    const edges = [
-      { source: "n1", target: "n2", data: { edge_type: "contains" } },
-    ];
-    const result = autoLayout(nodes, edges);
-    const n1 = result.find((n) => n.id === "n1");
-    const n2 = result.find((n) => n.id === "n2");
-    expect(n1.position.y).toBeLessThan(n2.position.y);
-  });
-
-  it("skips manually positioned nodes", () => {
-    const nodes = [
-      { id: "n1", data: { layer: 0, manuallyPositioned: true }, position: { x: 999, y: 999 } },
-      { id: "n2", data: { layer: 0 }, position: { x: 0, y: 0 } },
-    ];
-    const result = autoLayout(nodes, []);
-    const n1 = result.find((n) => n.id === "n1");
-    expect(n1.position).toEqual({ x: 999, y: 999 });
-  });
-
-  it("returns empty for empty input", () => {
-    expect(autoLayout([], [])).toEqual([]);
-  });
-
-  it("places character nodes vertically on the left", () => {
-    const nodes = [
-      { id: "c1", data: { type: "character", layer: 0 }, position: { x: 0, y: 0 } },
-      { id: "c2", data: { type: "character", layer: 0 }, position: { x: 0, y: 0 } },
-      { id: "n1", data: { layer: 1 }, position: { x: 0, y: 0 } },
-    ];
-    const result = autoLayout(nodes, []);
-    const c1 = result.find((n) => n.id === "c1");
-    const c2 = result.find((n) => n.id === "c2");
-    const n1 = result.find((n) => n.id === "n1");
-    // 角色垂直排列，不同 Y
-    expect(c1.position.y).toBeLessThan(c2.position.y);
-    // 角色在左侧（X 小于非角色）
-    expect(c1.position.x).toBeLessThan(n1.position.x);
-  });
-});

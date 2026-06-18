@@ -44,88 +44,19 @@ function getEdgeStyle(edgeType) {
   return edgeStyles[edgeType] || edgeStyles._default;
 }
 
-// 自动布局：按 layer 分行（同 layer 同 Y，layer 数字小的在上），同行按顺序排 X。
-// 不依赖边（关系为自然语言，不参与布局）。已手动定位的节点跳过。
-export function autoLayout(nodes, edges) {
-  if (nodes.length === 0) return nodes;
-
-  const NODE_W = 200;
-  const H_GAP = 60;
-  const LAYER_HEIGHT = 200;
-  const CHAR_W = 200;
-  const CHAR_GAP = 20;
-  const LEFT_PANEL_W = 260;
-
-  const characterNodes = [];
-  const otherNodes = [];
-  for (const n of nodes) {
-    if (n.data?.manuallyPositioned) continue;
-    if (n.data?.type === "character") {
-      characterNodes.push(n);
-    } else {
-      otherNodes.push(n);
-    }
-  }
-
-  // 角色垂直排列在左侧
-  const pos = {};
-  characterNodes.forEach((n, i) => {
-    pos[n.id] = { x: -LEFT_PANEL_W, y: i * (CHAR_W + CHAR_GAP) };
-  });
-
-  // 非角色按 layer 分行，整体右移
-  const byLayer = new Map();
-  for (const n of otherNodes) {
-    const layer = n.data?.layer ?? 0;
-    if (!byLayer.has(layer)) byLayer.set(layer, []);
-    byLayer.get(layer).push(n);
-  }
-  const layers = [...byLayer.keys()].sort((a, b) => a - b);
-
-  for (const layer of layers) {
-    const group = byLayer.get(layer);
-    const y = layer * LAYER_HEIGHT;
-    const totalWidth = group.length * NODE_W + (group.length - 1) * H_GAP;
-    let x = -totalWidth / 2 + LEFT_PANEL_W;
-    for (const n of group) {
-      pos[n.id] = { x, y };
-      x += NODE_W + H_GAP;
-    }
-  }
-
-  return nodes.map((n) => ({
-    ...n,
-    position: n.data?.manuallyPositioned ? n.position : (pos[n.id] || n.position),
-  }));
-}
-
 export function mergeRefreshedNodes(currentNodes, fetchedRawNodes) {
-  const currentById = new Map(currentNodes.map((n) => [n.id, n]));
-
-  return fetchedRawNodes.map((n) => {
-    const fetchedData = {
+  return fetchedRawNodes.map((n) => ({
+    id: n.id,
+    type: "custom",
+    position: { x: n.position_x, y: n.position_y },
+    data: {
       type: n.type,
       label: n.title,
       content: n.content,
       extra_data: n.extra_data,
       layer: n.layer ?? 0,
-    };
-    const existing = currentById.get(n.id);
-    if (existing) {
-      return {
-        id: n.id,
-        type: "custom",
-        position: existing.position,
-        data: { ...fetchedData, manuallyPositioned: existing.data?.manuallyPositioned ?? false },
-      };
-    }
-    return {
-      id: n.id,
-      type: "custom",
-      position: { x: n.position_x, y: n.position_y },
-      data: { ...fetchedData, manuallyPositioned: n.manually_positioned ?? false },
-    };
-  });
+    },
+  }));
 }
 
 function buildFlowEdges(edgesData) {
@@ -174,7 +105,6 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
           content: n.content,
           extra_data: n.extra_data,
           layer: n.layer ?? 0,
-          manuallyPositioned: n.manually_positioned ?? false,
         },
       }));
 
@@ -190,8 +120,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
         data: { edge_type: e.edge_type },
       }));
 
-      const layoutedNodes = autoLayout(flowNodes, flowEdges);
-      setNodes(layoutedNodes);
+      setNodes(flowNodes);
       setEdges(flowEdges);
     } catch (err) {
       console.error("Failed to load data:", err);
@@ -205,10 +134,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
         fetchNodes(workId),
         fetchEdges(workId),
       ]);
-      setNodes((prev) => {
-        const merged = mergeRefreshedNodes(prev, nodesData.nodes);
-        return autoLayout(merged, edgesData.edges);
-      });
+      setNodes((prev) => mergeRefreshedNodes(prev, nodesData.nodes));
       setEdges(buildFlowEdges(edgesData));
     } catch (err) {
       console.error("Failed to refresh data:", err);
@@ -341,22 +267,6 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
     }
   };
 
-  const handleAutoLayout = async () => {
-    const layoutedNodes = autoLayout(nodes, edges);
-    setNodes(layoutedNodes);
-
-    for (const node of layoutedNodes) {
-      try {
-        await updateNode(node.id, {
-          position_x: node.position.x,
-          position_y: node.position.y,
-        });
-      } catch (err) {
-        console.error("Failed to update node position:", err);
-      }
-    }
-  };
-
   const handleRefresh = () => {
     loadData();
   };
@@ -370,18 +280,16 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
   }, []);
 
   const handleNodeDragStop = useCallback((_, node) => {
-    // 手动拖动后标记，autoLayout 不再覆盖；并持久化坐标
     setNodes((nds) =>
       nds.map((n) =>
         n.id === node.id
-          ? { ...n, position: node.position, data: { ...n.data, manuallyPositioned: true } }
+          ? { ...n, position: node.position }
           : n
       )
     );
     updateNode(node.id, {
       position_x: node.position.x,
       position_y: node.position.y,
-      manually_positioned: true,
     }).catch((err) => console.error("Failed to persist node position:", err));
   }, [setNodes]);
 
