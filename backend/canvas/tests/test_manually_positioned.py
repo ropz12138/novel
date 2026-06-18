@@ -82,6 +82,24 @@ def test_update_node_sync_resets_manually_positioned(monkeypatch):
         db.close()
 
 
+def test_update_node_sync_sets_layer(monkeypatch):
+    db = db_module.SessionLocal()
+    try:
+        work = _make_work(monkeypatch, db)
+        node = Node(work_id=work.id, type="outline", title="n1", layer=1)
+        db.add(node)
+        db.commit()
+
+        result = json.loads(nt._update_node_sync(node.id, layer=5))
+        assert result["success"] is True
+        assert result["node"]["layer"] == 5
+
+        db.refresh(node)
+        assert node.layer == 5
+    finally:
+        db.close()
+
+
 def test_migrate_adds_manually_positioned_when_missing(monkeypatch):
     monkeypatch.setattr(settings, "db_name", "novel_test")
     db = db_module.SessionLocal()

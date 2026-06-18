@@ -60,6 +60,7 @@ class UpdateNodeInput(BaseModel):
     title: Optional[str] = Field(default=None, description="新标题")
     content: Optional[str] = Field(default=None, description="新内容")
     node_type: Optional[str] = Field(default=None, description="新类型")
+    layer: Optional[int] = Field(default=None, description="新的垂直层级")
     position_x: Optional[float] = Field(default=None, description="X坐标")
     position_y: Optional[float] = Field(default=None, description="Y坐标")
     manually_positioned: Optional[bool] = Field(default=None, description="是否手动拖拽定位")
@@ -170,7 +171,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.close()
 
 
-def _update_node_sync(node_id, title=None, content=None, node_type=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
+def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
     if node_type is not None and not node_type.strip():
         return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
     db = _get_db()
@@ -184,6 +185,8 @@ def _update_node_sync(node_id, title=None, content=None, node_type=None, positio
             node.content = content
         if node_type is not None:
             node.type = node_type
+        if layer is not None:
+            node.layer = layer
         if position_x is not None:
             node.position_x = position_x
         if position_y is not None:
@@ -452,9 +455,9 @@ async def _create_node_async(node_type, title, content="", layer=0, position_x=N
     return result
 
 
-async def _update_node_async(node_id, title=None, content=None, node_type=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
+async def _update_node_async(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, manually_positioned=None, reason=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, position_x, position_y, manually_positioned, reason))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, manually_positioned, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
