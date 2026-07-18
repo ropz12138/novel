@@ -54,6 +54,16 @@ export async function deleteWork(workId) {
   if (!res.ok) throw new Error("Failed to delete work");
 }
 
+export async function restoreCanvasSnapshot(workId, snapshot) {
+  const res = await fetch(`${API_BASE}/works/${workId}/canvas/restore`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(snapshot),
+  });
+  if (!res.ok) throw new Error("Failed to restore canvas snapshot");
+  return res.json();
+}
+
 // ========== 节点API ==========
 
 export async function fetchNodes(workId) {
@@ -130,6 +140,44 @@ export async function deleteEdge(id) {
   if (!res.ok) throw new Error("Failed to delete edge");
 }
 
+// ========== 角色关系线 API ==========
+
+export async function fetchCharacterRelations(workId) {
+  const res = await fetch(`${API_BASE}/works/${workId}/character-relations`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch character relations");
+  return res.json();
+}
+
+export async function createCharacterRelation(workId, data) {
+  const res = await fetch(`${API_BASE}/works/${workId}/character-relations`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to create character relation");
+  return res.json();
+}
+
+export async function updateCharacterRelation(id, data) {
+  const res = await fetch(`${API_BASE}/character-relations/${id}`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update character relation");
+  return res.json();
+}
+
+export async function deleteCharacterRelation(id) {
+  const res = await fetch(`${API_BASE}/character-relations/${id}`, {
+    method: "DELETE",
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to delete character relation");
+}
+
 // ========== 章节生成API ==========
 
 export async function generateChapter(nodeId, extraInstructions = "") {
@@ -150,5 +198,45 @@ export async function fetchChapter(nodeId) {
     headers: getAuthHeaders(),
   });
   if (!res.ok) throw new Error("Failed to fetch chapter");
+  return res.json();
+}
+
+// ========== 模型配置API ==========
+
+export async function getModels() {
+  const res = await fetch(`${API_BASE}/me/models`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch models");
+  return res.json();
+}
+
+export async function getModelPref() {
+  const res = await fetch(`${API_BASE}/me/model-pref`, {
+    headers: getAuthHeaders(),
+  });
+  if (!res.ok) throw new Error("Failed to fetch model preference");
+  return res.json();
+}
+
+export async function putModelPref(data) {
+  const res = await fetch(`${API_BASE}/me/model-pref`, {
+    method: "PUT",
+    headers: getAuthHeaders(),
+    body: JSON.stringify(data),
+  });
+  if (!res.ok) throw new Error("Failed to update model preference");
+  return res.json();
+}
+
+// ========== 画布截图上传（供多模态评估） ==========
+
+export async function uploadCanvasRender(workId, base64Image) {
+  const res = await fetch(`${API_BASE}/works/${workId}/canvas/render`, {
+    method: "POST",
+    headers: getAuthHeaders(),
+    body: JSON.stringify({ image: base64Image }),
+  });
+  if (!res.ok) throw new Error("Failed to upload canvas render");
   return res.json();
 }

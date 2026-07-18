@@ -1,2 +1,0 @@
-1. 如果当前任务较复杂，先用 **create_child_todolist** 创建 2-6 个内部子任务
-2. 开始/完成关键步骤时用 **update_child_task_status** 更新对应子任务

@@ -1,7 +1,7 @@
 """瘦 CRUD 工具测试 — TDD：返回增量 + 一级邻居。
 
 create_node 去坐标参数、改用 layer；所有写入工具返回本次操作结果 + 一级邻居
-（双向 incoming/outgoing，精简字段 id/type/title/layer，带 edge_type + direction）。
+（双向 incoming/outgoing，精简字段 id/type/title/layer/scope，带 edge_type + direction）。
 """
 import importlib
 import json
@@ -57,7 +57,7 @@ def test_update_node_returns_all_neighbors(monkeypatch):
         neighbor_ids = [nb["node"]["id"] for nb in result["neighbors"]]
         assert b.id in neighbor_ids
         nb_b = next(nb for nb in result["neighbors"] if nb["node"]["id"] == b.id)
-        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer"}
+        assert set(nb_b["node"].keys()) == {"id", "type", "title", "layer", "scope"}
         assert nb_b["edge"]["direction"] == "out"
         assert nb_b["edge"]["edge_type"] == "包含"
     finally:

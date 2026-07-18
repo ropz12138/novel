@@ -32,7 +32,10 @@ backend/config.json
 
 # === Runtime logs & pids ===
 .run/*.log
+.run/*.log.*
 .run/*.pid
+.run/canvas_renders/
+.run/illustrations/
 
 # === IDE ===
 .vscode/

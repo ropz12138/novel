@@ -44,6 +44,14 @@ class Settings:
         self.langsmith_endpoint = observability.get("langsmith_endpoint", "https://api.smith.langchain.com")
         self.langsmith_tracing_v2 = bool(observability.get("langsmith_tracing_v2", False))
 
+        image = config.get("image", {})
+        self.image_provider = image.get("provider", "ark")
+        self.image_api_base_url = image.get("api_base_url", "https://ark.cn-beijing.volces.com/api/v3")
+        self.image_api_key = image.get("api_key", "")
+        self.image_text2image_model = image.get("text2image_model", "")
+        self.chapter_illustration_size = image.get("chapter_illustration_size", "2K")
+        self.image_watermark = bool(image.get("watermark", True))
+
     def _parse_llm_config(self, config: dict) -> None:
         """解析多模型配置列表"""
         llm_list = config.get("llm", [])

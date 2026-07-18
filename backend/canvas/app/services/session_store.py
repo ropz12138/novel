@@ -67,6 +67,44 @@ class SessionStore:
         finally:
             db.close()
 
+    def mark_session_interrupted(self, session_id: str) -> bool:
+        """将会话标记为 interrupted（仅当 status=running 时生效）。"""
+        db = self._get_db()
+        try:
+            session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
+            if not session or session.status != "running":
+                return False
+            session.status = "interrupted"
+            session.stage = "done"
+            session.updated_at = datetime.now(timezone.utc)
+            db.commit()
+            return True
+        except Exception as e:
+            db.rollback()
+            raise e
+        finally:
+            db.close()
+
+    def recover_stale_running_sessions(self) -> int:
+        """将仍为 running 的会话标记为 interrupted（进程崩溃后的僵尸 session）。"""
+        db = self._get_db()
+        try:
+            rows = db.query(SupervisorSession).filter(SupervisorSession.status == "running").all()
+            if not rows:
+                return 0
+            now = datetime.now(timezone.utc)
+            for session in rows:
+                session.status = "interrupted"
+                session.stage = "done"
+                session.updated_at = now
+            db.commit()
+            return len(rows)
+        except Exception as e:
+            db.rollback()
+            raise e
+        finally:
+            db.close()
+
     def update_session(self, session_id: str, **kwargs) -> Optional[dict]:
         """更新会话"""
         db = self._get_db()
@@ -139,13 +177,57 @@ class SessionStore:
             db.close()
 
     def get_messages(self, session_id: str) -> list[dict]:
-        """获取会话消息"""
+        """获取会话消息（Todolist 从 todo_items 同步最新状态）"""
         db = self._get_db()
         try:
             messages = db.query(SupervisorMessage).filter(
                 SupervisorMessage.session_id == session_id
             ).order_by(SupervisorMessage.sort_order).all()
-            return [self._message_to_dict(m) for m in messages]
+            result = [self._message_to_dict(m) for m in messages]
+            from app.services.supervisor_event_persist import enrich_messages_with_todolist
+            return enrich_messages_with_todolist(db, session_id, result)
+        finally:
+            db.close()
+
+    def patch_tool_call_success(
+        self,
+        session_id: str,
+        *,
+        call_id: str = "",
+        tool_name: str = "",
+        success: bool = True,
+    ) -> bool:
+        """更新最近一次匹配的 tool_call 成功状态。"""
+        from sqlalchemy.orm.attributes import flag_modified
+
+        db = self._get_db()
+        try:
+            rows = (
+                db.query(SupervisorMessage)
+                .filter_by(session_id=session_id, role="tool_call")
+                .order_by(SupervisorMessage.sort_order.desc())
+                .all()
+            )
+            for row in rows:
+                meta = dict(row.meta or {})
+                if call_id and meta.get("tool_call_id") == call_id:
+                    meta["success"] = success
+                    row.meta = meta
+                    flag_modified(row, "meta")
+                    db.commit()
+                    return True
+            for row in rows:
+                if tool_name and row.content == tool_name:
+                    meta = dict(row.meta or {})
+                    meta["success"] = success
+                    row.meta = meta
+                    flag_modified(row, "meta")
+                    db.commit()
+                    return True
+            return False
+        except Exception as e:
+            db.rollback()
+            raise e
         finally:
             db.close()
 
@@ -174,6 +256,7 @@ class SessionStore:
             "role": message.role,
             "content": message.content,
             "meta": message.meta or {},
+            "sort_order": message.sort_order,
             "created_at": message.created_at.isoformat() if message.created_at else None,
         }
 

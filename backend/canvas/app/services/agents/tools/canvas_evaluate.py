@@ -1,8 +1,13 @@
-"""多模态画布评估工具 — 渲染画布为图片，调用多模态模型评估布局质量。"""
+"""多模态画布评估工具 — 读取前端上传的画布截图，调用多模态模型评估布局质量。
+
+截图由前端 ReactFlow 用 html-to-image 渲染后上传（POST /works/{id}/canvas/render），
+保证"和前端显示一模一样"。本工具只负责取截图缓存 + 调多模态模型。
+"""
 import json
 import base64
 import io
 import logging
+from pathlib import Path
 from typing import Optional
 
 from PIL import Image, ImageDraw, ImageFont
@@ -14,18 +19,24 @@ from app.models.edge import Edge
 
 logger = logging.getLogger(__name__)
 
-# 节点类型颜色映射（默认颜色，agent 可通过 extra_data 覆盖）
+# 前端上传的画布截图缓存目录（多 worker 共享，落盘）
+# canvas_evaluate.py 位于 backend/canvas/app/services/agents/tools/，parents[6] = 项目根
+RENDER_DIR = Path(__file__).resolve().parents[6] / ".run" / "canvas_renders"
+
+
+def get_render_path(work_id: str) -> Path:
+    """返回某作品画布截图的缓存路径。"""
+    return RENDER_DIR / f"{work_id}.png"
+
+# 节点类型颜色映射（与 node_types.STANDARD_NODE_TYPES 一致，仅 7 类）
 DEFAULT_COLORS = {
-    "idea": "#FBBF24",        # 黄色
-    "outline": "#3B82F6",     # 蓝色
-    "chapter": "#10B981",     # 绿色
-    "character": "#EC4899",   # 粉色
-    "foreshadow": "#14B8A6",  # 青色
-    "conflict": "#EF4444",    # 红色
+    "outline": "#3B82F6",       # 蓝色
+    "volume": "#6366F1",        # 靛蓝
+    "plot": "#F97316",          # 橙色
+    "chapter": "#10B981",       # 绿色
+    "character": "#EC4899",     # 粉色
     "worldbuilding": "#8B5CF6", # 紫色
-    "event": "#F97316",       # 橙色
-    "theme": "#6366F1",       # 靛蓝
-    "style": "#A855F7",       # 紫罗兰
+    "style": "#A855F7",         # 紫罗兰
 }
 DEFAULT_NODE_COLOR = "#94A3B8"  # 默认灰色
 
@@ -216,50 +227,23 @@ def evaluate_layout(reason: str = None) -> str:
         if not work_id:
             return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
 
-        # 从数据库获取节点和边
-        db = _get_db()
-        try:
-            nodes_db = db.query(Node).filter(Node.work_id == work_id).all()
-            edges_db = db.query(Edge).filter(Edge.work_id == work_id).all()
-
-            nodes = [
-                {
-                    "id": n.id,
-                    "type": n.type,
-                    "title": n.title,
-                    "layer": n.layer,
-                    "extra_data": n.extra_data or {},
-                }
-                for n in nodes_db
-            ]
-            edges = [
-                {
-                    "source_id": e.source_id,
-                    "target_id": e.target_id,
-                    "edge_type": e.edge_type,
-                }
-                for e in edges_db
-            ]
-        finally:
-            db.close()
-
-        if not nodes:
-            return json.dumps({
-                "score": 0,
-                "issues": ["画布为空"],
-                "suggestions": ["请先创建一些节点"],
-            }, ensure_ascii=False)
-
-        # 渲染画布为图片
-        image_base64 = render_canvas_to_image(nodes, edges)
+        # 读取前端上传的画布截图（html-to-image 渲染，与前端显示一致）
+        screenshot_path = get_render_path(work_id)
+        if not screenshot_path.exists():
+            return json.dumps(
+                {"error": "画布截图未就绪（前端尚未上传），请稍后或先操作画布触发截图"},
+                ensure_ascii=False,
+            )
+        image_base64 = base64.b64encode(screenshot_path.read_bytes()).decode()
 
         # 构建提示词
         prompt = """请评估这张小说创作知识图谱的布局质量。评估维度：
 
 1. **节点分布**：节点是否均匀分布，有无重叠或过于拥挤？
-2. **层级清晰度**：从上到下的层级关系是否清晰（主题→大纲→章节）？
-3. **要素关联**：角色、伏笔、冲突等要素是否合理关联？
-4. **视觉美观**：整体布局是否美观，颜色区分是否清晰？
+2. **连线分布**：连线走向是否清晰合理，有无相互交叉、重叠或杂乱缠绕？
+3. **层级清晰度**：从上到下的层级关系是否清晰（主题→大纲→章节）？
+4. **要素关联**：角色、伏笔、冲突等要素是否合理关联？
+5. **视觉美观**：整体布局是否美观，颜色区分是否清晰？
 
 请严格按照以下 JSON 格式返回评估结果，不要包含其他文本：
 {

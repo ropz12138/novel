@@ -1,8 +1,0 @@
-1. **推荐方式**：直接调用 **evaluate_chapter_all**（传入 chapter_number），一次完成全部评估
-2. **备选方式**（需要更精细控制时）：
-   - 用 **read_chapter_for_eval** 读取章节正文（必须传入 chapter_number）
-   - 用 **read_chapter_outline_for_eval** 读取本章大纲
-   - 用 **read_previous_chapters_for_eval** 读取前文
-   - 用 **evaluate_as_editor** 做编辑视角评估
-   - 用 **evaluate_as_reader** 做读者视角评估
-   - 用 **evaluate_chapter_outline_sync** 做同步性评估（必须传入 chapter_number）

@@ -1,14 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { authFetch } from "../lib/authFetch";
 import { API_BASE } from "../lib/runtime-config";
-import { workApi } from "../lib/rpcApi";
 import { sessionApi } from "../lib/api";
 import { normalizeTodoItem } from "../lib/sseEventHandlers";
 import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards";
 
 /**
- * Custom hook encapsulating Supervisor chat logic shared between
- * UnifiedAgentPage and SupervisorChatPanel (WorkDetailPage).
+ * Custom hook encapsulating Supervisor chat logic for Canvas AgentChat.
  *
  * @param {Object} options
  * @param {string|null} options.workId
@@ -23,7 +21,7 @@ import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards"
  * @param {Function}    [options.callbacks.onWorkCreated]
  * @param {Function}    [options.callbacks.onNodesUpdate]
  */
-export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodolist = false, enableEvaluation = false, callbacks = {} }) {
+export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodolist = false, enableEvaluation = false, callbacks = {}, contextNodeIds = [] }) {
   const {
     onOutlineUpdated,
     onChapterUpdated,
@@ -52,6 +50,8 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
   const sseRef = useRef(null);
   const lastOutlinePhaseRef = useRef("");
   const lastQueryCategoryRef = useRef(null);
+  const lastOperatedNodeIdsRef = useRef([]);
+  const sseCompletedRef = useRef(false);
 
   const syncSessionId = useCallback((id) => {
     activeSessionIdRef.current = id;
@@ -124,16 +124,41 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     setTimeline((prev) => [...prev, { kind: "message", id, role, content, ...meta, timestamp: Date.now() }]);
   }, []);
 
-  const freezeDraft = useCallback(() => {
+  const freezeDraft = useCallback((meta = {}) => {
     const draft = assistantDraftRef.current;
-    if (draft && draft.trim()) {
+    const reasoning = assistantReasoningDraftRef.current;
+    if ((draft && draft.trim()) || (reasoning && reasoning.trim())) {
       const id = ++timelineIdRef.current;
-      setTimeline((prev) => [...prev, { kind: "message", id, role: "assistant", content: draft, timestamp: Date.now() }]);
+      setTimeline((prev) => [...prev, {
+        kind: "message",
+        id,
+        role: "assistant",
+        content: draft || "",
+        reasoningContent: reasoning || "",
+        ...meta,
+        timestamp: Date.now(),
+      }]);
     }
     setAssistantDraft("");
     assistantDraftRef.current = "";
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
+  }, []);
+
+  const reloadTimelineFromSession = useCallback(async (sid) => {
+    const sessionKey = sid || activeSessionIdRef.current;
+    if (!sessionKey) return;
+    try {
+      const msgs = await sessionApi.getSupervisorMessages(sessionKey);
+      if (msgs && msgs.length > 0) {
+        const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
+        setTimeline(suppressSupersededChapterEditCards(loaded));
+      } else {
+        setTimeline([]);
+      }
+    } catch {
+      // ignore
+    }
   }, []);
 
   // ── SSE event handler ──
@@ -144,22 +169,50 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         syncSessionId(d.session_id);
         break;
 
+      case "user_message_stored":
+        if (d.message_id) {
+          setTimeline((prev) => {
+            let i = prev.findLastIndex(
+              (item) => item.kind === "message" && item.role === "user" && !item.dbMessageId,
+            );
+            if (i < 0) return prev;
+            const next = [...prev];
+            next[i] = { ...next[i], dbMessageId: d.message_id };
+            return next;
+          });
+        }
+        break;
+
+      case "canvas_restored":
+        if (onNodesUpdate) onNodesUpdate();
+        break;
+
+      case "messages_truncated":
+        break;
+
+      case "user_message_edited":
+        reloadTimelineFromSession(activeSessionIdRef.current);
+        break;
+
       case "tool_calls": {
         freezeDraft();
-        const label = `调用工具: ${(d.tools || []).join(", ") || "unknown"}`;
-        pushExecStepDone(label);
+        lastOperatedNodeIdsRef.current = [];
+        setTimeline((prev) => appendToolCallSteps(prev, d.tools || [], timelineIdRef));
         break;
       }
 
       case "tool_result":
-        if (d.content) {
-          finalizeLastRunningStep();
-          addMessage("assistant", d.content, { type: "tool_result" });
-        }
         break;
 
       case "tool_executed":
-        finalizeLastRunningStep();
+        setTimeline((prev) => markToolExecuted(prev, d.tool, d.success !== false));
+        break;
+
+      case "nodes_operated":
+        // 累加本次执行操作的节点 ID
+        lastOperatedNodeIdsRef.current = [
+          ...new Set([...lastOperatedNodeIdsRef.current, ...(d.node_ids || [])])
+        ];
         break;
 
       case "supervisor_stream": {
@@ -180,17 +233,23 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         break;
       }
 
-      case "supervisor_done":
+      case "supervisor_done": {
+        sseCompletedRef.current = true;
         finalizeAllRunningSteps();
-        freezeDraft();
+        const operatedNodeIds = lastOperatedNodeIdsRef.current;
+        freezeDraft({ operatedNodeIds: operatedNodeIds.length > 0 ? operatedNodeIds : undefined });
+        lastOperatedNodeIdsRef.current = [];
         lastQueryCategoryRef.current = null;
         reconcileTodolist(activeSessionIdRef.current, setTimeline);
         setRunning(false);
         break;
+      }
 
       case "stage_start": {
         freezeDraft();
         lastQueryCategoryRef.current = null;
+        // 工具阶段：tool_calls 事件已创建"调用工具"step，stage_start(tool) 不再重复创建
+        if (d.stage === "tool") break;
         const label = d.label || d.stage || "进行中";
         pushExecStep(label);
         break;
@@ -234,18 +293,14 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       case "outline_edit_done":
         finalizeLastRunningStep();
         addMessage("assistant", d.message || "大纲已编辑。", { type: "outline_edited" });
-        if (onOutlineUpdated && workId) {
-          workApi.get(workId)
-            .then((r) => r.json())
-            .then((w) => { if (w.outline_tree) onOutlineUpdated(w.outline_tree); })
-            .catch(() => {});
-        }
+        onOutlineUpdated?.();
         break;
 
       case "plan_stream":
       case "thinking_stream":
       case "write_stream":
       case "edit_chapter_stream":
+      case "chapter_edit_stream":
         appendLastRunningStream(d.chunk, d.phase || "content");
         break;
 
@@ -319,6 +374,23 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         // 节点/边创建、更新、删除时触发画布刷新
         if (onNodesUpdate) onNodesUpdate();
         break;
+
+      case "chapter_edit_diff": {
+        finalizeLastRunningStep();
+        addMessage("assistant", "", {
+          type: "chapter_content_diff_card",
+          chapterContentDiffCard: {
+            chapter_node_id: d.chapter_node_id,
+            title: d.title,
+            hunks: d.diff?.hunks ?? [],
+            summary: d.diff?.summary ?? {},
+            word_count: d.word_count,
+            word_count_delta: d.word_count_delta,
+          },
+        });
+        if (onChapterUpdated) onChapterUpdated(d.chapter_node_id);
+        break;
+      }
 
       case "todolist_generated": {
         finalizeLastRunningStep();
@@ -600,6 +672,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       }
 
       case "error":
+        sseCompletedRef.current = true;
         finalizeAllRunningSteps();
         addMessage("system", `错误: ${d.message}`, { type: "error" });
         setRunning(false);
@@ -613,6 +686,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         break;
 
       case "supervisor_interrupted":
+        sseCompletedRef.current = true;
         finalizeAllRunningSteps();
         freezeDraft();
         addMessage("system", "任务已被中断", { type: "interrupted" });
@@ -626,13 +700,14 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     syncSessionId, freezeDraft, pushExecStep, pushExecStepDone,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
     onWorkCreated, onOutlineUpdated, onChapterUpdated, onCharactersUpdated,
-    onChapterIntelUpdate, onNodesUpdate, workId, autoMode,
+    onChapterIntelUpdate, onNodesUpdate, workId, autoMode, reloadTimelineFromSession,
   ]);
 
   // ── SSE connection ──
 
   const connectSSE = useCallback((url, body) => {
     setRunning(true);
+    sseCompletedRef.current = false;
     setAssistantDraft("");
     assistantDraftRef.current = "";
     setAssistantReasoningDraft("");
@@ -662,11 +737,16 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
           finalizeAllRunningSteps();
           setRunning(false);
           addMessage("system", `错误: ${msg}`, { type: "error" });
+          sseCompletedRef.current = true;
           return;
         }
         if (!res.body) {
-          finalizeAllRunningSteps();
-          setRunning(false);
+          handleSseStreamFinished({
+            sseCompletedRef,
+            addMessage,
+            finalizeAllRunningSteps,
+            setRunning,
+          });
           return;
         }
         const reader = res.body.getReader();
@@ -692,11 +772,19 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
               }
             }
           }
-          finalizeAllRunningSteps();
-          setRunning(false);
+          handleSseStreamFinished({
+            sseCompletedRef,
+            addMessage,
+            finalizeAllRunningSteps,
+            setRunning,
+          });
         })().catch(() => {
-          finalizeAllRunningSteps();
-          setRunning(false);
+          handleSseStreamFinished({
+            sseCompletedRef,
+            addMessage,
+            finalizeAllRunningSteps,
+            setRunning,
+          });
         });
       })
       .catch((e) => {
@@ -711,10 +799,12 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
 
   // ── handleSend ──
 
-  const handleSend = useCallback(() => {
-    if (running || !input.trim()) return;
+  const handleSend = useCallback((overrideMsg) => {
+    if (running) return;
 
-    const raw = input.trim();
+    const raw = (overrideMsg ?? input).trim();
+    if (!raw) return;
+
     const msg = chapterNumber != null ? `[用户正在查看第${chapterNumber}章]\n${raw}` : raw;
     addMessage("user", raw);
     setInput("");
@@ -737,6 +827,23 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       });
     }
   }, [running, input, chapterNumber, addMessage, connectSSE, workId, autoMode, enableTodolist, enableEvaluation]);
+
+  const handleEditResend = useCallback((dbMessageId, newContent) => {
+    if (running) return;
+    const trimmed = (newContent || "").trim();
+    if (!trimmed || !dbMessageId) return;
+
+    const sid = activeSessionIdRef.current;
+    if (!sid) return;
+
+    connectSSE(`${API_BASE}/supervisor/edit-resend`, {
+      session_id: sid,
+      message_id: dbMessageId,
+      message: trimmed,
+      enable_todolist: enableTodolist,
+      enable_evaluation: enableEvaluation,
+    });
+  }, [running, connectSSE, enableTodolist, enableEvaluation]);
 
   // ── Confirm handlers ──
 
@@ -824,12 +931,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         setCharacterDiff(null);
         setRunning(false);
         addMessage("assistant", "大纲和角色修改已保存。", { type: "outline_edited" });
-        if (onOutlineUpdated && workId) {
-          workApi.get(workId)
-            .then((r) => r.json())
-            .then((w) => { if (w.outline_tree) onOutlineUpdated(w.outline_tree); })
-            .catch(() => {});
-        }
+        onOutlineUpdated?.();
       } else {
         setOutlineDiff(null);
         setCharacterDiff(null);
@@ -866,102 +968,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     try {
       const msgs = await sessionApi.getSupervisorMessages(session.id);
       if (msgs && msgs.length > 0) {
-        const loaded = msgs
-          .filter((m) => ["user", "assistant", "tool_call", "tool_result"].includes(m.role))
-          .map((m) => {
-            const id = ++timelineIdRef.current;
-            const ts = m.created_at ? new Date(m.created_at).getTime() : Date.now();
-
-            if (m.role === "tool_call") {
-              return {
-                kind: "message",
-                id,
-                role: "assistant",
-                content: `调用工具: ${m.content || "unknown"}`,
-                type: "agent_phase",
-                title: "工具调用",
-                meta: m.meta || {},
-                timestamp: ts,
-              };
-            }
-            if (m.role === "tool_result") {
-              return {
-                kind: "message",
-                id,
-                role: "assistant",
-                content: m.content || "",
-                type: "agent_phase",
-                title: `工具结果${m.meta?.tool_name ? ` · ${m.meta.tool_name}` : ""}`,
-                meta: m.meta || {},
-                timestamp: ts,
-              };
-            }
-
-            const isProcess = m.meta?.type === "process_note" || (m.meta?.type === "agent_phase" && ["stage_start", "evaluation_done"].includes(m.meta?.event));
-            if (m.role === "assistant" && isProcess) {
-              return {
-                kind: "step",
-                id,
-                label: m.content || m.meta?.label || "处理中",
-                status: "done",
-                stream: "",
-                panelOpen: false,
-                timestamp: ts,
-              };
-            }
-
-            if (
-              m.role === "assistant"
-              && m.meta?.type === "requirements_todolist"
-              && m.meta?.todoCard
-            ) {
-              return {
-                kind: "message",
-                id,
-                role: "assistant",
-                content: "",
-                type: "requirements_todolist",
-                todoCard: m.meta.todoCard,
-                meta: m.meta || {},
-                timestamp: ts,
-              };
-            }
-
-            if (
-              m.role === "assistant"
-              && m.meta?.intent === "requirements_planner"
-              && m.meta?.requirements_plan
-            ) {
-              return {
-                kind: "message",
-                id,
-                role: "assistant",
-                content: "",
-                type: "requirements_todolist",
-                todoCard: m.meta.requirements_plan,
-                meta: m.meta || {},
-                timestamp: ts,
-              };
-            }
-
-            return {
-              kind: "message",
-              id,
-              role: m.role,
-              content: m.content,
-              type: m.meta?.type,
-              title: m.meta?.title,
-              diffCard: m.meta?.diffCard,
-              outlineDiffCard: m.meta?.outlineDiffCard,
-              characterDiffCard: m.meta?.characterDiffCard,
-              patchDiffCard: m.meta?.patchDiffCard,
-              chapterMetaCard: m.meta?.chapterMetaCard,
-              metadataDiffCard: m.meta?.metadataDiffCard,
-              consistencyReportCard: m.meta?.consistencyReportCard,
-              meta: m.meta || {},
-              timestamp: ts,
-            };
-          });
+        const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
         setTimeline(suppressSupersededChapterEditCards(loaded));
       }
     } catch {
@@ -1020,6 +1027,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     freezeDraft,
     // actions
     handleSend,
+    handleEditResend,
     handleInterrupt,
     handleConfirmEdit,
     handleConfirmOutline,
@@ -1033,6 +1041,215 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
 }
 
 // ── Helpers ──
+
+function messageTimestamp(m) {
+  return m.created_at ? new Date(m.created_at).getTime() : Date.now();
+}
+
+function mapStoredMessageToTimelineItem(m, idRef) {
+  const id = ++idRef.current;
+  const ts = messageTimestamp(m);
+  const meta = m.meta || {};
+
+  const isProcess = meta.type === "process_note"
+    || (meta.type === "agent_phase" && ["stage_start", "evaluation_done"].includes(meta.event));
+  if (m.role === "assistant" && isProcess) {
+    return {
+      kind: "step",
+      id,
+      label: m.content || meta.label || "处理中",
+      status: "done",
+      stream: "",
+      panelOpen: false,
+      timestamp: ts,
+    };
+  }
+
+  if (m.role === "assistant" && meta.type === "requirements_todolist" && meta.todoCard) {
+    return {
+      kind: "message",
+      id,
+      role: "assistant",
+      content: "",
+      type: "requirements_todolist",
+      todoCard: meta.todoCard,
+      meta,
+      timestamp: ts,
+    };
+  }
+
+  if (m.role === "assistant" && meta.intent === "requirements_planner" && meta.requirements_plan) {
+    return {
+      kind: "message",
+      id,
+      role: "assistant",
+      content: "",
+      type: "requirements_todolist",
+      todoCard: meta.requirements_plan,
+      meta,
+      timestamp: ts,
+    };
+  }
+
+  return {
+    kind: "message",
+    id,
+    role: m.role,
+    content: m.content,
+    reasoningContent: meta.reasoning_content || "",
+    type: meta.type,
+    title: meta.title,
+    diffCard: meta.diffCard,
+    outlineDiffCard: meta.outlineDiffCard,
+    characterDiffCard: meta.characterDiffCard,
+    patchDiffCard: meta.patchDiffCard,
+    chapterContentDiffCard: meta.chapterContentDiffCard,
+    chapterMetaCard: meta.chapterMetaCard,
+    metadataDiffCard: meta.metadataDiffCard,
+    consistencyReportCard: meta.consistencyReportCard,
+    operatedNodeIds: meta.operatedNodeIds,
+    dbMessageId: m.id,
+    meta,
+    timestamp: ts,
+  };
+}
+
+/** 从 DB 消息重建 timeline，工具 step 与流式 SSE 使用同一套 upsert/mark 逻辑。 */
+export function buildTimelineFromHistoryMessages(msgs, idRef = { current: 0 }) {
+  const filtered = (msgs || []).filter((m) =>
+    ["user", "assistant", "tool_call"].includes(m.role)
+  );
+
+  let timeline = [];
+  let i = 0;
+
+  while (i < filtered.length) {
+    const m = filtered[i];
+
+    if (m.role === "tool_call") {
+      while (i < filtered.length && filtered[i].role === "tool_call") {
+        const row = filtered[i];
+        const toolName = row.content || "unknown";
+        const success = row.meta?.success !== false;
+        const ts = messageTimestamp(row);
+
+        timeline = upsertToolCallStep(timeline, [toolName], idRef);
+        const stepIdx = timeline.findLastIndex(
+          (item) => item.kind === "step" && item.toolCallKey === toolName
+        );
+        if (stepIdx >= 0) {
+          const next = [...timeline];
+          next[stepIdx] = { ...next[stepIdx], timestamp: ts };
+          timeline = next;
+        }
+        timeline = markToolExecuted(timeline, toolName, success);
+        i += 1;
+      }
+      continue;
+    }
+
+    timeline.push(mapStoredMessageToTimelineItem(m, idRef));
+    i += 1;
+  }
+
+  return timeline;
+}
+
+export function appendToolCallSteps(timeline, tools, idRef) {
+  let next = timeline;
+  for (const tool of (tools || [])) {
+    if (!tool) continue;
+    next = upsertToolCallStep(next, [tool], idRef);
+  }
+  return next;
+}
+
+export function formatToolCallLabel(tools, count = 1) {
+  const names = (tools || []).filter(Boolean);
+  const base = names.length > 0 ? names.join(", ") : "unknown";
+  const label = `工具调用 · ${base}`;
+  return count > 1 ? `${label} ×${count}` : label;
+}
+
+export function upsertToolCallStep(timeline, tools, idRef) {
+  const pendingTools = [...(tools || [])];
+  const key = pendingTools.join(",") || "unknown";
+  const lastIdx = timeline.length - 1;
+  const lastItem = timeline[lastIdx];
+  const mergeIdx = lastItem?.kind === "step" && lastItem.toolCallKey === key ? lastIdx : -1;
+
+  if (mergeIdx >= 0) {
+    const existing = timeline[mergeIdx];
+    const count = (existing.toolCallCount || 1) + 1;
+    const next = [...timeline];
+    next[mergeIdx] = {
+      ...existing,
+      status: "running",
+      toolCallCount: count,
+      label: formatToolCallLabel(pendingTools, count),
+      pendingTools,
+      toolResults: {},
+      panelOpen: false,
+    };
+    return next;
+  }
+
+  const id = ++idRef.current;
+  return [
+    ...timeline,
+    {
+      kind: "step",
+      id,
+      label: formatToolCallLabel(pendingTools),
+      toolCallKey: key,
+      toolCallCount: 1,
+      status: "running",
+      pendingTools,
+      toolResults: {},
+      stream: "",
+      reasoningStream: "",
+      panelOpen: false,
+      timestamp: Date.now(),
+    },
+  ];
+}
+
+export function markToolExecuted(timeline, tool, success) {
+  const idx = timeline.findLastIndex(
+    (item) =>
+      item.kind === "step"
+      && item.status === "running"
+      && item.pendingTools?.includes(tool)
+  );
+  if (idx < 0) return timeline;
+
+  const next = [...timeline];
+  const step = next[idx];
+  const toolResults = { ...(step.toolResults || {}), [tool]: success };
+  const pending = step.pendingTools || [];
+  const allDone = pending.every((t) => t in toolResults);
+  const anyFailed = Object.values(toolResults).some((v) => v === false);
+
+  next[idx] = {
+    ...step,
+    toolResults,
+    status: allDone ? (anyFailed ? "failed" : "done") : "running",
+    panelOpen: false,
+  };
+  return next;
+}
+
+export const SSE_ABNORMAL_END_MESSAGE = "连接中断，Agent 未完成执行。请继续对话重试。";
+
+export function handleSseStreamFinished({ sseCompletedRef, addMessage, finalizeAllRunningSteps, setRunning }) {
+  const abnormal = !sseCompletedRef.current;
+  finalizeAllRunningSteps();
+  setRunning(false);
+  if (abnormal) {
+    addMessage("system", SSE_ABNORMAL_END_MESSAGE, { type: "error" });
+  }
+  return abnormal;
+}
 
 export function applyFinalizeAllRunningSteps(timeline, { onlyLast = false } = {}) {
   const hasRunning = timeline.some((item) => item.kind === "step" && item.status === "running");

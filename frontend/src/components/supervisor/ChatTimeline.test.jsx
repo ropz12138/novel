@@ -54,6 +54,112 @@ describe("ChatTimeline", () => {
     expect(bubble.textContent).toBe("第一行\n第二行");
   });
 
+  it("shows edit button when user message has dbMessageId", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "user",
+          content: "Hello AI",
+          dbMessageId: "msg-1",
+          timestamp: Date.now(),
+        },
+      ],
+      onEditMessage: vi.fn(),
+    });
+
+    expect(screen.getByLabelText("编辑并重新发送")).toBeDefined();
+  });
+
+  it("hides edit button when dbMessageId is missing or agent is running", () => {
+    renderTimeline({
+      timeline: [
+        { kind: "message", id: 1, role: "user", content: "Hello AI", timestamp: Date.now() },
+      ],
+      onEditMessage: vi.fn(),
+    });
+    expect(screen.queryByLabelText("编辑并重新发送")).toBeNull();
+
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 2,
+          role: "user",
+          content: "Hello AI",
+          dbMessageId: "msg-2",
+          timestamp: Date.now(),
+        },
+      ],
+      onEditMessage: vi.fn(),
+      running: true,
+    });
+    expect(screen.queryByLabelText("编辑并重新发送")).toBeNull();
+  });
+
+  it("enters edit mode and can cancel via button, close icon, or Escape", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "user",
+          content: "原始内容",
+          dbMessageId: "msg-1",
+          timestamp: Date.now(),
+        },
+      ],
+      onEditMessage: vi.fn(),
+    });
+
+    fireEvent.click(screen.getByLabelText("编辑并重新发送"));
+    expect(screen.getByText("编辑消息")).toBeDefined();
+    const textarea = screen.getByRole("textbox");
+    expect(textarea.value).toBe("原始内容");
+
+    fireEvent.change(textarea, { target: { value: "修改后" } });
+    fireEvent.click(screen.getByRole("button", { name: "取消" }));
+    expect(screen.queryByText("编辑消息")).toBeNull();
+    expect(screen.getByText("原始内容")).toBeDefined();
+
+    fireEvent.click(screen.getByLabelText("编辑并重新发送"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "修改后" } });
+    fireEvent.click(screen.getByLabelText("取消编辑"));
+    expect(screen.queryByText("编辑消息")).toBeNull();
+    expect(screen.getByText("原始内容")).toBeDefined();
+
+    fireEvent.click(screen.getByLabelText("编辑并重新发送"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "修改后" } });
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByText("编辑消息")).toBeNull();
+    expect(screen.getByText("原始内容")).toBeDefined();
+  });
+
+  it("calls onEditMessage when resend is clicked in edit mode", () => {
+    const onEditMessage = vi.fn();
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "user",
+          content: "原始内容",
+          dbMessageId: "msg-1",
+          timestamp: Date.now(),
+        },
+      ],
+      onEditMessage,
+    });
+
+    fireEvent.click(screen.getByLabelText("编辑并重新发送"));
+    fireEvent.change(screen.getByRole("textbox"), { target: { value: "  新内容  " } });
+    fireEvent.click(screen.getByRole("button", { name: "重新发送" }));
+
+    expect(onEditMessage).toHaveBeenCalledWith("msg-1", "  新内容  ");
+    expect(screen.queryByText("编辑消息")).toBeNull();
+  });
+
   it("renders assistant messages with markdown", () => {
     renderTimeline({
       timeline: [
@@ -89,6 +195,18 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("thinking")).toBeDefined();
+  });
+
+  it("renders failed execution steps with X icon", () => {
+    renderTimeline({
+      timeline: [
+        { kind: "step", id: 1, label: "工具调用 · bad_tool", status: "failed", stream: "", panelOpen: false, timestamp: Date.now() },
+      ],
+    });
+
+    expect(screen.getByText("工具调用 · bad_tool")).toBeDefined();
+    const icon = document.querySelector(".text-red-400");
+    expect(icon).toBeTruthy();
   });
 
   it("renders done execution steps with check icon", () => {
@@ -128,9 +246,29 @@ describe("ChatTimeline", () => {
       running: true,
     });
 
-    const reasoning = screen.getByText("分析补丁");
-    const content = screen.getByText('{"edits":');
-    expect(reasoning.compareDocumentPosition(content) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByText("思考过程")).toBeDefined();
+    expect(screen.queryByText("分析补丁")).toBeNull();
+    expect(screen.getByText('{"edits":')).toBeDefined();
+  });
+
+  it("shows reasoning stream expanded when content has not started", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "step",
+          id: 1,
+          label: "写第1章",
+          status: "running",
+          reasoningStream: "分析补丁",
+          stream: "",
+          panelOpen: true,
+          timestamp: Date.now(),
+        },
+      ],
+      running: true,
+    });
+
+    expect(screen.getByText("分析补丁")).toBeDefined();
   });
 
   it("hides stream content when panelOpen is false", () => {
@@ -205,6 +343,37 @@ describe("ChatTimeline", () => {
 
     expect(screen.getByText(/已自动应用/)).toBeDefined();
     expect(screen.queryByText("接受修改")).toBeNull();
+  });
+
+  it("renders chapter_content_diff_card", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "assistant",
+          content: "",
+          type: "chapter_content_diff_card",
+          chapterContentDiffCard: {
+            title: "第2章",
+            hunks: [{
+              type: "replace",
+              paragraph_index: 2,
+              old_text: "旧段落",
+              new_text: "新段落",
+            }],
+            summary: { paragraphs_changed: 1, chars_added: 3, chars_removed: 3 },
+            word_count: 200,
+            word_count_delta: 0,
+          },
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    expect(screen.getByText("第2章")).toBeDefined();
+    expect(screen.getByText(/1 处修改/)).toBeDefined();
+    expect(screen.getByText(/已自动应用并保存/)).toBeDefined();
   });
 
   it("renders patch_diff_card", () => {
@@ -324,16 +493,64 @@ describe("ChatTimeline", () => {
     expect(screen.getByText("分析用户意图中...")).toBeDefined();
   });
 
-  it("collapses reasoning draft once content draft starts streaming", () => {
+  it("collapses reasoning draft when content draft streams", () => {
     renderTimeline({
       assistantReasoningDraft: "思考中...",
       assistantDraft: "正式回复",
       running: true,
     });
 
-    expect(screen.queryByText("思考过程")).toBeNull();
+    expect(screen.getByText("思考过程")).toBeDefined();
     expect(screen.queryByText("思考中...")).toBeNull();
     expect(screen.getByText("正式回复")).toBeDefined();
+  });
+
+  it("expands collapsed reasoning draft on click", () => {
+    renderTimeline({
+      assistantReasoningDraft: "思考中...",
+      assistantDraft: "正式回复",
+      running: true,
+    });
+
+    fireEvent.click(screen.getByText("思考过程"));
+    expect(screen.getByText("思考中...")).toBeDefined();
+  });
+
+  it("history message reasoning collapsed by default", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "assistant",
+          content: "回复正文",
+          reasoningContent: "历史思考内容",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    expect(screen.getByText("思考过程")).toBeDefined();
+    expect(screen.queryByText("历史思考内容")).toBeNull();
+    expect(screen.getByText("回复正文")).toBeDefined();
+  });
+
+  it("history message reasoning expands on click", () => {
+    renderTimeline({
+      timeline: [
+        {
+          kind: "message",
+          id: 1,
+          role: "assistant",
+          content: "回复正文",
+          reasoningContent: "历史思考内容",
+          timestamp: Date.now(),
+        },
+      ],
+    });
+
+    fireEvent.click(screen.getByText("思考过程"));
+    expect(screen.getByText("历史思考内容")).toBeDefined();
   });
 
   // ── Floating outline/character diff panel ──

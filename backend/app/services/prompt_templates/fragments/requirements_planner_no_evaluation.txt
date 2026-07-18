@@ -1,2 +1,0 @@
-- 禁止生成 owner=evaluation_agent 或 task_type=evaluation 的任务。
-- 若用户要求评估章节，questions 中说明「当前未启用章节评估，请在对话设置中开启后重试」，ready_to_execute=false。

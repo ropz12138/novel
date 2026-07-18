@@ -49,6 +49,11 @@ def init_db() -> None:
     import app.models.node
     import app.models.edge
     import app.models.chapter
+    import app.models.session
+    import app.models.character_relation
+    import app.models.todo_item
+    import app.models.chapter_illustration
+    import app.models.canvas_checkpoint
     Base.metadata.create_all(bind=engine)
 
 

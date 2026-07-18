@@ -10,7 +10,13 @@ def build_generation_context(db: Session, chapter_node_id: str, extra_instructio
     根据章节节点的入边关系，收集关联节点内容并组装上下文。
     每段内容标注关系类型和对应的写作指令。
     """
+    from app.services.global_context import get_global_nodes, format_global_context
+
     chapter_node = db.query(Node).filter(Node.id == chapter_node_id).first()
+
+    # 获取全局节点上下文
+    global_nodes = get_global_nodes(db, chapter_node.work_id)
+    global_context = format_global_context(global_nodes)
 
     # 获取所有指向章节节点的边
     edges = db.query(Edge).filter(Edge.target_id == chapter_node_id).all()
@@ -21,6 +27,7 @@ def build_generation_context(db: Session, chapter_node_id: str, extra_instructio
         "extra_instructions": extra_instructions,
         "related_contexts": [],  # 按关系类型组织的上下文
         "forbidden_reveals": [],  # 禁止泄露的信息
+        "global_context": global_context,  # 全局设定
     }
 
     for edge in edges:

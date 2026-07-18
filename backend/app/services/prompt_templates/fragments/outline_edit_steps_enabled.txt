@@ -1,4 +1,0 @@
-1. 如果当前任务较复杂，先用 **create_child_todolist** 创建 2-6 个内部子任务
-2. 仅调用一次 **edit_outline_by_suggestion**，输入用户修改建议
-3. 如有必要，在同一次调用里补充 context_note（自然语言）
-4. 完成后用 **update_child_task_status** 更新子任务状态

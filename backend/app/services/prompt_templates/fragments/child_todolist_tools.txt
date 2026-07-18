@@ -1,4 +1,0 @@
-### 子任务进度工具
-- **create_child_todolist**: 为当前 Supervisor 父任务创建你的内部子任务清单。参数 items 必须是对象数组（不能是 JSON 字符串），字段名必须是 items（不能是 todos）。
-- **read_child_todolist**: 读取当前父任务下的子任务清单。
-- **update_child_task_status**: 更新当前父任务下某个子任务的状态。

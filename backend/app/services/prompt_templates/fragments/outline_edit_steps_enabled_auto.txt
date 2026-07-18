@@ -1,4 +1,0 @@
-1. 如果当前任务较复杂，先用 **create_child_todolist** 创建 2-6 个内部子任务
-2. 仅调用一次 **edit_outline_by_suggestion**，输入用户修改建议
-3. 用 **commit_or_rollback** 确认提交或回滚
-4. 完成后用 **update_child_task_status** 更新子任务状态

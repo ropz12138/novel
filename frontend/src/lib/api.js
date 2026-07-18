@@ -1,7 +1,15 @@
-import { postRpc } from "./rpcApi";
+import { authFetch } from "./authFetch";
+import { API_BASE } from "./runtime-config";
+
+function postRpc(path, body = {}) {
+  return authFetch(`${API_BASE}${path}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
 
 /** API helpers for supervisor session management. */
-
 export const sessionApi = {
   listSupervisor(workId) {
     return postRpc("/supervisor-sessions/list", workId ? { work_id: workId } : {}).then((r) => {

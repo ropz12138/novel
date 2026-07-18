@@ -1,6 +1,15 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useState, useRef } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useState,
+  useRef,
+} from "react";
 import {
   ReactFlow,
+  ReactFlowProvider,
   Background,
   Controls,
   MiniMap,
@@ -8,9 +17,13 @@ import {
   useNodesState,
   useEdgesState,
   MarkerType,
+  useReactFlow,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
+import { toPng } from "html-to-image";
 import CustomNode from "./nodes/CustomNode";
+import CustomEdge from "./edges/CustomEdge";
+import CharacterRelationEdge from "./edges/CharacterRelationEdge";
 import NodeDetailDrawer from "./nodes/NodeDetailDrawer";
 import {
   fetchNodes,
@@ -18,68 +31,252 @@ import {
   updateNode,
   fetchEdges,
   createEdge,
+  updateEdge,
   deleteEdge,
   deleteNode,
+  restoreCanvasSnapshot,
+  uploadCanvasRender,
+  fetchCharacterRelations,
+  createCharacterRelation,
+  deleteCharacterRelation,
 } from "../lib/canvasApi";
+import {
+  applyEdgeLabelAvoidance,
+  computeEdgeLayoutDiagnostics,
+  applyEdgeHandles,
+  resolveOptimalSides,
+  edgeHandlesFromSides,
+} from "../lib/edgeLayout";
+import {
+  isContainsEdge,
+  isDescendantOfCollapsed,
+  buildContainsParentMap,
+  buildContainsChildSources,
+  buildElementChapterLinks,
+  isNodeHiddenByCollapse,
+  buildCollapsibleNodeIds,
+} from "../lib/canvasCollapse";
+import {
+  CANVAS_MARQUEE_KEY_CODE,
+  getMovedNodesFromSnapshot,
+  persistNodePositionUpdates,
+  shouldClearDrawerOnSelection,
+} from "../lib/canvasDrag";
+import {
+  isCanvasDeleteKey,
+  shouldIgnoreCanvasKeyEvent,
+} from "../lib/canvasDelete";
+import { flowNodeDimensionsFromRaw } from "../lib/nodeDimensions";
+import {
+  getStructuralEdgeStyle,
+  nodeTypeByIdFromFlowNodes,
+  nodeTypeByIdFromRawNodes,
+} from "../lib/structuralEdgeStyle";
 
-const createNodeTypes = (onNodeClick) => ({
-  custom: (props) => <CustomNode {...props} onNodeClick={onNodeClick} />,
+const createNodeTypes = (onNodeClick, onFocusEdges, focusedNodeId, highlightedNodeIds = [], collapsedNodeIds = new Set(), hasCollapsibleIds = new Set(), chapterElementCounts = {}, onCollapseToggle) => ({
+  custom: (props) => (
+    <CustomNode
+      {...props}
+      onNodeClick={onNodeClick}
+      onFocusEdges={onFocusEdges}
+      isEdgesFocused={props.id === focusedNodeId}
+      isHighlighted={highlightedNodeIds.includes(props.id)}
+      isCollapsed={collapsedNodeIds.has(props.id)}
+      hasChildren={hasCollapsibleIds.has(props.id)}
+      linkedElementCount={chapterElementCounts[props.id] || 0}
+      onCollapseToggle={onCollapseToggle}
+    />
+  ),
 });
 
-const edgeStyles = {
-  uses: { stroke: "#3b82f6", strokeWidth: 2 },
-  hints: { stroke: "#a855f7", strokeWidth: 1.5, strokeDasharray: "5,5" },
-  conflict: { stroke: "#ef4444", strokeWidth: 2 },
-  inherits: { stroke: "#22c55e", strokeWidth: 2 },
-  contains: { stroke: "#f59e0b", strokeWidth: 2, strokeDasharray: "8,4" },
-  reverses: { stroke: "#f97316", strokeWidth: 2, strokeDasharray: "10,5" },
-  character_appears: { stroke: "#ec4899", strokeWidth: 1.5 },
-  mood: { stroke: "#6366f1", strokeWidth: 1.5 },
-  forbids_reveal: { stroke: "#dc2626", strokeWidth: 2.5 },
-  _default: { stroke: "#94a3b8", strokeWidth: 1.5 },
+const edgeTypes = {
+  custom: CustomEdge,
+  characterRelation: CharacterRelationEdge,
 };
 
-// 获取边样式：保留类型使用预设样式，自然语言类型使用默认样式
-function getEdgeStyle(edgeType) {
-  return edgeStyles[edgeType] || edgeStyles._default;
+function isRelHandle(handleId) {
+  return (handleId || "").startsWith("rel-");
 }
+
+export { isContainsEdge, isDescendantOfCollapsed };
 
 export function mergeRefreshedNodes(currentNodes, fetchedRawNodes) {
   return fetchedRawNodes.map((n) => ({
     id: n.id,
     type: "custom",
     position: { x: n.position_x, y: n.position_y },
+    draggable: !(n.locked ?? false),
+    ...flowNodeDimensionsFromRaw(n),
     data: {
       type: n.type,
       label: n.title,
       content: n.content,
       extra_data: n.extra_data,
       layer: n.layer ?? 0,
+      scope: n.scope ?? "local",
+      locked: n.locked ?? false,
     },
   }));
 }
 
-function buildFlowEdges(edgesData) {
-  return edgesData.edges.map((e) => ({
-    id: e.id,
-    source: e.source_id,
-    target: e.target_id,
-    type: "smoothstep",
-    animated: e.edge_type === "hints",
-    label: e.label,
-    style: getEdgeStyle(e.edge_type),
+function buildFlowCharacterRelations(relationsData) {
+  return (relationsData.relations || []).map((r) => ({
+    id: r.id,
+    source: r.source_id,
+    target: r.target_id,
+    type: "characterRelation",
+    label: r.relation_type,
     markerEnd: { type: MarkerType.ArrowClosed },
-    data: { edge_type: e.edge_type },
+    data: {
+      isCharacterRelation: true,
+      relation_type: r.relation_type,
+      label: r.label || "",
+    },
   }));
 }
 
-const Canvas = forwardRef(function Canvas({ workId }, ref) {
+function buildFlowEdges(edgesData, nodes = []) {
+  const nodeTypeById = nodes.length && nodes[0].data
+    ? nodeTypeByIdFromFlowNodes(nodes)
+    : nodeTypeByIdFromRawNodes(nodes);
+  return edgesData.edges.map((e) => {
+    const extraData = e.extra_data || {};
+    const sourceType = nodeTypeById.get(e.source_id);
+    return {
+      id: e.id,
+      source: e.source_id,
+      target: e.target_id,
+      type: "custom",
+      animated: e.edge_type === "hints",
+      label: e.label,
+      style: getStructuralEdgeStyle(e.edge_type, sourceType),
+      markerEnd: { type: MarkerType.ArrowClosed },
+      data: { edge_type: e.edge_type, extra_data: extraData },
+    };
+  });
+}
+
+export function toCanvasSnapshot(nodes, edges, characterRelations = []) {
+  return {
+    nodes: nodes.map((node) => ({
+      id: node.id,
+      type: node.data.type,
+      title: node.data.label,
+      content: node.data.content || "",
+      extra_data: node.data.extra_data || {},
+      layer: node.data.layer ?? 0,
+      scope: node.data.scope ?? "local",
+      position_x: node.position.x,
+      position_y: node.position.y,
+    })),
+    edges: edges.map((edge) => ({
+      id: edge.id,
+      source_id: edge.source,
+      target_id: edge.target,
+      edge_type: edge.data?.edge_type || "uses",
+      label: edge.label || "",
+      extra_data: edge.data?.extra_data || {},
+    })),
+    character_relations: characterRelations.map((rel) => ({
+      id: rel.id,
+      source_id: rel.source,
+      target_id: rel.target,
+      relation_type: rel.data?.relation_type || rel.label || "关系",
+      label: rel.data?.label || "",
+    })),
+  };
+}
+
+function snapshotKey(snapshot) {
+  return JSON.stringify(snapshot);
+}
+
+const Canvas = forwardRef(function Canvas({ workId, onAddContext }, ref) {
+  return (
+    <ReactFlowProvider>
+      <CanvasContent workId={workId} onAddContext={onAddContext} ref={ref} />
+    </ReactFlowProvider>
+  );
+});
+
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }, ref) {
+  const { fitBounds } = useReactFlow();
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
+  const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
+  const [showStructuralEdges, setShowStructuralEdges] = useState(true);
+  const [showCharacterRelations, setShowCharacterRelations] = useState(true);
   const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [focusedNodeId, setFocusedNodeId] = useState(null);
+  const [highlightedNodeIds, setHighlightedNodeIds] = useState([]);
+  const [isDragging, setIsDragging] = useState(false);
+  const [collapsedNodeIds, setCollapsedNodeIds] = useState(() => new Set());
   const contextMenuRef = useRef(null);
+  const nodesRef = useRef(nodes);
+  const edgesRef = useRef(edges);
+  const characterRelationsRef = useRef(characterRelations);
+  const undoStackRef = useRef([]);
+  const dragSnapshotRef = useRef(null);
+  const dragFinalizedRef = useRef(false);
+  const isDraggingRef = useRef(false);
+  const selectedNodeIdsRef = useRef([]);
+  const restoringRef = useRef(false);
+  const diagnosticsSentRef = useRef(new Map());
+
+  // 画布变更后 debounce 截图上传（供多模态评估工具，截图与前端显示一致）
+  useEffect(() => {
+    if (!workId) return;
+    const timer = setTimeout(() => {
+      const el = document.querySelector(".react-flow");
+      if (!el) return;
+      toPng(el, {
+        backgroundColor: "#ffffff",
+        filter: (node) => {
+          if (!node || !node.classList) return true;
+          // 排除控件 / 小地图 / 水印 / 连线悬停透明粗线，避免干扰评估
+          return (
+            !node.classList.contains("react-flow__controls") &&
+            !node.classList.contains("react-flow__minimap") &&
+            !node.classList.contains("react-flow__attribution") &&
+            !node.classList.contains("edge-hit-area")
+          );
+        },
+      })
+        .then((dataUrl) => {
+          const base64 = dataUrl.replace(/^data:image\/png;base64,/, "");
+          return uploadCanvasRender(workId, base64);
+        })
+        .catch((e) => {
+          console.warn("canvas screenshot failed", e);
+        });
+    }, 2500);
+    return () => clearTimeout(timer);
+  }, [workId, nodes, edges, characterRelations]);
+
+  useEffect(() => {
+    nodesRef.current = nodes;
+  }, [nodes]);
+
+  useEffect(() => {
+    edgesRef.current = edges;
+  }, [edges]);
+
+  useEffect(() => {
+    characterRelationsRef.current = characterRelations;
+  }, [characterRelations]);
+
+  const pushUndoSnapshot = useCallback((snapshot = null) => {
+    const value = snapshot || toCanvasSnapshot(
+      nodesRef.current,
+      edgesRef.current,
+      characterRelationsRef.current,
+    );
+    const stack = undoStackRef.current;
+    if (stack.length && snapshotKey(stack[stack.length - 1]) === snapshotKey(value)) return;
+    undoStackRef.current = [...stack.slice(-29), value];
+    console.log("[undo] pushSnapshot, stack size:", undoStackRef.current.length);
+  }, []);
 
   useEffect(() => {
     if (workId) {
@@ -91,38 +288,24 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
     if (!workId) return;
 
     try {
-      const [nodesData, edgesData] = await Promise.all([
+      const [nodesData, edgesData, relationsData] = await Promise.all([
         fetchNodes(workId),
         fetchEdges(workId),
+        fetchCharacterRelations(workId),
       ]);
 
-      const flowNodes = nodesData.nodes.map((n) => ({
-        id: n.id,
-        type: "custom",
-        position: { x: n.position_x, y: n.position_y },
-        data: {
-          type: n.type,
-          label: n.title,
-          content: n.content,
-          extra_data: n.extra_data,
-          layer: n.layer ?? 0,
-        },
-      }));
-
-      const flowEdges = edgesData.edges.map((e) => ({
-        id: e.id,
-        source: e.source_id,
-        target: e.target_id,
-        type: "smoothstep",
-        animated: e.edge_type === "hints",
-        label: e.label,
-        style: getEdgeStyle(e.edge_type),
-        markerEnd: { type: MarkerType.ArrowClosed },
-        data: { edge_type: e.edge_type },
-      }));
+      const flowNodes = mergeRefreshedNodes([], nodesData.nodes);
+      const flowEdges = buildFlowEdges(edgesData, flowNodes);
+      const flowRelations = buildFlowCharacterRelations(relationsData);
 
       setNodes(flowNodes);
       setEdges(flowEdges);
+      setCharacterRelations(flowRelations);
+      nodesRef.current = flowNodes;
+      edgesRef.current = flowEdges;
+      characterRelationsRef.current = flowRelations;
+      undoStackRef.current = [];
+      diagnosticsSentRef.current.clear();
     } catch (err) {
       console.error("Failed to load data:", err);
     }
@@ -131,38 +314,262 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
   const refreshData = useCallback(async () => {
     if (!workId) return;
     try {
-      const [nodesData, edgesData] = await Promise.all([
+      const [nodesData, edgesData, relationsData] = await Promise.all([
         fetchNodes(workId),
         fetchEdges(workId),
+        fetchCharacterRelations(workId),
       ]);
-      setNodes((prev) => mergeRefreshedNodes(prev, nodesData.nodes));
-      setEdges(buildFlowEdges(edgesData));
+      const nextNodes = mergeRefreshedNodes(nodesRef.current, nodesData.nodes);
+      const nextEdges = buildFlowEdges(edgesData, nextNodes);
+      const nextRelations = buildFlowCharacterRelations(relationsData);
+      const previousSnapshot = toCanvasSnapshot(
+        nodesRef.current,
+        edgesRef.current,
+        characterRelationsRef.current,
+      );
+      const nextSnapshot = toCanvasSnapshot(nextNodes, nextEdges, nextRelations);
+      if (!restoringRef.current && snapshotKey(previousSnapshot) !== snapshotKey(nextSnapshot)) {
+        pushUndoSnapshot(previousSnapshot);
+      }
+      nodesRef.current = nextNodes;
+      edgesRef.current = nextEdges;
+      characterRelationsRef.current = nextRelations;
+      setNodes(nextNodes);
+      setEdges(nextEdges);
+      setCharacterRelations(nextRelations);
     } catch (err) {
       console.error("Failed to refresh data:", err);
     }
-  }, [workId, setNodes, setEdges]);
+  }, [workId, setNodes, setEdges, setCharacterRelations, pushUndoSnapshot]);
+
+  const undo = useCallback(async () => {
+    console.log("[undo] called, stack:", undoStackRef.current.length, "workId:", workId, "restoring:", restoringRef.current);
+    if (!workId || restoringRef.current || undoStackRef.current.length === 0) return;
+    const snapshot = undoStackRef.current[undoStackRef.current.length - 1];
+    undoStackRef.current = undoStackRef.current.slice(0, -1);
+    restoringRef.current = true;
+    try {
+      console.log("[undo] calling restoreCanvasSnapshot");
+      await restoreCanvasSnapshot(workId, snapshot);
+      console.log("[undo] restoreCanvasSnapshot OK");
+      const restoredNodes = mergeRefreshedNodes([], snapshot.nodes.map((node) => ({
+        ...node,
+        title: node.title,
+      })));
+      const restoredEdges = buildFlowEdges({ edges: snapshot.edges }, restoredNodes);
+      const restoredRelations = buildFlowCharacterRelations({
+        relations: snapshot.character_relations || [],
+      });
+      nodesRef.current = restoredNodes;
+      edgesRef.current = restoredEdges;
+      characterRelationsRef.current = restoredRelations;
+      setNodes(restoredNodes);
+      setEdges(restoredEdges);
+      setCharacterRelations(restoredRelations);
+      setSelectedNode(null);
+      setFocusedNodeId(null);
+    } catch (err) {
+      undoStackRef.current = [...undoStackRef.current, snapshot];
+      console.error("Failed to undo canvas change:", err);
+    } finally {
+      restoringRef.current = false;
+    }
+  }, [workId, setNodes, setEdges, setCharacterRelations]);
+
+  const removeNodesByIds = useCallback(async (nodeIds) => {
+    const uniqueIds = [...new Set((nodeIds || []).filter(Boolean))];
+    if (!uniqueIds.length) return;
+
+    try {
+      pushUndoSnapshot();
+      await Promise.all(uniqueIds.map((id) => deleteNode(id)));
+
+      const idSet = new Set(uniqueIds);
+      setNodes((currentNodes) => {
+        const next = currentNodes.filter((n) => !idSet.has(n.id));
+        nodesRef.current = next;
+        return next;
+      });
+      setEdges((currentEdges) => {
+        const next = currentEdges.filter((e) => !idSet.has(e.source) && !idSet.has(e.target));
+        edgesRef.current = next;
+        return next;
+      });
+      setCharacterRelations((currentRelations) => {
+        const next = currentRelations.filter((r) => !idSet.has(r.source) && !idSet.has(r.target));
+        characterRelationsRef.current = next;
+        return next;
+      });
+
+      selectedNodeIdsRef.current = selectedNodeIdsRef.current.filter((id) => !idSet.has(id));
+      setSelectedNode((prev) => (prev && idSet.has(prev.id) ? null : prev));
+    } catch (err) {
+      console.error("Failed to delete nodes:", err);
+      alert("删除节点失败");
+    }
+  }, [setNodes, setEdges, setCharacterRelations, pushUndoSnapshot]);
 
   const handleDeleteNode = useCallback(async (nodeData) => {
     const nodeId = nodeData?.id;
     if (!nodeId) return;
-    try {
-      await deleteNode(nodeId);
-      setNodes((nds) => nds.filter((n) => n.id !== nodeId));
-      setEdges((eds) => eds.filter((e) => e.source !== nodeId && e.target !== nodeId));
-      setSelectedNode(null);
-    } catch (err) {
-      console.error("Failed to delete node:", err);
-      alert("删除节点失败");
-    }
-  }, [setNodes, setEdges]);
+    await removeNodesByIds([nodeId]);
+  }, [removeNodesByIds]);
 
-  useImperativeHandle(ref, () => ({ refresh: refreshData, handleDeleteNode }), [refreshData, handleDeleteNode]);
+  useEffect(() => {
+    const handleKeyDown = (event) => {
+      if (shouldIgnoreCanvasKeyEvent(event)) return;
+
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        undo();
+        return;
+      }
+
+      if (isCanvasDeleteKey(event)) {
+        const selectedIds = [...selectedNodeIdsRef.current];
+        if (selectedIds.length === 0) return;
+        event.preventDefault();
+        removeNodesByIds(selectedIds);
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [undo, removeNodesByIds]);
+
+  const handleNodeUpdate = useCallback(async (nodeId, data) => {
+    try {
+      await updateNode(nodeId, data);
+      // 本地更新画布节点显示
+      setNodes((nds) => {
+        const next = nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, data: { ...n.data, label: data.title ?? n.data.label, content: data.content ?? n.data.content } }
+            : n
+        );
+        nodesRef.current = next;
+        return next;
+      });
+      // 同步更新抽屉里的节点（即时显示新内容）
+      setSelectedNode((prev) =>
+        prev && prev.id === nodeId
+          ? { ...prev, label: data.title ?? prev.label, content: data.content ?? prev.content }
+          : prev
+      );
+    } catch (err) {
+      console.error("Failed to update node:", err);
+      alert("保存失败：" + (err?.message || "未知错误"));
+    }
+  }, [setNodes, updateNode]);
+
+  const handleToggleLocked = useCallback(async (nodeData) => {
+    const nodeId = nodeData?.id;
+    if (!nodeId) return;
+    const nextLocked = !nodeData.locked;
+    try {
+      await updateNode(nodeId, { locked: nextLocked });
+      setNodes((nds) => {
+        const next = nds.map((n) =>
+          n.id === nodeId
+            ? { ...n, draggable: !nextLocked, data: { ...n.data, locked: nextLocked } }
+            : n
+        );
+        nodesRef.current = next;
+        return next;
+      });
+      setSelectedNode((prev) =>
+        prev && prev.id === nodeId
+          ? { ...prev, locked: nextLocked }
+          : prev
+      );
+    } catch (err) {
+      console.error("Failed to toggle node lock:", err);
+      alert("固定失败：" + (err?.message || "未知错误"));
+    }
+  }, [setNodes, updateNode]);
+
+  useImperativeHandle(
+    ref,
+    () => ({
+      refresh: refreshData,
+      handleDeleteNode,
+      undo,
+      highlightNodes: (nodeIds) => {
+        setHighlightedNodeIds(nodeIds);
+
+        // 计算高亮节点的边界
+        const highlightNodesList = nodesRef.current.filter(n => nodeIds.includes(n.id));
+        if (highlightNodesList.length > 0) {
+          const minX = Math.min(...highlightNodesList.map(n => n.position.x));
+          const minY = Math.min(...highlightNodesList.map(n => n.position.y));
+          const maxX = Math.max(...highlightNodesList.map(n => n.position.x + 250));
+          const maxY = Math.max(...highlightNodesList.map(n => n.position.y + 120));
+
+          // 滚动到节点区域
+          setTimeout(() => {
+            fitBounds(
+              {
+                x: minX - 100,
+                y: minY - 100,
+                width: maxX - minX + 200,
+                height: maxY - minY + 200,
+              },
+              { duration: 500, padding: 0.3 }
+            );
+          }, 50);
+        }
+
+        // 3 秒后取消高亮
+        setTimeout(() => setHighlightedNodeIds([]), 3000);
+      },
+    }),
+    [refreshData, handleDeleteNode, undo, fitBounds]
+  );
 
   const onConnect = useCallback(
     async (params) => {
       if (!workId) return;
 
+      const isRel = isRelHandle(params.sourceHandle) && isRelHandle(params.targetHandle);
+      const sourceNode = nodesRef.current.find((n) => n.id === params.source);
+      const targetNode = nodesRef.current.find((n) => n.id === params.target);
+      const handles = sourceNode && targetNode
+        ? edgeHandlesFromSides(resolveOptimalSides(sourceNode, targetNode), { relation: isRel })
+        : edgeHandlesFromSides({ source_side: "bottom", target_side: "top" }, { relation: isRel });
+
       try {
+        pushUndoSnapshot();
+
+        if (isRel) {
+          const newRel = await createCharacterRelation(workId, {
+            source_id: params.source,
+            target_id: params.target,
+            relation_type: "关系",
+            label: "",
+          });
+
+          setCharacterRelations((eds) => {
+            const next = addEdge(
+              {
+                ...params,
+                ...handles,
+                id: newRel.id,
+                type: "characterRelation",
+                label: newRel.relation_type,
+                markerEnd: { type: MarkerType.ArrowClosed },
+                data: {
+                  isCharacterRelation: true,
+                  relation_type: newRel.relation_type,
+                  label: newRel.label || "",
+                },
+              },
+              eds,
+            );
+            characterRelationsRef.current = next;
+            return next;
+          });
+          return;
+        }
+
         const edgeData = {
           source_id: params.source,
           target_id: params.target,
@@ -172,29 +579,86 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
 
         const newEdge = await createEdge(workId, edgeData);
 
-        setEdges((eds) =>
-          addEdge(
+        setEdges((eds) => {
+          const next = addEdge(
             {
               ...params,
+              ...handles,
               id: newEdge.id,
-              type: "smoothstep",
-              style: edgeStyles.uses,
+              type: "custom",
+              style: getStructuralEdgeStyle("uses", sourceNode?.data?.type),
               markerEnd: { type: MarkerType.ArrowClosed },
-              data: { edge_type: "uses" },
+              data: { edge_type: "uses", extra_data: newEdge.extra_data || {} },
             },
             eds
-          )
-        );
+          );
+          edgesRef.current = next;
+          return next;
+        });
       } catch (err) {
-        console.error("Failed to create edge:", err);
+        console.error("Failed to create connection:", err);
       }
     },
-    [workId, setEdges]
+    [workId, setEdges, setCharacterRelations, pushUndoSnapshot]
+  );
+
+  const isValidConnection = useCallback((connection) => {
+    const srcRel = isRelHandle(connection.sourceHandle);
+    const tgtRel = isRelHandle(connection.targetHandle);
+    const srcNode = nodesRef.current.find((n) => n.id === connection.source);
+    const tgtNode = nodesRef.current.find((n) => n.id === connection.target);
+
+    if (srcRel || tgtRel) {
+      if (!srcRel || !tgtRel) return false;
+      return srcNode?.data?.type === "character" && tgtNode?.data?.type === "character";
+    }
+
+    if (srcNode?.data?.type === "character" && tgtNode?.data?.type === "character") {
+      return false;
+    }
+    return true;
+  }, []);
+
+  const onCombinedEdgesChange = useCallback(
+    (changes) => {
+      const structuralChanges = [];
+      const relationChanges = [];
+
+      for (const change of changes) {
+        const isRelation = change.id
+          ? characterRelationsRef.current.some((e) => e.id === change.id)
+          : false;
+
+        if (change.type === "remove" && change.id) {
+          pushUndoSnapshot();
+          if (isRelation) {
+            deleteCharacterRelation(change.id).catch((err) => {
+              console.error("Failed to delete character relation:", err);
+            });
+            relationChanges.push(change);
+            continue;
+          }
+          deleteEdge(change.id).catch((err) => {
+            console.error("Failed to delete edge:", err);
+          });
+          structuralChanges.push(change);
+          continue;
+        }
+
+        if (isRelation) relationChanges.push(change);
+        else structuralChanges.push(change);
+      }
+
+      if (structuralChanges.length) onEdgesChange(structuralChanges);
+      if (relationChanges.length) onCharacterRelationsChange(relationChanges);
+    },
+    [onEdgesChange, onCharacterRelationsChange, pushUndoSnapshot],
   );
 
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
     setFocusedNodeId(null);
+    setSelectedNode(null);
   }, []);
 
   const onPaneContextMenu = useCallback((event) => {
@@ -226,6 +690,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
     if (!workId) return;
 
     try {
+      pushUndoSnapshot();
       let maxX = 50;
       nodes.forEach((n) => {
         if (n.position.x > maxX) maxX = n.position.x;
@@ -241,9 +706,10 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
 
       const created = await createNode(workId, newNodeData);
 
-      setNodes((nds) => [
-        ...nds,
-        {
+      setNodes((nds) => {
+        const next = [
+          ...nds,
+          {
           id: created.id,
           type: "custom",
           position: { x: created.position_x, y: created.position_y },
@@ -253,8 +719,11 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
             content: created.content,
             extra_data: created.extra_data,
           },
-        },
-      ]);
+          },
+        ];
+        nodesRef.current = next;
+        return next;
+      });
     } catch (err) {
       console.error("Failed to create node:", err);
     }
@@ -262,57 +731,291 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
 
   const handleDeleteEdge = async (edgeId) => {
     try {
+      pushUndoSnapshot();
       await deleteEdge(edgeId);
-      setEdges((eds) => eds.filter((e) => e.id !== edgeId));
+      setEdges((eds) => {
+        const next = eds.filter((e) => e.id !== edgeId);
+        edgesRef.current = next;
+        return next;
+      });
     } catch (err) {
       console.error("Failed to delete edge:", err);
     }
   };
 
   const handleRefresh = () => {
-    loadData();
+    refreshData();
   };
 
   const handleNodeClick = useCallback((nodeData) => {
     setSelectedNode(nodeData);
-    setFocusedNodeId(nodeData.id);
+  }, []);
+
+  const handleSelectionChange = useCallback(({ nodes: selectedNodes }) => {
+    selectedNodeIdsRef.current = (selectedNodes || [])
+      .filter((n) => !n.hidden)
+      .map((n) => n.id)
+      .filter(Boolean);
+    if (shouldClearDrawerOnSelection(selectedNodes.length, isDraggingRef.current)) {
+      setSelectedNode(null);
+    }
+  }, []);
+
+  const handleFocusEdges = useCallback((nodeId) => {
+    setFocusedNodeId((current) => current === nodeId ? null : nodeId);
   }, []);
 
   const handleCloseDrawer = useCallback(() => {
     setSelectedNode(null);
   }, []);
 
-  const handleNodeDragStop = useCallback((_, node) => {
-    setNodes((nds) =>
-      nds.map((n) =>
-        n.id === node.id
-          ? { ...n, position: node.position }
-          : n
-      )
+  const beginDragSnapshot = useCallback(() => {
+    dragFinalizedRef.current = false;
+    isDraggingRef.current = true;
+    dragSnapshotRef.current = toCanvasSnapshot(
+      nodesRef.current,
+      edgesRef.current,
+      characterRelationsRef.current,
     );
-    updateNode(node.id, {
-      position_x: node.position.x,
-      position_y: node.position.y,
-    }).catch((err) => console.error("Failed to persist node position:", err));
-  }, [setNodes]);
+    setIsDragging(true);
+  }, []);
 
-  const nodeTypes = createNodeTypes(handleNodeClick);
+  const finishDragPersist = useCallback(() => {
+    if (dragFinalizedRef.current) return;
+    dragFinalizedRef.current = true;
+    isDraggingRef.current = false;
+    setIsDragging(false);
+
+    const snapshot = dragSnapshotRef.current;
+    if (snapshot) {
+      pushUndoSnapshot(snapshot);
+      dragSnapshotRef.current = null;
+    }
+
+    const movedNodes = getMovedNodesFromSnapshot(snapshot, nodesRef.current);
+    if (movedNodes.length === 0) return;
+
+    persistNodePositionUpdates(movedNodes, updateNode).catch((err) => {
+      console.error("Failed to persist node positions:", err);
+    });
+  }, [pushUndoSnapshot]);
+
+  const handleNodeDragStart = useCallback(() => {
+    beginDragSnapshot();
+  }, [beginDragSnapshot]);
+
+  const handleNodeDragStop = useCallback(() => {
+    finishDragPersist();
+  }, [finishDragPersist]);
+
+  const handleSelectionDragStart = useCallback(() => {
+    beginDragSnapshot();
+  }, [beginDragSnapshot]);
+
+  const handleSelectionDragStop = useCallback(() => {
+    finishDragPersist();
+  }, [finishDragPersist]);
+
+  const visibleStructuralEdges = useMemo(
+    () => {
+      if (!showStructuralEdges) return [];
+      return focusedNodeId
+        ? edges.filter((edge) => edge.source === focusedNodeId || edge.target === focusedNodeId)
+        : edges;
+    },
+    [edges, focusedNodeId, showStructuralEdges],
+  );
+
+  const visibleCharacterRelations = useMemo(
+    () => {
+      if (!showCharacterRelations) return [];
+      return focusedNodeId
+        ? characterRelations.filter(
+          (edge) => edge.source === focusedNodeId || edge.target === focusedNodeId,
+        )
+        : characterRelations;
+    },
+    [characterRelations, focusedNodeId, showCharacterRelations],
+  );
+
+  const displayStructuralEdges = useMemo(
+    () => applyEdgeLabelAvoidance(
+      nodes,
+      applyEdgeHandles(nodes, visibleStructuralEdges),
+    ),
+    [nodes, visibleStructuralEdges],
+  );
+
+  const displayCharacterRelations = useMemo(
+    () => applyEdgeHandles(nodes, visibleCharacterRelations, { relation: true }),
+    [nodes, visibleCharacterRelations],
+  );
+
+  const allVisibleEdges = useMemo(
+    () => [...displayStructuralEdges, ...displayCharacterRelations],
+    [displayStructuralEdges, displayCharacterRelations],
+  );
+
+  // ── 收起/展开：结构 contains 子树 + 章节关联 element ──
+  const parentMap = useMemo(() => buildContainsParentMap(edges), [edges]);
+
+  const { elementToChapters, chapterToElements } = useMemo(
+    () => buildElementChapterLinks(edges, nodes),
+    [edges, nodes],
+  );
+
+  const nodeTypeById = useMemo(
+    () => new Map(nodes.map((n) => [n.id, n.data?.type])),
+    [nodes],
+  );
+
+  const hasCollapsibleIds = useMemo(
+    () => buildCollapsibleNodeIds(buildContainsChildSources(edges), chapterToElements),
+    [edges, chapterToElements],
+  );
+
+  const chapterElementCounts = useMemo(() => {
+    const counts = {};
+    for (const [chapterId, elements] of Object.entries(chapterToElements)) {
+      counts[chapterId] = elements.length;
+    }
+    return counts;
+  }, [chapterToElements]);
+
+  const isHiddenByCollapse = useCallback(
+    (nodeId) => isNodeHiddenByCollapse(nodeId, {
+      parentMap,
+      collapsedNodeIds,
+      elementToChapters,
+      nodeTypeById,
+    }),
+    [parentMap, collapsedNodeIds, elementToChapters, nodeTypeById],
+  );
+
+  const handleCollapseToggle = useCallback((nodeId) => {
+    setCollapsedNodeIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(nodeId)) next.delete(nodeId);
+      else next.add(nodeId);
+      return next;
+    });
+  }, []);
+
+  const displayedNodes = useMemo(
+    () => nodes.map((n) => ({ ...n, hidden: isHiddenByCollapse(n.id) })),
+    [nodes, isHiddenByCollapse],
+  );
+
+  const collapsedHiddenEdges = useMemo(
+    () => (isDragging ? allVisibleEdges : allVisibleEdges).filter(
+      (e) => !isHiddenByCollapse(e.source) && !isHiddenByCollapse(e.target),
+    ),
+    [isDragging, allVisibleEdges, isHiddenByCollapse],
+  );
+
+  const nodeTypes = useMemo(
+    () => createNodeTypes(
+      handleNodeClick,
+      handleFocusEdges,
+      focusedNodeId,
+      highlightedNodeIds,
+      collapsedNodeIds,
+      hasCollapsibleIds,
+      chapterElementCounts,
+      handleCollapseToggle,
+    ),
+    [
+      handleNodeClick,
+      handleFocusEdges,
+      focusedNodeId,
+      highlightedNodeIds,
+      collapsedNodeIds,
+      hasCollapsibleIds,
+      chapterElementCounts,
+      handleCollapseToggle,
+    ],
+  );
+
+  useEffect(() => {
+    if (!workId || !nodes.length || !edges.length || restoringRef.current) return undefined;
+    const diagnostics = computeEdgeLayoutDiagnostics(nodes, edges);
+    const pending = diagnostics.filter((item) => {
+      const previousVersion = diagnosticsSentRef.current.get(item.edge_id);
+      return previousVersion !== item.layout_version;
+    });
+    if (!pending.length) return undefined;
+
+    const timer = window.setTimeout(async () => {
+      const edgeMap = new Map(edgesRef.current.map((edge) => [edge.id, edge]));
+      await Promise.all(pending.map(async (diagnostic) => {
+        const edge = edgeMap.get(diagnostic.edge_id);
+        if (!edge) return;
+        diagnosticsSentRef.current.set(
+          diagnostic.edge_id,
+          diagnostic.layout_version,
+        );
+        try {
+          await updateEdge(diagnostic.edge_id, {
+            extra_data: {
+              ...(edge.data?.extra_data || {}),
+              layout_diagnostics: diagnostic,
+            },
+          });
+        } catch (error) {
+          diagnosticsSentRef.current.delete(diagnostic.edge_id);
+          console.error("Failed to persist edge layout diagnostics:", error);
+        }
+      }));
+    }, 700);
+    return () => window.clearTimeout(timer);
+  }, [workId, nodes, edges]);
 
   return (
-    <div className="w-full h-full flex">
+    <div className="w-full h-full flex relative">
       <div className="flex-1 relative">
+        <div className="absolute top-3 left-3 z-10 flex gap-2">
+          <button
+            type="button"
+            onClick={() => setShowStructuralEdges((v) => !v)}
+            className={`rounded px-2 py-1 text-xs border shadow-sm transition-colors ${
+              showStructuralEdges
+                ? "bg-white border-slate-300 text-slate-700"
+                : "bg-slate-100 border-slate-200 text-slate-400"
+            }`}
+          >
+            结构线
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowCharacterRelations((v) => !v)}
+            className={`rounded px-2 py-1 text-xs border shadow-sm transition-colors ${
+              showCharacterRelations
+                ? "bg-rose-50 border-rose-200 text-rose-700"
+                : "bg-slate-100 border-slate-200 text-slate-400"
+            }`}
+          >
+            角色关系线
+          </button>
+        </div>
         <ReactFlow
-          nodes={nodes}
-          edges={focusedNodeId
-            ? edges.filter((e) => e.source === focusedNodeId || e.target === focusedNodeId)
-            : edges}
+          nodes={displayedNodes}
+          edges={collapsedHiddenEdges}
           onNodesChange={onNodesChange}
-          onEdgesChange={onEdgesChange}
+          onEdgesChange={onCombinedEdgesChange}
           onConnect={onConnect}
+          isValidConnection={isValidConnection}
           onPaneClick={onPaneClick}
           onPaneContextMenu={onPaneContextMenu}
+          onSelectionChange={handleSelectionChange}
+          onNodeDragStart={handleNodeDragStart}
           onNodeDragStop={handleNodeDragStop}
+          onSelectionDragStart={handleSelectionDragStart}
+          onSelectionDragStop={handleSelectionDragStop}
+          selectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
+          multiSelectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
+          deleteKeyCode={null}
           nodeTypes={nodeTypes}
+          edgeTypes={edgeTypes}
           fitView
           attributionPosition="bottom-left"
         >
@@ -338,12 +1041,12 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
             </div>
             {[
               { type: "outline", icon: "📋", label: "大纲", color: "text-blue-600" },
-              { type: "idea", icon: "💡", label: "灵感", color: "text-yellow-600" },
+              { type: "volume", icon: "📚", label: "卷", color: "text-indigo-600" },
+              { type: "plot", icon: "⚡", label: "情节", color: "text-orange-600" },
               { type: "chapter", icon: "📖", label: "章节", color: "text-green-600" },
               { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
-              { type: "foreshadow", icon: "🔮", label: "伏笔", color: "text-teal-600" },
-              { type: "conflict", icon: "⚔️", label: "冲突", color: "text-red-600" },
-              { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-teal-600" },
+              { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
+              { type: "style", icon: "🎨", label: "风格", color: "text-fuchsia-600" },
             ].map((item) => (
               <button
                 key={item.type}
@@ -374,7 +1077,7 @@ const Canvas = forwardRef(function Canvas({ workId }, ref) {
       </div>
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer node={selectedNode} onClose={handleCloseDrawer} onDelete={handleDeleteNode} />
+      <NodeDetailDrawer node={selectedNode} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} />
     </div>
   );
 });

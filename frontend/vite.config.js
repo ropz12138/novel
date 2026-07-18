@@ -18,6 +18,5 @@ export default defineConfig({
     environment: "jsdom",
     globals: true,
     include: ["src/**/*.test.{js,jsx}"],
-    setupFiles: ["src/test/setupCodemirrorMock.js"],
   },
 });

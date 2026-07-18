@@ -22,6 +22,9 @@ import app.models.node  # noqa: E402, F401
 import app.models.edge  # noqa: E402, F401
 import app.models.chapter  # noqa: E402, F401
 import app.models.session  # noqa: E402, F401
+import app.models.character_relation  # noqa: E402, F401
+import app.models.todo_item  # noqa: E402, F401
+import app.models.canvas_checkpoint  # noqa: E402, F401
 
 
 def _ensure_test_db(db_name: str = "novel_test") -> str:
@@ -67,3 +70,12 @@ def isolated_db(monkeypatch):
     yield
     Base.metadata.drop_all(bind=test_engine)
     test_engine.dispose()
+
+
+@pytest.fixture
+def db_session():
+    db = db_module.SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()

@@ -32,7 +32,20 @@ vi.mock("../lib/api", () => ({
 
 // ── Import after mocks ──
 
-const { useSupervisorChat } = await import("./useSupervisorChat.js");
+const { useSupervisorChat, buildTimelineFromHistoryMessages } = await import("./useSupervisorChat.js");
+
+function stripTimelineForCompare(timeline) {
+  return timeline.map((item) => {
+    if (item.kind === "step") {
+      const { id, timestamp, ...rest } = item;
+      return rest;
+    }
+    const { id, timestamp, meta, type, title, diffCard, outlineDiffCard, characterDiffCard,
+      patchDiffCard, chapterMetaCard, metadataDiffCard, consistencyReportCard, operatedNodeIds,
+      ...rest } = item;
+    return rest;
+  });
+}
 
 // ── Helper: simulate SSE events via onSSE directly ──
 
@@ -461,12 +474,11 @@ describe("useSupervisorChat", () => {
   });
 
   describe("SSE event: tool_calls", () => {
-    it("adds a done step with tool names and freezes draft", () => {
+    it("adds one running step per tool, marks done on tool_executed, and freezes draft", () => {
       const { result } = renderHook(() =>
         useSupervisorChat({ workId: "w1", autoMode: false })
       );
 
-      // Set up some draft text to verify freezeDraft is called
       act(() => {
         result.current._testOnSSE("supervisor_stream", { chunk: "thinking..." });
       });
@@ -475,22 +487,222 @@ describe("useSupervisorChat", () => {
         result.current._testOnSSE("tool_calls", { tools: ["read_outline", "generate_chapter"] });
       });
 
-      // Draft should be frozen
       expect(result.current.assistantDraft).toBe("");
 
-      // Frozen message should be in timeline
       const frozenMsg = result.current.timeline.find(
         (m) => m.kind === "message" && m.content === "thinking..."
       );
       expect(frozenMsg).toBeDefined();
 
-      // Tool step should be in timeline
+      const toolSteps = result.current.timeline.filter((m) => m.kind === "step");
+      expect(toolSteps).toHaveLength(2);
+      expect(toolSteps[0].label).toBe("工具调用 · read_outline");
+      expect(toolSteps[1].label).toBe("工具调用 · generate_chapter");
+      expect(toolSteps.every((s) => s.status === "running")).toBe(true);
+
+      act(() => {
+        result.current._testOnSSE("tool_executed", { tool: "read_outline", success: true });
+        result.current._testOnSSE("tool_executed", { tool: "generate_chapter", success: true });
+      });
+
+      const doneSteps = result.current.timeline.filter((m) => m.kind === "step");
+      expect(doneSteps.every((s) => s.status === "done")).toBe(true);
+    });
+
+    it("marks tool step failed when tool_executed reports success=false", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: false });
+      });
+
       const toolStep = result.current.timeline.find(
+        (m) => m.kind === "step" && m.toolCallKey === "write_chapter"
+      );
+      expect(toolStep.status).toBe("failed");
+    });
+
+    it("ignores tool_result SSE events", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["read_outline"] });
+        result.current._testOnSSE("tool_result", { content: '{"hidden": true}' });
+      });
+
+      expect(result.current.timeline.filter((m) => m.kind === "message")).toHaveLength(0);
+      expect(result.current.timeline.filter((m) => m.kind === "step")).toHaveLength(1);
+    });
+
+    it("merges consecutive same-tool calls with ×N counter", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      expect(result.current.timeline).toHaveLength(1);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter");
+      expect(result.current.timeline[0].status).toBe("done");
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+      });
+      expect(result.current.timeline).toHaveLength(1);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×2");
+      expect(result.current.timeline[0].status).toBe("running");
+
+      act(() => {
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      expect(result.current.timeline).toHaveLength(1);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×2");
+      expect(result.current.timeline[0].status).toBe("done");
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      expect(result.current.timeline).toHaveLength(1);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×3");
+    });
+
+    it("resets counter when a different tool is called", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      expect(result.current.timeline).toHaveLength(1);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×2");
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["read_outline"] });
+        result.current._testOnSSE("tool_executed", { tool: "read_outline", success: true });
+      });
+      expect(result.current.timeline).toHaveLength(2);
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×2");
+      expect(result.current.timeline[1].label).toBe("工具调用 · read_outline");
+    });
+
+    it("does not merge different tools from the same tool_calls event", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter", "read_outline"] });
+      });
+
+      const toolSteps = result.current.timeline.filter((m) => m.kind === "step");
+      expect(toolSteps).toHaveLength(2);
+      expect(toolSteps[0].label).toBe("工具调用 · write_chapter ×2");
+      expect(toolSteps[1].label).toBe("工具调用 · read_outline");
+    });
+
+    it("preserves ×N counter across stage_start events", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      expect(result.current.timeline[0].label).toBe("工具调用 · write_chapter ×2");
+
+      act(() => {
+        result.current._testOnSSE("stage_start", { stage: "tool", label: "调用工具: write_chapter" });
+      });
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+      const toolSteps = result.current.timeline.filter(
+        (m) => m.kind === "step" && m.toolCallKey === "write_chapter"
+      );
+      expect(toolSteps).toHaveLength(1);
+      expect(toolSteps[0].label).toBe("工具调用 · write_chapter ×3");
+    });
+
+    it("merges same-tool calls across stage_start/tool_executed interleaving (真实事件流)", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("stage_start", { stage: "tool", label: "调用工具: write_chapter" });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["write_chapter"] });
+        result.current._testOnSSE("stage_start", { stage: "tool", label: "调用工具: write_chapter" });
+        result.current._testOnSSE("tool_executed", { tool: "write_chapter", success: true });
+      });
+
+      const toolSteps = result.current.timeline.filter(
+        (m) => m.kind === "step" && m.toolCallKey === "write_chapter"
+      );
+      expect(toolSteps).toHaveLength(1);
+      expect(toolSteps[0].label).toBe("工具调用 · write_chapter ×2");
+
+      const allToolStepsByLabel = result.current.timeline.filter(
+        (m) => m.kind === "step" && m.label.includes("write_chapter")
+      );
+      expect(allToolStepsByLabel).toHaveLength(1);
+    });
+
+    it("does not create duplicate step when stage_start(tool) follows tool_calls", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("tool_calls", { tools: ["read_outline"] });
+        result.current._testOnSSE("stage_start", { stage: "tool", label: "调用工具: read_outline" });
+      });
+
+      const toolSteps = result.current.timeline.filter(
         (m) => m.kind === "step" && m.label.includes("read_outline")
       );
-      expect(toolStep).toBeDefined();
-      expect(toolStep.label).toContain("generate_chapter");
-      expect(toolStep.status).toBe("done");
+      expect(toolSteps).toHaveLength(1);
+      expect(toolSteps[0].status).toBe("running");
+    });
+
+    it("still creates step for non-tool stage_start (e.g. thinking)", () => {
+      // 非工具阶段的 stage_start 应照常创建 step（回归保护）
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("stage_start", { stage: "thinking", label: "分析需求" });
+      });
+
+      const step = result.current.timeline.find(
+        (m) => m.kind === "step" && m.label === "分析需求"
+      );
+      expect(step).toBeDefined();
+      expect(step.status).toBe("running");
     });
   });
 
@@ -1039,6 +1251,55 @@ describe("useSupervisorChat", () => {
     });
   });
 
+  describe("SSE event: chapter_edit_diff", () => {
+    it("adds chapter_content_diff_card to timeline", () => {
+      const onChapterUpdated = vi.fn();
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: true, callbacks: { onChapterUpdated } })
+      );
+
+      act(() => {
+        result.current._testOnSSE("chapter_edit_diff", {
+          chapter_node_id: "ch-1",
+          title: "第1章",
+          word_count: 120,
+          word_count_delta: 5,
+          diff: {
+            hunks: [{
+              type: "replace",
+              paragraph_index: 1,
+              old_text: "旧",
+              new_text: "新",
+            }],
+            summary: { paragraphs_changed: 1, chars_added: 1, chars_removed: 1 },
+          },
+        });
+      });
+
+      const msg = result.current.timeline.find((m) => m.type === "chapter_content_diff_card");
+      expect(msg).toBeDefined();
+      expect(msg.chapterContentDiffCard.title).toBe("第1章");
+      expect(msg.chapterContentDiffCard.hunks).toHaveLength(1);
+      expect(onChapterUpdated).toHaveBeenCalledWith("ch-1");
+    });
+  });
+
+  describe("SSE event: chapter_edit_stream", () => {
+    it("accumulates stream in running step", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current.pushExecStep("编辑章节");
+        result.current._testOnSSE("chapter_edit_stream", { chunk: '{"edits":', phase: "content" });
+      });
+
+      const step = result.current.timeline.find((item) => item.kind === "step" && item.status === "running");
+      expect(step.stream).toBe('{"edits":');
+    });
+  });
+
   describe("SSE event: edit_chapter_auto_applied", () => {
     it("removes pending non-readonly card for same chapter", async () => {
       const { sessionApi } = await import("../lib/api.js");
@@ -1554,6 +1815,191 @@ describe("useSupervisorChat", () => {
 
       const msg = result.current.timeline.find((m) => m.type === "requirements_todolist");
       expect(msg.todoCard.todolist).toHaveLength(1);
+    });
+  });
+
+  describe("buildTimelineFromHistoryMessages", () => {
+    it("merges consecutive same-tool calls with ×N like streaming", () => {
+      const timeline = buildTimelineFromHistoryMessages([
+        { role: "user", content: "写一章" },
+        { role: "assistant", content: "好的", meta: { phase: "intermediate" } },
+        { role: "tool_call", content: "write_chapter", meta: { success: true } },
+        { role: "tool_call", content: "write_chapter", meta: { success: true } },
+        { role: "assistant", content: "写完了", meta: { phase: "final" } },
+      ]);
+
+      const toolSteps = timeline.filter((m) => m.kind === "step" && m.toolCallKey === "write_chapter");
+      expect(toolSteps).toHaveLength(1);
+      expect(toolSteps[0].label).toBe("工具调用 · write_chapter ×2");
+      expect(toolSteps[0].status).toBe("done");
+    });
+
+    it("creates one step per adjacent tool_call row like streaming", () => {
+      const timeline = buildTimelineFromHistoryMessages([
+        { role: "assistant", content: "先看大纲", meta: { phase: "intermediate" } },
+        { role: "tool_call", content: "read_outline", meta: { success: true } },
+        { role: "tool_call", content: "generate_chapter", meta: { success: true } },
+      ]);
+
+      const toolSteps = timeline.filter((m) => m.kind === "step");
+      expect(toolSteps).toHaveLength(2);
+      expect(toolSteps[0].label).toBe("工具调用 · read_outline");
+      expect(toolSteps[1].label).toBe("工具调用 · generate_chapter");
+    });
+
+    it("does not merge same-tool calls across message boundaries in history", () => {
+      const timeline = buildTimelineFromHistoryMessages([
+        { role: "user", content: "先设计下一章" },
+        { role: "assistant", content: "我先读取上下文", meta: { phase: "intermediate" } },
+        { role: "tool_call", content: "read_node_content", meta: { success: true } },
+        { role: "assistant", content: "设计完成", meta: { phase: "final" } },
+        { role: "user", content: "再设计下一章" },
+        { role: "assistant", content: "继续读取上下文", meta: { phase: "intermediate" } },
+        { role: "tool_call", content: "read_node_content", meta: { success: true } },
+        { role: "assistant", content: "新的设计完成", meta: { phase: "final" } },
+      ]);
+
+      const toolSteps = timeline.filter((m) => m.kind === "step" && m.toolCallKey === "read_node_content");
+      expect(toolSteps).toHaveLength(2);
+      expect(toolSteps[0].label).toBe("工具调用 · read_node_content");
+      expect(toolSteps[1].label).toBe("工具调用 · read_node_content");
+    });
+
+    it("marks failed tool batch with failed status", () => {
+      const timeline = buildTimelineFromHistoryMessages([
+        { role: "tool_call", content: "write_chapter", meta: { success: false } },
+      ]);
+
+      expect(timeline[0].status).toBe("failed");
+    });
+
+    it("keeps write_todolist step before requirements_todolist bubble in history", () => {
+      const timeline = buildTimelineFromHistoryMessages([
+        { role: "assistant", content: "我来规划", meta: { phase: "intermediate" } },
+        { role: "tool_call", content: "write_todolist", meta: { success: true } },
+        {
+          role: "assistant",
+          content: "",
+          meta: {
+            type: "requirements_todolist",
+            todoCard: {
+              todolist: [{ task_id: "T1", task: "任务A", status: "pending" }],
+              ready_to_execute: true,
+            },
+          },
+        },
+      ]);
+
+      const toolIdx = timeline.findIndex(
+        (m) => m.kind === "step" && m.toolCallKey === "write_todolist"
+      );
+      const todoIdx = timeline.findIndex((m) => m.type === "requirements_todolist");
+      expect(toolIdx).toBeGreaterThanOrEqual(0);
+      expect(todoIdx).toBeGreaterThan(toolIdx);
+    });
+
+    it("produces the same tool step shape as streaming SSE for an equivalent turn", () => {
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      act(() => {
+        result.current._testOnSSE("supervisor_stream", { chunk: "让我看看画布" });
+        result.current._testOnSSE("tool_calls", { tools: ["get_canvas_index", "query_nodes"] });
+        result.current._testOnSSE("tool_executed", { tool: "get_canvas_index", success: true });
+        result.current._testOnSSE("tool_executed", { tool: "query_nodes", success: true });
+      });
+
+      act(() => {
+        result.current._testOnSSE("supervisor_stream", { chunk: "当前有 3 个节点" });
+        result.current._testOnSSE("supervisor_done", {});
+      });
+
+      const streamingSteps = stripTimelineForCompare(
+        result.current.timeline.filter((m) => m.kind === "step")
+      );
+      const historySteps = stripTimelineForCompare(
+        buildTimelineFromHistoryMessages([
+          { role: "assistant", content: "让我看看画布", meta: { phase: "intermediate" } },
+          { role: "tool_call", content: "get_canvas_index", meta: { success: true } },
+          { role: "tool_call", content: "query_nodes", meta: { success: true } },
+          { role: "assistant", content: "当前有 3 个节点", meta: { phase: "final" } },
+        ]).filter((m) => m.kind === "step")
+      );
+
+      expect(historySteps).toEqual(streamingSteps);
+    });
+  });
+
+  describe("handleSelectSession — history replay", () => {
+    it("loads session with merged tool steps matching streaming rules", async () => {
+      const { sessionApi } = await import("../lib/api.js");
+      sessionApi.getSupervisorMessages.mockResolvedValue([
+        { role: "user", content: "你好", created_at: new Date().toISOString() },
+        { role: "assistant", content: "正在处理", meta: { phase: "intermediate" }, created_at: new Date().toISOString() },
+        { role: "tool_call", content: "write_chapter", meta: { success: true }, created_at: new Date().toISOString() },
+        { role: "tool_call", content: "write_chapter", meta: { success: true }, created_at: new Date().toISOString() },
+        { role: "assistant", content: "完成", meta: { phase: "final" }, created_at: new Date().toISOString() },
+      ]);
+
+      const { result } = renderHook(() =>
+        useSupervisorChat({ workId: "w1", autoMode: false })
+      );
+
+      await act(async () => {
+        await result.current.handleSelectSession({ id: "s1" });
+      });
+
+      const toolStep = result.current.timeline.find(
+        (m) => m.kind === "step" && m.toolCallKey === "write_chapter"
+      );
+      expect(toolStep.label).toBe("工具调用 · write_chapter ×2");
+      expect(result.current.timeline.filter((m) => m.role === "user")).toHaveLength(1);
+    });
+  });
+
+  describe("SSE stream abnormal end", () => {
+    it("shows error when stream ends without supervisor_done", async () => {
+      const { handleSseStreamFinished, SSE_ABNORMAL_END_MESSAGE } = await import("./useSupervisorChat");
+      const sseCompletedRef = { current: false };
+      const messages = [];
+      const timeline = [
+        { kind: "step", id: 1, label: "AI 思考中", status: "running" },
+      ];
+      let running = true;
+
+      handleSseStreamFinished({
+        sseCompletedRef,
+        addMessage: (_role, content, meta) => messages.push({ content, meta }),
+        finalizeAllRunningSteps: () => {
+          timeline[0].status = "done";
+        },
+        setRunning: (v) => { running = v; },
+      });
+
+      expect(messages).toHaveLength(1);
+      expect(messages[0].content).toBe(SSE_ABNORMAL_END_MESSAGE);
+      expect(messages[0].meta.type).toBe("error");
+      expect(timeline[0].status).toBe("done");
+      expect(running).toBe(false);
+    });
+
+    it("does not show error when supervisor_done already received", async () => {
+      const { handleSseStreamFinished } = await import("./useSupervisorChat");
+      const sseCompletedRef = { current: true };
+      const messages = [];
+      let running = true;
+
+      const abnormal = handleSseStreamFinished({
+        sseCompletedRef,
+        addMessage: (_role, content) => messages.push({ content }),
+        finalizeAllRunningSteps: () => {},
+        setRunning: (v) => { running = v; },
+      });
+
+      expect(abnormal).toBe(false);
+      expect(messages).toHaveLength(0);
+      expect(running).toBe(false);
     });
   });
 });

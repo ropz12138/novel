@@ -308,6 +308,9 @@ async def _generate_contents_async(work_id: str, work_title: str, node_type: str
                 node = db.query(Node).filter(Node.id == node_id).first()
                 if node:
                     node.content = content
+                    if node.type == "chapter":
+                        from app.services.chapter_history_service import clear_chapter_summary_on_content_change
+                        clear_chapter_summary_on_content_change(db, node)
                     db.commit()
                     logger.info(f"已生成内容: {title}")
             finally:
@@ -736,6 +739,9 @@ def _update_outline_node_sync(node_id, title=None, content=None):
             node.title = title
         if content is not None:
             node.content = content
+            if node.type == "chapter":
+                from app.services.chapter_history_service import clear_chapter_summary_on_content_change
+                clear_chapter_summary_on_content_change(db, node)
         
         db.commit()
         db.refresh(node)

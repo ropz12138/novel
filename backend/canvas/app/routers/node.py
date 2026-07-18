@@ -4,6 +4,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.models.node import Node
 from app.models.user import User
+from app.node_types import resolve_scope, resolve_update_scope
 from app.schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from app.routers.auth import get_current_user
 
@@ -18,12 +19,18 @@ def create_node(
     current_user: User = Depends(get_current_user),
 ):
     """在指定作品中创建节点"""
+    try:
+        final_scope = resolve_scope(data.type, data.scope)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     node = Node(
         work_id=work_id,
         type=data.type,
         title=data.title,
         content=data.content,
         extra_data=data.extra_data,
+        layer=data.layer,
+        scope=final_scope,
         position_x=data.position_x,
         position_y=data.position_y,
     )
@@ -70,8 +77,15 @@ def update_node(
         raise HTTPException(status_code=404, detail="Node not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    proposed_scope = update_data.pop("scope", None)
+    new_type = update_data.get("type")
+    try:
+        final_scope = resolve_update_scope(node.type, node.scope, new_type, proposed_scope)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     for key, value in update_data.items():
         setattr(node, key, value)
+    node.scope = final_scope
 
     db.commit()
     db.refresh(node)

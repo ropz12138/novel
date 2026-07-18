@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.database import init_db
 from app.observability import setup_langsmith
-from app.routers import auth, work, node, edge, generate, supervisor, supervisor_sessions
+from app.routers import auth, work, node, edge, generate, supervisor, supervisor_sessions, me, character_relation, illustration
 
 LOG_DIR = Path(__file__).resolve().parents[3] / ".run"
 LOG_DIR.mkdir(exist_ok=True)
@@ -41,6 +41,14 @@ app = FastAPI(title="Novel Canvas API")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    from app.services.session_store import session_store
+
+    recovered = session_store.recover_stale_running_sessions()
+    if recovered:
+        logging.getLogger(__name__).warning(
+            "Recovered %d stale running supervisor session(s) as interrupted",
+            recovered,
+        )
 
 
 app.add_middleware(
@@ -64,6 +72,9 @@ app.include_router(edge.router, prefix="/api")
 app.include_router(generate.router, prefix="/api")
 app.include_router(supervisor.router, prefix="/api")
 app.include_router(supervisor_sessions.router, prefix="/api")
+app.include_router(me.router, prefix="/api")
+app.include_router(character_relation.router, prefix="/api")
+app.include_router(illustration.router, prefix="/api")
 
 
 @app.post("/health")

@@ -7,6 +7,7 @@ from app.models.node import Node
 from app.models.user import User
 from app.schemas.edge import EdgeCreate, EdgeUpdate, EdgeResponse, EdgeListResponse
 from app.routers.auth import get_current_user
+from app.node_types import validate_edge_endpoints
 
 router = APIRouter(tags=["edges"])
 
@@ -26,6 +27,12 @@ def create_edge(
     target = db.query(Node).filter(Node.id == data.target_id, Node.work_id == work_id).first()
     if not target:
         raise HTTPException(status_code=404, detail="Target node not found")
+
+    endpoint_err = validate_edge_endpoints(
+        source.type, target.type, source.scope, target.scope,
+    )
+    if endpoint_err:
+        raise HTTPException(status_code=400, detail=endpoint_err)
 
     edge = Edge(
         work_id=work_id,

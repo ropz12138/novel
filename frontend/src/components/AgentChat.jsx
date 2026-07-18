@@ -6,7 +6,18 @@ import { useSmartScroll } from "../hooks/useSmartScroll";
 import { sessionApi } from "../lib/api";
 import { getLatestSupervisorSession } from "../lib/supervisorSession";
 
-export default function AgentChat({ workId, onNodesUpdate }) {
+const NODE_PILL_COLORS = {
+  outline: "#3b82f6",
+  volume: "#6366f1",
+  plot: "#f97316",
+  chapter: "#22c55e",
+  character: "#ec4899",
+  worldbuilding: "#8b5cf6",
+  style: "#a855f7",
+  element: "#d97706",
+};
+
+export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPillRef }) {
   const chat = useSupervisorChat({
     workId,
     autoMode: true,
@@ -18,6 +29,97 @@ export default function AgentChat({ workId, onNodesUpdate }) {
       onNodesUpdate: () => onNodesUpdate?.(),
     },
   });
+
+  const handleHighlightNodes = useCallback((nodeIds) => {
+    canvasRef?.current?.highlightNodes(nodeIds);
+  }, [canvasRef]);
+
+  const inputRef = useRef(null);
+  const [hasInput, setHasInput] = useState(false);
+
+  const serializeContentEditable = useCallback((el) => {
+    let result = "";
+    el.childNodes.forEach((node) => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        result += node.textContent;
+      } else if (node.nodeType === Node.ELEMENT_NODE) {
+        if (node.dataset.uuid) {
+          result += `[[ctx|${node.dataset.uuid}|${node.dataset.type}|${node.dataset.title}]]`;
+        } else if (node.tagName === "BR") {
+          result += "\n";
+        } else {
+          result += node.textContent || "";
+        }
+      }
+    });
+    return result;
+  }, []);
+
+  const insertPill = useCallback((uuid, type, title) => {
+    const el = inputRef.current;
+    if (!el) return;
+
+    const pill = document.createElement("span");
+    pill.contentEditable = false;
+    pill.className = "inline-flex items-center rounded-full px-2 py-0.5 text-xs text-white mx-0.5 align-middle";
+    pill.style.backgroundColor = NODE_PILL_COLORS[type] || "#6b7280";
+    pill.textContent = title;
+    pill.dataset.uuid = uuid;
+    pill.dataset.type = type;
+    pill.dataset.title = title;
+
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
+      const range = sel.getRangeAt(0);
+      range.deleteContents();
+      range.insertNode(pill);
+      range.setStartAfter(pill);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    } else {
+      el.appendChild(pill);
+      const range = document.createRange();
+      range.setStartAfter(pill);
+      range.collapse(true);
+      sel.removeAllRanges();
+      sel.addRange(range);
+    }
+    el.removeAttribute("data-empty");
+    setHasInput(true);
+  }, []);
+
+  useEffect(() => {
+    if (insertPillRef) {
+      insertPillRef.current = insertPill;
+    }
+    return () => {
+      if (insertPillRef) {
+        insertPillRef.current = null;
+      }
+    };
+  }, [insertPillRef, insertPill]);
+
+  const handleContentEditableSend = useCallback(() => {
+    const el = inputRef.current;
+    if (!el || chat.running) return;
+    const serialized = serializeContentEditable(el);
+    if (!serialized.trim()) return;
+    el.innerHTML = "";
+    el.setAttribute("data-empty", "");
+    setHasInput(false);
+    chat.handleSend(serialized);
+  }, [chat.running, chat.handleSend, serializeContentEditable]);
+
+  const onInput = useCallback(() => {
+    const el = inputRef.current;
+    const empty = !el || el.textContent.trim().length === 0;
+    setHasInput(!empty);
+    if (el) {
+      if (empty) el.setAttribute("data-empty", "");
+      else el.removeAttribute("data-empty");
+    }
+  }, []);
 
   const scrollContainerRef = useRef(null);
   const { stickToBottom, scrollToBottom } = useSmartScroll(scrollContainerRef, [
@@ -195,7 +297,14 @@ export default function AgentChat({ workId, onNodesUpdate }) {
                 ].map((example) => (
                   <button
                     key={example}
-                    onClick={() => chat.setInput(example)}
+                    onClick={() => {
+                      const el = inputRef.current;
+                      if (el) {
+                        el.textContent = example;
+                        el.removeAttribute("data-empty");
+                        setHasInput(true);
+                      }
+                    }}
                     className="block w-full text-left px-3 py-2 text-xs text-gray-500 hover:text-gray-700 hover:bg-gray-50 rounded-lg transition-colors border border-gray-100"
                   >
                     {example}
@@ -217,9 +326,11 @@ export default function AgentChat({ workId, onNodesUpdate }) {
             onToggleStep={chat.toggleStepPanel}
             onConfirmEdit={chat.handleConfirmEdit}
             onConfirmOutline={chat.handleConfirmOutline}
+            onHighlightNodes={handleHighlightNodes}
+            onEditMessage={chat.handleEditResend}
           />
 
-          {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.editDiff && !chat.outlineDiff && !chat.characterDiff && (
+          {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.assistantDraft && !chat.assistantReasoningDraft && !chat.editDiff && !chat.outlineDiff && !chat.characterDiff && (
             <div className="flex gap-3 justify-start">
               <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-500 animate-pulse">
                 <Bot className="h-3.5 w-3.5" />
@@ -242,23 +353,29 @@ export default function AgentChat({ workId, onNodesUpdate }) {
       {/* 输入框 */}
       <div className="shrink-0 px-3 py-3 border-t border-gray-200 bg-gray-50">
         <div className="flex items-end gap-2">
-          <textarea
-            value={chat.input}
-            onChange={(e) => chat.setInput(e.target.value)}
-            placeholder={chat.running ? "Agent 运行中..." : "输入指令..."}
-            className="flex-1 px-3 py-2 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm disabled:bg-gray-100"
-            rows={2}
-            disabled={chat.running}
+          <div
+            ref={inputRef}
+            contentEditable={!chat.running}
+            onInput={onInput}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
-                chat.handleSend();
+                handleContentEditableSend();
               }
             }}
+            onPaste={(e) => {
+              e.preventDefault();
+              const text = e.clipboardData.getData("text/plain");
+              document.execCommand("insertText", false, text);
+            }}
+            data-placeholder="输入指令..."
+            className={`ce-input flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm whitespace-pre-wrap break-words min-h-[2.5rem] max-h-32 overflow-y-auto ${
+              chat.running ? "bg-gray-100 cursor-not-allowed" : "bg-white"
+            }`}
           />
           <button
-            onClick={chat.running ? chat.handleInterrupt : chat.handleSend}
-            disabled={!chat.running && !chat.input.trim()}
+            onClick={chat.running ? chat.handleInterrupt : handleContentEditableSend}
+            disabled={!chat.running && !hasInput}
             className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center transition-colors ${
               chat.running
                 ? "bg-red-500 hover:bg-red-600 text-white"

@@ -1,2 +1,0 @@
-1. 仅调用一次 **edit_outline_by_suggestion**，输入用户修改建议
-2. 如有必要，在同一次调用里补充 context_note（自然语言）

@@ -139,6 +139,10 @@ fi
 source .venv/bin/activate
 pip install -r requirements.txt 2>&1 | tail -3
 
+# --- 数据库迁移（幂等，保证 schema 与 model 一致，避免代码先于迁移导致 500） ---
+echo "--- 执行数据库迁移 ---"
+python run_migrations.py
+
 start_backend() {
   nohup uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$RUN_DIR/canvas-backend-dev.log" 2>&1 &
   echo $! > "$RUN_DIR/canvas-backend-dev.pid"

@@ -50,6 +50,11 @@ def _get_system_prompt() -> str:
 def _build_prompt(context: dict) -> str:
     parts = []
 
+    # 全局设定注入
+    if context.get("global_context"):
+        parts.append(context["global_context"])
+        parts.append("")
+
     parts.append(f"## 章节标题\n{context['chapter_title']}")
 
     if context["chapter_content"]:

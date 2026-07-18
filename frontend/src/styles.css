@@ -154,3 +154,115 @@ body {
     opacity: 1;
   }
 }
+
+/* Node highlight animation */
+@keyframes node-highlight {
+  0%, 100% {
+    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
+  }
+}
+
+.node-highlighted {
+  animation: node-highlight 1s ease-in-out 3;
+  z-index: 10;
+}
+
+/* 元素节点：半透明球面渐变 + 高光反光，增强立体感 */
+.element-node-3d {
+  --element-bg: #fef3c7;
+  --element-border: #d97706;
+  --element-fill-opacity: 0.76;
+  position: relative;
+  overflow: hidden;
+  border-width: 2px;
+  border-style: solid;
+  border-color: color-mix(
+    in srgb,
+    var(--element-border) calc(var(--element-fill-opacity) * 100%),
+    transparent
+  );
+  background: radial-gradient(
+    circle at 35% 28%,
+    color-mix(
+      in srgb,
+      color-mix(in srgb, var(--element-bg) 55%, white)
+        calc(var(--element-fill-opacity) * 100%),
+      transparent
+    ) 0%,
+    color-mix(
+      in srgb,
+      var(--element-bg) calc(var(--element-fill-opacity) * 100%),
+      transparent
+    ) 42%,
+    color-mix(
+      in srgb,
+      color-mix(in srgb, var(--element-bg) 75%, var(--element-border)) 82%,
+      transparent
+    ) 100%
+  );
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  box-shadow:
+    inset 2px 3px 8px rgba(255, 255, 255, 0.45),
+    inset -2px -4px 10px rgba(0, 0, 0, 0.08),
+    0 4px 10px rgba(0, 0, 0, 0.1),
+    0 2px 4px rgba(0, 0, 0, 0.06);
+}
+
+.element-node-3d:hover {
+  box-shadow:
+    inset 2px 3px 8px rgba(255, 255, 255, 0.5),
+    inset -2px -4px 10px rgba(0, 0, 0, 0.08),
+    0 6px 14px rgba(0, 0, 0, 0.14),
+    0 3px 6px rgba(0, 0, 0, 0.08);
+}
+
+.element-node-shine {
+  position: absolute;
+  top: 10%;
+  left: 15%;
+  width: 38%;
+  height: 28%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.72) 0%,
+    rgba(255, 255, 255, 0.28) 45%,
+    transparent 72%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.element-node-reflection {
+  position: absolute;
+  bottom: 12%;
+  right: 18%;
+  width: 22%;
+  height: 14%;
+  border-radius: 50%;
+  background: radial-gradient(
+    ellipse at center,
+    rgba(255, 255, 255, 0.28) 0%,
+    transparent 70%
+  );
+  pointer-events: none;
+  z-index: 1;
+}
+
+.element-node-label {
+  position: relative;
+  z-index: 2;
+}
+
+/* ContentEditable 输入框占位符 */
+.ce-input[data-empty]:before {
+  content: attr(data-placeholder);
+  color: #9ca3af;
+  pointer-events: none;
+  float: left;
+  height: 0;
+}

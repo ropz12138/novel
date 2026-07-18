@@ -1,20 +1,52 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot } from "lucide-react";
+import { Bot, User, Settings, LogOut } from "lucide-react";
 import Canvas from "../components/Canvas";
+import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
 import { fetchWorks, createWork, deleteWork } from "../lib/canvasApi";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
 
+const CHAT_WIDTH_STORAGE_KEY = "novel_canvas_chat_width";
+const DEFAULT_CHAT_WIDTH = 420;
+const MIN_CHAT_WIDTH = 340;
+const MAX_CHAT_WIDTH = 760;
+const MIN_CANVAS_WIDTH = 520;
+
+function clampChatWidth(width) {
+  if (typeof window === "undefined") {
+    return Math.min(MAX_CHAT_WIDTH, Math.max(MIN_CHAT_WIDTH, width));
+  }
+  const viewportWidth = window.innerWidth > 0
+    ? window.innerWidth
+    : MIN_CANVAS_WIDTH + DEFAULT_CHAT_WIDTH;
+  const viewportMax = Math.max(MIN_CHAT_WIDTH, viewportWidth - MIN_CANVAS_WIDTH);
+  return Math.min(Math.min(MAX_CHAT_WIDTH, viewportMax), Math.max(MIN_CHAT_WIDTH, width));
+}
+
+function getStoredChatWidth() {
+  if (typeof window === "undefined") return DEFAULT_CHAT_WIDTH;
+  const stored = Number(window.localStorage.getItem(CHAT_WIDTH_STORAGE_KEY));
+  return Number.isFinite(stored) ? clampChatWidth(stored) : DEFAULT_CHAT_WIDTH;
+}
+
 export function CanvasPage() {
   const navigate = useNavigate();
   const [showChat, setShowChat] = useState(true);
+  const [chatWidth, setChatWidth] = useState(getStoredChatWidth);
   const canvasRef = useRef(null);
   const [works, setWorks] = useState([]);
   const [currentWorkId, setCurrentWorkId] = useState(null);
   const [loading, setLoading] = useState(true);
   const [showWorkSelector, setShowWorkSelector] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [showUserMenu, setShowUserMenu] = useState(false);
+  const [showModelConfig, setShowModelConfig] = useState(false);
+  const insertPillRef = useRef(null);
+
+  const handleAddContext = useCallback((node) => {
+    insertPillRef.current?.(node.id, node.type, node.label);
+  }, []);
 
   useEffect(() => {
     loadWorks();
@@ -61,11 +93,14 @@ export function CanvasPage() {
 
     try {
       await deleteWork(workId);
-      setWorks((prev) => prev.filter((w) => w.id !== workId));
-      if (currentWorkId === workId) {
-        const remaining = works.filter((w) => w.id !== workId);
-        setCurrentWorkId(remaining.length > 0 ? remaining[0].id : null);
-      }
+      setWorks((prev) => {
+        const next = prev.filter((w) => w.id !== workId);
+        setCurrentWorkId((current) => {
+          if (current !== workId) return current;
+          return next.length > 0 ? next[0].id : null;
+        });
+        return next;
+      });
     } catch (err) {
       console.error("Failed to delete work:", err);
       alert("删除作品失败");
@@ -82,6 +117,43 @@ export function CanvasPage() {
     localStorage.removeItem("novel_user");
     navigate("/login", { replace: true });
   };
+
+  useEffect(() => {
+    if (!showChat) return;
+    window.localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, String(Math.round(chatWidth)));
+  }, [chatWidth, showChat]);
+
+  useEffect(() => {
+    const handleResize = () => {
+      setChatWidth((width) => clampChatWidth(width));
+    };
+    window.addEventListener("resize", handleResize);
+    return () => window.removeEventListener("resize", handleResize);
+  }, []);
+
+  const handleChatResizeStart = useCallback((event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = chatWidth;
+
+    const handleMouseMove = (moveEvent) => {
+      const delta = startX - moveEvent.clientX;
+      setChatWidth(clampChatWidth(startWidth + delta));
+    };
+
+    const handleMouseUp = () => {
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
+    };
+
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
+  }, [chatWidth]);
 
   const currentWork = works.find((w) => w.id === currentWorkId);
 
@@ -153,7 +225,7 @@ export function CanvasPage() {
                       <div
                         key={work.id}
                         onClick={() => handleSelectWork(work.id)}
-                        className={`flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors ${
+                        className={`group flex items-center justify-between px-3 py-2 cursor-pointer hover:bg-gray-50 transition-colors ${
                           currentWorkId === work.id ? "bg-blue-50" : ""
                         }`}
                       >
@@ -170,8 +242,9 @@ export function CanvasPage() {
                         </div>
                         <button
                           onClick={(e) => handleDeleteWork(e, work.id)}
-                          className="p-1 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
-                          title="删除"
+                          className="p-1 text-gray-400 hover:text-red-500 opacity-70 group-hover:opacity-100 transition-opacity shrink-0"
+                          title="删除作品"
+                          aria-label={`删除作品 ${work.title}`}
                         >
                           <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
@@ -198,12 +271,36 @@ export function CanvasPage() {
             <Bot className="h-4 w-4" />
             <span>{showChat ? "隐藏Agent" : "显示Agent"}</span>
           </button>
-          <button
-            onClick={handleLogout}
-            className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 rounded-lg hover:bg-gray-100 transition-colors"
-          >
-            退出
-          </button>
+          <div className="relative">
+            <button
+              onClick={() => setShowUserMenu(!showUserMenu)}
+              className="flex items-center p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
+              title="账户"
+            >
+              <User className="h-5 w-5 text-gray-600" />
+            </button>
+            {showUserMenu && (
+              <div className="absolute top-full right-0 mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
+                <button
+                  onClick={() => {
+                    setShowUserMenu(false);
+                    setShowModelConfig(true);
+                  }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-t-lg transition-colors"
+                >
+                  <Settings className="h-4 w-4" />
+                  模型配置
+                </button>
+                <button
+                  onClick={handleLogout}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg border-t border-gray-100 transition-colors"
+                >
+                  <LogOut className="h-4 w-4" />
+                  退出登录
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       </header>
 
@@ -232,20 +329,40 @@ export function CanvasPage() {
           </div>
         ) : (
           <>
-            <div className={`flex-1 transition-all duration-300 ${showChat ? "w-2/3" : "w-full"}`}>
-              <Canvas key={currentWorkId} ref={canvasRef} workId={currentWorkId} />
+            <div className="min-w-0 flex-1 transition-all duration-300">
+              <Canvas key={currentWorkId} ref={canvasRef} workId={currentWorkId} onAddContext={handleAddContext} />
             </div>
             {showChat && (
-              <div className="w-1/3 min-w-[380px] border-l border-gray-200">
+              <div
+                className="relative shrink-0"
+                style={{ width: chatWidth }}
+              >
+                <div
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整对话区域宽度"
+                  title="拖拽调整对话区域宽度"
+                  className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1 cursor-col-resize touch-none"
+                  onMouseDown={handleChatResizeStart}
+                >
+                  <div className="mx-auto h-full w-px bg-gray-200 transition-colors hover:bg-blue-400" />
+                </div>
                 <AgentChat
                   workId={currentWorkId}
                   onNodesUpdate={handleNodesUpdate}
+                  canvasRef={canvasRef}
+                  insertPillRef={insertPillRef}
                 />
               </div>
             )}
           </>
         )}
       </main>
+
+      <ModelConfigDialog
+        open={showModelConfig}
+        onClose={() => setShowModelConfig(false)}
+      />
     </div>
   );
 }
