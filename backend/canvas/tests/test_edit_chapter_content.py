@@ -193,4 +193,4 @@ def test_supervisor_mounts_edit_chapter_content():
 
     tools = SupervisorAgent()._get_tools()
     names = [t.name for t in tools]
-    assert "edit_chapter_content" in names
+    assert "edit_chapter_content" not in names

@@ -1,9 +1,9 @@
 """Canvas 节点类型与作用域(scope)的统一定义。
 
-节点类型（仅以下 8 种合法，创建/更新节点时强制校验，不允许 agent 自创）：
+节点类型（仅以下 7 种合法，创建/更新节点时强制校验，不允许 agent 自创）：
   层级链：outline(大纲) → volume(卷) → plot(情节) → chapter(章节)
   关联节点：character(角色) — 需与相关章节/情节等节点连接
-  情节元素：element(元素) — 比 plot 更细的具体情节单元（如觉醒/吵架），挂章节下、可跨章复用
+  情节元素：不再作为独立节点创建，存放在 chapter.extra_data.chapter_elements
   全局节点：worldbuilding(世界观)、style(风格)
 
 作用域 scope（5 值，按类型受限）：
@@ -23,7 +23,6 @@ STANDARD_NODE_TYPES = frozenset({
     "chapter",
     "worldbuilding",
     "style",
-    "element",
 })
 
 
@@ -49,8 +48,8 @@ STANDARD_SCOPES = frozenset({
 
 # 固定为 global 的类型：worldbuilding/style（全局节点）
 GLOBAL_LOCKED_TYPES = frozenset({"worldbuilding", "style"})
-# 固定为 local 的类型：层级链 outline/volume/plot/chapter + element(情节元素，需连线关联)
-LOCAL_LOCKED_TYPES = frozenset({"outline", "volume", "plot", "chapter", "element"})
+# 固定为 local 的类型：层级链 outline/volume/plot/chapter
+LOCAL_LOCKED_TYPES = frozenset({"outline", "volume", "plot", "chapter"})
 # character 允许的 scope（角色分类：主角/主要配角/次要配角/临时）
 CHARACTER_SCOPES = frozenset({SCOPE_GLOBAL, SCOPE_MAJOR, SCOPE_MINOR, SCOPE_TEMP})
 
@@ -123,14 +122,14 @@ def resolve_update_scope(old_type, old_scope, new_type, proposed_scope):
 
 
 NODE_TYPES_RULES_TEXT = (
-    "仅限 8 种：character, outline, volume, plot, chapter, worldbuilding, style, element。"
+    "仅限 7 种：character, outline, volume, plot, chapter, worldbuilding, style。"
+    "element 不再是节点类型；章节元素请在创建/更新 chapter 时使用 chapter_elements 参数。"
     "禁止自创 event/idea/setting 等其它类型；非法类型会报错并列出可用值。"
 )
 
 EDGE_ENDPOINT_RULES_TEXT = (
     "端点限制（违反会报错）："
-    "scope=global 的节点（worldbuilding/style + 主角 character）禁止任何连线；"
-    "element 只能作为 chapter 的父（element→chapter），不得作为连线的终点，也不得连到非 chapter 节点。"
+    "scope=global 的节点（worldbuilding/style + 主角 character）禁止任何连线。"
 )
 
 EDGE_CONNECTION_RULES_TEXT = (
@@ -145,8 +144,7 @@ NODE_LAYOUT_RULES_TEXT = (
     "① character 位于画布左侧，纵向排列（position_y 递增）；"
     "② style、worldbuilding 位于画布左侧；"
     "③ outline/volume/plot/chapter 从上到下层级排列（Y 随层级递增），"
-    "同级多个节点水平排列（position_x 错开）；"
-    "④ element 位于对应 chapter 节点下方。"
+    "同级多个节点水平排列（position_x 错开）。"
 )
 
 
@@ -156,10 +154,8 @@ def validate_edge_endpoints(source_type: str, target_type: str, source_scope: st
         return "角色之间的关系请使用 character_relations，不要用画布关联线"
     if source_scope == "global" or target_scope == "global":
         return "全局节点(scope=global：主角/worldbuilding/style)禁止创建关联线"
-    if source_type == "element" and target_type != "chapter":
-        return "element 节点只能连到 chapter（作为章节的父节点）"
-    if target_type == "element":
-        return "element 节点只能作为连线起点(父)，不能作为终点"
+    if source_type == "element" or target_type == "element":
+        return "element 不再是画布节点类型；章节元素请写入 chapter.extra_data.chapter_elements，不要创建 element 连线"
     return None
 
 

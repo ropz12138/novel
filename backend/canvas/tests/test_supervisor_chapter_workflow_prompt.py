@@ -11,6 +11,9 @@ PROMPT = (
 def test_prompt_limits_node_types():
     for node_type in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "style"):
         assert f"`{node_type}`" in PROMPT
+    assert "不要创建 `element` 节点" in PROMPT
+    assert "- `element`" not in PROMPT
+    assert "`chapter_elements`" in PROMPT
     for removed in (
         "event", "idea", "setting", "conflict", "foreshadow", "theme",
         "macro_outline", "meso_outline", "micro_outline", "core_idea",
@@ -34,8 +37,10 @@ def test_prompt_removed_sections():
 
 def test_prompt_keeps_workflow():
     assert "## 创作工作流" in PROMPT
-    assert "`write_chapter`" in PROMPT
-    assert "`edit_chapter_content`" in PROMPT
+    assert "`update_node`" in PROMPT
+    assert "`content_edit_instruction`" in PROMPT
+    assert "`write_chapter`" not in PROMPT
+    assert "`edit_chapter_content`" not in PROMPT
     assert "`write_todolist`" in PROMPT
 
 
@@ -45,4 +50,4 @@ def test_prompt_keeps_layout_in_tools_not_system():
     assert "character" in NODE_LAYOUT_RULES_TEXT
     assert "style" in NODE_LAYOUT_RULES_TEXT
     assert "outline/volume/plot/chapter" in NODE_LAYOUT_RULES_TEXT
-    assert "element" in NODE_LAYOUT_RULES_TEXT
+    assert "element" not in NODE_LAYOUT_RULES_TEXT

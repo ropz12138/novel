@@ -100,6 +100,22 @@ function isRelHandle(handleId) {
 
 export { isContainsEdge, isDescendantOfCollapsed };
 
+export function applyNodeUpdateToData(prev, data) {
+  if (!prev) return prev;
+  const next = {
+    ...prev,
+    label: data.title ?? prev.label,
+    content: data.content ?? prev.content,
+  };
+  if (data.chapter_elements !== undefined) {
+    next.extra_data = {
+      ...(prev.extra_data || {}),
+      chapter_elements: data.chapter_elements,
+    };
+  }
+  return next;
+}
+
 export function mergeRefreshedNodes(currentNodes, fetchedRawNodes) {
   return fetchedRawNodes.map((n) => ({
     id: n.id,
@@ -443,17 +459,15 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       setNodes((nds) => {
         const next = nds.map((n) =>
           n.id === nodeId
-            ? { ...n, data: { ...n.data, label: data.title ?? n.data.label, content: data.content ?? n.data.content } }
+            ? { ...n, data: applyNodeUpdateToData(n.data, data) }
             : n
         );
         nodesRef.current = next;
         return next;
       });
-      // 同步更新抽屉里的节点（即时显示新内容）
+      // 同步更新抽屉里的节点（即时显示新内容，含 chapter_elements）
       setSelectedNode((prev) =>
-        prev && prev.id === nodeId
-          ? { ...prev, label: data.title ?? prev.label, content: data.content ?? prev.content }
-          : prev
+        prev && prev.id === nodeId ? applyNodeUpdateToData(prev, data) : prev
       );
     } catch (err) {
       console.error("Failed to update node:", err);

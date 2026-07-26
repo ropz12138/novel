@@ -221,12 +221,13 @@ class SupervisorAgent:
         """单 Agent：直接挂全部操作工具，不再 dispatch 到子 agent。"""
         from app.services.agents.tools.query_tools import query_tools
         from app.services.agents.tools.node_tools import node_tools
-        from app.services.agents.tools.chapter_tools import write_chapter, edit_chapter_content, evaluate_chapter, count_chapter_words
+        from app.services.agents.tools.chapter_tools import evaluate_chapter, count_chapter_words
         from app.services.agents.tools.illustration_tools import insert_chapter_illustration
         from app.services.agents.tools.character_relation_tools import character_relation_tools
         from app.services.agents.tools.todo_tools import todo_tools
+        from app.services.agents.tools.context_tools import context_tools
 
-        return query_tools + node_tools + [write_chapter, edit_chapter_content, evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + todo_tools
+        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + todo_tools + context_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""
@@ -242,17 +243,48 @@ class SupervisorAgent:
             db.close()
 
     def _load_chat_history(self, session_id):
-        """加载 session 历史（含 tool_call / tool_result），排除当前轮 user 避免重复。"""
+        """返回 (历史, 当前轮 user 消息 dicts)。
+
+        历史已排除末尾连续的 user 消息（当前轮），并应用压缩包替换。
+        当前轮 user 消息（1 条纯文字，或 2 条操作+文字）单独返回，供 run 拼到
+        initial_state 末尾，保证顺序与持久化一致。
+        """
         if not session_id:
-            return []
+            return [], []
         from app.services.session_store import session_store
         from app.services.message_langchain import db_message_dicts_to_langchain
+        from app.services.agents.tools.context_tools import _compact_message_for_llm
 
         msgs = session_store.get_messages(session_id)
         conv = list(msgs)
-        if conv and conv[-1].get("role") == "user":
-            conv = conv[:-1]
-        return db_message_dicts_to_langchain(conv)
+        # 收集末尾连续的 user 消息（当前轮）
+        current_turn = []
+        while conv and conv[-1].get("role") == "user":
+            current_turn.insert(0, conv.pop())
+
+        compaction = session_store.get_active_context_compaction(session_id)
+        if compaction:
+            compact_order = compaction.get("sort_order", -1)
+            after = []
+            for msg in conv:
+                if msg.get("sort_order", -1) <= compact_order:
+                    continue
+                meta = msg.get("meta") if isinstance(msg.get("meta"), dict) else {}
+                if meta.get("type") == "context_compaction":
+                    continue
+                if msg.get("role") == "tool_call" and msg.get("content") == "create_context_compaction":
+                    continue
+                if msg.get("role") == "tool_result" and meta.get("tool_name") == "create_context_compaction":
+                    continue
+                after.append(msg)
+            history = [
+                SystemMessage(content=_compact_message_for_llm(compaction)),
+                *db_message_dicts_to_langchain(after),
+            ]
+        else:
+            history = db_message_dicts_to_langchain(conv)
+
+        return history, current_turn
 
     def _build_graph(self, model_pref: dict | None = None, session_id: str | None = None, work_id: str | None = None):
         """构建LangGraph"""
@@ -282,6 +314,12 @@ class SupervisorAgent:
 
                 if aggregated is None:
                     raise RuntimeError("LLM 未返回任何响应")
+
+                usage = getattr(aggregated, "usage_metadata", None)
+                if usage:
+                    ctx = get_context()
+                    ctx["last_llm_usage"] = usage
+                    set_context(ctx)
 
                 diagnostic = _tool_call_diagnostic_payload(aggregated)
                 has_unparsed_tool_call = (
@@ -382,13 +420,17 @@ class SupervisorAgent:
             system_prompt = self._build_system_prompt(context_node_ids=context_node_ids)
 
             # 注入历史对话（多轮），让 agent 看到上文，理解"需要/好/不用了"等省略回答
-            chat_history = self._load_chat_history(session_id)
+            chat_history, current_turn_msgs = self._load_chat_history(session_id)
+            from app.services.message_langchain import db_message_dicts_to_langchain
+            current_turn = db_message_dicts_to_langchain(current_turn_msgs)
+            if not current_turn:
+                current_turn = [HumanMessage(content=user_message)]
 
             initial_state = {
                 "messages": [
                     SystemMessage(content=system_prompt),
                     *chat_history,
-                    HumanMessage(content=user_message),
+                    *current_turn,
                 ],
                 "user_message": user_message,
             }
@@ -479,6 +521,9 @@ class SupervisorAgent:
                     save_meta = {"phase": "final" if is_final else "intermediate"}
                     if rc:
                         save_meta["reasoning_content"] = rc
+                    usage = getattr(msg, "usage_metadata", None)
+                    if usage:
+                        save_meta["usage_metadata"] = usage
                     session_store.add_message(
                         session_id,
                         role="assistant",
@@ -501,6 +546,9 @@ class SupervisorAgent:
                         "tool_call_id": call_id,
                         "success": tool_message_success(result_content) if result_msg else True,
                     }
+                    usage = getattr(msg, "usage_metadata", None)
+                    if usage:
+                        tc_meta["usage_metadata"] = usage
                     rc = getattr(msg, "additional_kwargs", {}).get("reasoning_content")
                     if rc:
                         tc_meta["reasoning_content"] = rc

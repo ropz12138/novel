@@ -7,6 +7,11 @@ from app.models.user import User
 from app.node_types import resolve_scope, resolve_update_scope
 from app.schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from app.routers.auth import get_current_user
+from app.services.agents.tools.node_tools import (
+    _normalize_chapter_elements,
+    _extra_data_with_chapter_elements,
+)
+from app.services import user_action_service as action_svc
 
 router = APIRouter(tags=["nodes"])
 
@@ -37,6 +42,9 @@ def create_node(
     db.add(node)
     db.commit()
     db.refresh(node)
+    action_svc.record_node_action(
+        db, work_id=work_id, user_id=current_user.id, action_type="create_node", node=node
+    )
     return node
 
 
@@ -78,6 +86,7 @@ def update_node(
 
     update_data = data.model_dump(exclude_unset=True)
     proposed_scope = update_data.pop("scope", None)
+    chapter_elements = update_data.pop("chapter_elements", None)
     new_type = update_data.get("type")
     try:
         final_scope = resolve_update_scope(node.type, node.scope, new_type, proposed_scope)
@@ -87,8 +96,22 @@ def update_node(
         setattr(node, key, value)
     node.scope = final_scope
 
+    if chapter_elements is not None:
+        effective_type = new_type or node.type
+        if effective_type != "chapter":
+            raise HTTPException(status_code=400, detail="chapter_elements 只能用于 chapter 节点")
+        normalized, err = _normalize_chapter_elements(chapter_elements)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized)
+
     db.commit()
     db.refresh(node)
+    substantial = action_svc.has_substantial_node_change(update_data) or chapter_elements is not None
+    if substantial:
+        action_svc.record_node_action(
+            db, work_id=node.work_id, user_id=current_user.id, action_type="update_node", node=node
+        )
     return node
 
 
@@ -103,6 +126,9 @@ def delete_node(
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
 
+    action_svc.record_node_action(
+        db, work_id=node.work_id, user_id=current_user.id, action_type="delete_node", node=node
+    )
     db.delete(node)
     db.commit()
     return None

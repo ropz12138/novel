@@ -17,12 +17,18 @@ class CanvasWork(Base):
     description = Column(String(500), default="")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    canvas_action_watermark = Column(DateTime, nullable=True)
 
     # 关联
     nodes = relationship("Node", back_populates="work", cascade="all, delete-orphan")
     edges = relationship("Edge", back_populates="work", cascade="all, delete-orphan")
     character_relations = relationship(
         "CharacterRelation",
+        back_populates="work",
+        cascade="all, delete-orphan",
+    )
+    user_canvas_actions = relationship(
+        "UserCanvasAction",
         back_populates="work",
         cascade="all, delete-orphan",
     )

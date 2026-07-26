@@ -18,18 +18,21 @@ def test_load_chat_history_excludes_current_user(monkeypatch):
     monkeypatch.setattr(ss_module.session_store, "get_messages", lambda sid: fake)
 
     agent = SupervisorAgent()
-    history = agent._load_chat_history("s1")
+    history, current_turn = agent._load_chat_history("s1")
 
     assert len(history) == 2
     assert isinstance(history[0], HumanMessage)
     assert history[0].content == "把主角改成学生"
     assert isinstance(history[1], AIMessage)
     assert history[1].content.startswith("已完成主角身份修改")
+    # 当前轮 user 被分离出来
+    assert len(current_turn) == 1
+    assert current_turn[0]["content"] == "需要"
 
 
 def test_load_chat_history_empty_when_no_session():
     agent = SupervisorAgent()
-    assert agent._load_chat_history(None) == []
+    assert agent._load_chat_history(None) == ([], [])
 
 
 def test_load_chat_history_includes_tool_chain(monkeypatch):
@@ -53,7 +56,7 @@ def test_load_chat_history_includes_tool_chain(monkeypatch):
     monkeypatch.setattr(ss_module.session_store, "get_messages", lambda sid: fake)
 
     agent = SupervisorAgent()
-    history = agent._load_chat_history("s1")
+    history, _ = agent._load_chat_history("s1")
 
     assert len(history) == 4
     assert isinstance(history[1], AIMessage)

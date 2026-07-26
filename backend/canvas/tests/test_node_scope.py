@@ -53,7 +53,7 @@ def test_validate_scope_rejects_unknown():
 def test_default_scope_for_type():
     assert node_types.default_scope_for_type("worldbuilding") == "global"
     assert node_types.default_scope_for_type("style") == "global"
-    for t in ("outline", "volume", "plot", "chapter", "element"):
+    for t in ("outline", "volume", "plot", "chapter"):
         assert node_types.default_scope_for_type(t) == "local"
     # character 默认 minor（次要配角）
     assert node_types.default_scope_for_type("character") == "minor"
@@ -64,7 +64,7 @@ def test_global_locked_types_only_worldbuilding_and_style():
 
 
 def test_local_locked_types_are_hierarchy_chain():
-    assert set(node_types.LOCAL_LOCKED_TYPES) == {"outline", "volume", "plot", "chapter", "element"}
+    assert set(node_types.LOCAL_LOCKED_TYPES) == {"outline", "volume", "plot", "chapter"}
 
 
 def test_character_scopes_exclude_local():
@@ -85,7 +85,7 @@ def test_resolve_scope_locked_global_rejects_local():
 
 
 def test_resolve_scope_hierarchy_forces_local():
-    for t in ("outline", "volume", "plot", "chapter", "element"):
+    for t in ("outline", "volume", "plot", "chapter"):
         assert node_types.resolve_scope(t, None) == "local"
 
 
@@ -272,7 +272,7 @@ def test_compact_includes_scope():
 
         compact = nt._compact(node)
         assert compact["scope"] == "global"
-        assert set(compact.keys()) == {"id", "type", "title", "layer", "scope"}
+        assert set(compact.keys()) == {"id", "type", "title", "layer", "scope", "locked"}
     finally:
         db.close()
 

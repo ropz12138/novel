@@ -161,9 +161,14 @@ class SessionStore:
             )
             db.add(message)
 
-            # 更新会话标题（用第一条用户消息）
+            # 更新会话标题（用第一条用户消息；跳过系统注入的操作摘要消息）
             session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
-            if session and session.title == "新对话" and role == "user":
+            if (
+                session
+                and session.title == "新对话"
+                and role == "user"
+                and (meta or {}).get("type") != "user_canvas_actions"
+            ):
                 session.title = content[:50] + ("..." if len(content) > 50 else "")
                 session.updated_at = datetime.now(timezone.utc)
 
@@ -186,6 +191,62 @@ class SessionStore:
             result = [self._message_to_dict(m) for m in messages]
             from app.services.supervisor_event_persist import enrich_messages_with_todolist
             return enrich_messages_with_todolist(db, session_id, result)
+        finally:
+            db.close()
+
+    def add_context_compaction(
+        self,
+        session_id: str,
+        *,
+        content: str,
+        meta: dict,
+        work_id: Optional[str] = None,
+    ) -> Optional[dict]:
+        """保存一条会话压缩包消息。压缩包是派生上下文，不改原始节点/消息。"""
+        compact_meta = dict(meta or {})
+        compact_meta["type"] = "context_compaction"
+        return self.add_message(
+            session_id,
+            role="assistant",
+            content=content,
+            meta=compact_meta,
+            work_id=work_id,
+        )
+
+    def get_active_context_compaction(self, session_id: str) -> Optional[dict]:
+        """返回当前 session 最新的压缩包消息。"""
+        db = self._get_db()
+        try:
+            row = (
+                db.query(SupervisorMessage)
+                .filter(SupervisorMessage.session_id == session_id)
+                .filter(SupervisorMessage.role == "assistant")
+                .order_by(SupervisorMessage.sort_order.desc())
+                .all()
+            )
+            for message in row:
+                meta = message.meta or {}
+                if isinstance(meta, dict) and meta.get("type") == "context_compaction":
+                    return self._message_to_dict(message)
+            return None
+        finally:
+            db.close()
+
+    def latest_usage_metadata(self, session_id: str) -> Optional[dict]:
+        """读取最近一次持久化的 LLM usage 元数据。"""
+        db = self._get_db()
+        try:
+            rows = (
+                db.query(SupervisorMessage)
+                .filter(SupervisorMessage.session_id == session_id)
+                .order_by(SupervisorMessage.sort_order.desc())
+                .all()
+            )
+            for row in rows:
+                meta = row.meta or {}
+                if isinstance(meta, dict) and meta.get("usage_metadata"):
+                    return meta.get("usage_metadata")
+            return None
         finally:
             db.close()
 

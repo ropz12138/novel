@@ -2,6 +2,7 @@
 import json
 import asyncio
 import logging
+from datetime import datetime
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -15,6 +16,7 @@ from app.services.agents.supervisor import supervisor_agent
 from app.services.canvas_checkpoint_service import capture_canvas_checkpoint, prepare_edit_resend
 from app.services.session_store import session_store
 from app.services.supervisor_event_persist import persist_supervisor_event_safe
+from app.services import user_action_service as action_svc
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +97,25 @@ def _capture_checkpoint_before_agent(
         db.close()
 
 
+def _store_user_actions_message(session_id: str, work_id: Optional[str]) -> None:
+    """把"自上次 agent 回复后的用户画布操作"作为一条独立 user 消息存入对话，
+    排在用户文字消息之前。agent 在本轮会同时看到操作与用户文字。"""
+    if not work_id:
+        return
+    db = SessionLocal()
+    try:
+        section = action_svc.build_pending_actions_section(db, work_id)
+    except Exception:
+        logger.exception("build user_actions_section failed work_id=%s", work_id)
+        section = ""
+    finally:
+        db.close()
+    if section:
+        session_store.add_message(
+            session_id, "user", section, meta={"type": "user_canvas_actions"}
+        )
+
+
 async def _execute_supervisor_run(
     *,
     session_id: str,
@@ -105,6 +126,7 @@ async def _execute_supervisor_run(
     try:
         await supervisor_agent.run(user_message, context, emit=wrapped_emit)
         session_store.update_session(session_id, stage="done", status="completed")
+        _advance_watermark_from_context(context)
     except asyncio.CancelledError:
         session_store.mark_session_interrupted(session_id)
         try:
@@ -115,6 +137,23 @@ async def _execute_supervisor_run(
     except Exception as e:
         await wrapped_emit("error", {"message": str(e)})
         session_store.update_session(session_id, stage="done", status="error")
+
+
+def _advance_watermark_from_context(context: dict) -> None:
+    """agent 成功结束后推进水位线：下次对话只感知更新的用户操作。"""
+    if not context:
+        return
+    work_id = context.get("work_id")
+    run_started_at = context.get("run_started_at")
+    if not work_id or not run_started_at:
+        return
+    db = SessionLocal()
+    try:
+        action_svc.advance_watermark(db, work_id, run_started_at)
+    except Exception:
+        logger.exception("advance canvas_action_watermark failed work_id=%s", work_id)
+    finally:
+        db.close()
 
 
 def _stream_supervisor_run(
@@ -131,6 +170,8 @@ def _stream_supervisor_run(
     queue: asyncio.Queue = asyncio.Queue()
     wrapped_emit = _wrap_emit(session_id, queue.put)
 
+    run_started_at = datetime.utcnow()
+
     async def run_agent():
         try:
             context = {
@@ -138,6 +179,7 @@ def _stream_supervisor_run(
                 "work_id": work_id,
                 "session_id": session_id,
                 "context_node_ids": context_node_ids,
+                "run_started_at": run_started_at,
             }
             await _execute_supervisor_run(
                 session_id=session_id,
@@ -195,6 +237,7 @@ async def start_supervisor(
     session = session_store.create_session(user_id=user.id, work_id=payload.work_id)
     session_id = session["id"]
 
+    _store_user_actions_message(session_id, payload.work_id)
     user_msg = session_store.add_message(session_id, "user", payload.message, work_id=payload.work_id)
     _capture_checkpoint_before_agent(session_id, payload.work_id, user_msg)
 
@@ -221,6 +264,7 @@ async def resume_supervisor(
         raise HTTPException(status_code=404, detail="会话不存在")
 
     session_id = payload.session_id
+    _store_user_actions_message(session_id, session.get("work_id"))
     user_msg = session_store.add_message(
         session_id, "user", payload.message, work_id=session.get("work_id"),
     )

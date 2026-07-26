@@ -29,6 +29,7 @@ def get_llm(
         temperature=temperature,
         streaming=streaming,
     )
+    primary_llm._extra_body = primary_config.get("extra_body")
 
     fallback_name = fallback if fallback is not None else settings.fallback_model
 
@@ -41,6 +42,7 @@ def get_llm(
             temperature=temperature,
             streaming=streaming,
         )
+        fallback_llm._extra_body = fallback_config.get("extra_body")
         return FallbackLLM(primary_llm, fallback_llm)
 
     return primary_llm

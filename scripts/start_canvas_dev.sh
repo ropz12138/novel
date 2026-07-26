@@ -132,7 +132,6 @@ done
 # --- 启动后端 ---
 echo "启动 Canvas 后端 (端口: $BACKEND_PORT)..."
 cd "$BACKEND_DIR"
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY ALL_PROXY all_proxy ftp_proxy FTP_PROXY
 if [ ! -d ".venv" ]; then
   python3 -m venv .venv
 fi

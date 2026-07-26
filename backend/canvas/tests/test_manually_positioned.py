@@ -88,7 +88,7 @@ def test_compact_has_no_manually_positioned(monkeypatch):
         db.commit()
         compact = nt._compact(node)
         assert "manually_positioned" not in compact
-        assert set(compact.keys()) == {"id", "type", "title", "layer", "scope"}
+        assert set(compact.keys()) == {"id", "type", "title", "layer", "scope", "locked"}
     finally:
         db.close()
 
@@ -110,7 +110,7 @@ def test_create_node_accepts_all_standard_types(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        for t in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "style", "element"):
+        for t in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "style"):
             result = json.loads(nt._create_node_sync(t, t, position_x=0, position_y=0))
             assert result["success"] is True, f"{t} 应被接受，实际: {result}"
     finally:

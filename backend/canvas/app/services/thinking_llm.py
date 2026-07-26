@@ -13,6 +13,7 @@ from collections.abc import Mapping
 from typing import Any, Literal
 
 import openai
+from pydantic import PrivateAttr
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage
 from langchain_core.outputs import ChatGenerationChunk, ChatResult
 from langchain_core.runnables import Runnable, RunnableConfig
@@ -126,7 +127,13 @@ def _escape_unescaped_quotes_in_json(raw: str) -> str:
 
 
 class FallbackLLM(Runnable):
-    """包装 ThinkingChatOpenAI，遇到 429 时自动切换到备选模型重试。"""
+    """包装 ThinkingChatOpenAI，主模型任意业务报错都自动切换到备选模型重试。
+
+    系统级异常（KeyboardInterrupt / GeneratorExit / asyncio.CancelledError 等
+    ``BaseException``）不会被 ``except Exception`` 捕获，自然向上传播、不触发切换。
+    流式方法在主模型已吐出部分内容后报错，也会从头重流备用模型（可能产生前缀重复，
+    由调用方决定如何处理）。
+    """
 
     def __init__(self, primary: ThinkingChatOpenAI, fallback: ThinkingChatOpenAI):
         self._primary = primary
@@ -151,61 +158,63 @@ class FallbackLLM(Runnable):
         try:
             return self._primary.invoke(input, config=config, **kwargs)
         except Exception as e:
-            if self._is_rate_limit(e):
-                logger.warning("429 rate limit, falling back to %s", self._fallback.model_name)
-                return self._fallback.invoke(input, config=config, **kwargs)
-            raise
+            logger.warning(
+                "主模型 %s 调用失败 (%s: %s)，切换到备用模型 %s",
+                self._primary.model_name, type(e).__name__, e, self._fallback.model_name,
+            )
+            return self._fallback.invoke(input, config=config, **kwargs)
 
     async def ainvoke(self, input, config: RunnableConfig | None = None, **kwargs):
         try:
             return await self._primary.ainvoke(input, config=config, **kwargs)
         except Exception as e:
-            if self._is_rate_limit(e):
-                logger.warning("429 rate limit, falling back to %s", self._fallback.model_name)
-                return await self._fallback.ainvoke(input, config=config, **kwargs)
-            raise
+            logger.warning(
+                "主模型 %s 调用失败 (%s: %s)，切换到备用模型 %s",
+                self._primary.model_name, type(e).__name__, e, self._fallback.model_name,
+            )
+            return await self._fallback.ainvoke(input, config=config, **kwargs)
 
     def stream(self, input, config: RunnableConfig | None = None, **kwargs):
         try:
             yield from self._primary.stream(input, config=config, **kwargs)
         except Exception as e:
-            if self._is_rate_limit(e):
-                logger.warning("429 rate limit in stream, falling back to %s", self._fallback.model_name)
-                yield from self._fallback.stream(input, config=config, **kwargs)
-            else:
-                raise
+            logger.warning(
+                "主模型 %s 流式调用失败 (%s: %s)，切换到备用模型 %s 从头重流",
+                self._primary.model_name, type(e).__name__, e, self._fallback.model_name,
+            )
+            yield from self._fallback.stream(input, config=config, **kwargs)
 
     async def astream(self, input, config: RunnableConfig | None = None, **kwargs):
         try:
             async for chunk in self._primary.astream(input, config=config, **kwargs):
                 yield chunk
         except Exception as e:
-            if self._is_rate_limit(e):
-                logger.warning("429 rate limit in stream, falling back to %s", self._fallback.model_name)
-                async for chunk in self._fallback.astream(input, config=config, **kwargs):
-                    yield chunk
-            else:
-                raise
-
-    @staticmethod
-    def _is_rate_limit(e: Exception) -> bool:
-        s = str(e).lower()
-        return "429" in s or "rate" in s or "too many requests" in s
+            logger.warning(
+                "主模型 %s 流式调用失败 (%s: %s)，切换到备用模型 %s 从头重流",
+                self._primary.model_name, type(e).__name__, e, self._fallback.model_name,
+            )
+            async for chunk in self._fallback.astream(input, config=config, **kwargs):
+                yield chunk
 
 
 class ThinkingChatOpenAI(ChatOpenAI):
-    """兼容 Thinking Mode 的 ChatOpenAI 子类（DeepSeek / MiMo 等）。"""
+    """兼容 Thinking Mode 的 ChatOpenAI 子类（DeepSeek / MiMo 等）。
+
+    thinking 等额外 API 参数从 config 读入实例 ``_extra_body``，在 bind_tools /
+    with_structured_output 时透传；未配置则不注入任何 extra 参数，由模型用自身默认。
+    调用方显式传入的 ``extra_body`` 优先于实例配置。
+    """
+
+    _extra_body: dict | None = PrivateAttr(default=None)
 
     def bind_tools(self, tools: Any, **kwargs: Any) -> Any:
-        existing_extra = kwargs.get("extra_body") or {}
-        if "thinking" not in existing_extra:
-            kwargs["extra_body"] = {**existing_extra, "thinking": {"type": "disabled"}}
+        if "extra_body" not in kwargs and self._extra_body:
+            kwargs["extra_body"] = self._extra_body
         return super().bind_tools(tools, **kwargs)
 
     def with_structured_output(self, schema: Any, **kwargs: Any) -> Any:
-        existing_extra = kwargs.get("extra_body") or {}
-        if "thinking" not in existing_extra:
-            kwargs["extra_body"] = {**existing_extra, "thinking": {"type": "disabled"}}
+        if "extra_body" not in kwargs and self._extra_body:
+            kwargs["extra_body"] = self._extra_body
         return super().with_structured_output(schema, **kwargs)
 
     def _get_request_payload(

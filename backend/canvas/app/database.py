@@ -54,6 +54,7 @@ def init_db() -> None:
     import app.models.todo_item
     import app.models.chapter_illustration
     import app.models.canvas_checkpoint
+    import app.models.user_canvas_action
     Base.metadata.create_all(bind=engine)
 
 

@@ -22,13 +22,15 @@
     {
       "your-model-name": {
         "base_url": "https://your-llm-api-base-url/v1",
-        "api_key": "your_llm_api_key"
+        "api_key": "your_llm_api_key",
+        "context_window": "128k"
       }
     },
     {
       "your-pro-model-name": {
         "base_url": "https://your-llm-api-base-url/v1",
-        "api_key": "your_llm_api_key"
+        "api_key": "your_llm_api_key",
+        "context_window": "512k"
       }
     }
   ],

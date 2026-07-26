@@ -61,7 +61,7 @@ vi.mock("../lib/canvasApi", () => ({
   deleteCharacterRelation: vi.fn(),
 }));
 
-import { Canvas, mergeRefreshedNodes, toCanvasSnapshot, isDescendantOfCollapsed, isContainsEdge } from "./Canvas";
+import { Canvas, mergeRefreshedNodes, toCanvasSnapshot, isDescendantOfCollapsed, isContainsEdge, applyNodeUpdateToData } from "./Canvas";
 import {
   fetchNodes,
   fetchEdges,
@@ -440,6 +440,41 @@ describe("mergeRefreshedNodes", () => {
     expect(result[0].data.scope).toBe("global");
     // 缺省 scope 默认 local
     expect(result[1].data.scope).toBe("local");
+  });
+});
+
+// ── 纯函数 applyNodeUpdateToData 测试 ──
+
+describe("applyNodeUpdateToData", () => {
+  it("maps title into label and updates content", () => {
+    const prev = { label: "旧", content: "旧内容", extra_data: { a: 1 } };
+    const next = applyNodeUpdateToData(prev, { title: "新", content: "新内容" });
+    expect(next.label).toBe("新");
+    expect(next.content).toBe("新内容");
+    expect(next.extra_data).toEqual({ a: 1 });
+  });
+
+  it("merges chapter_elements into extra_data preserving other fields", () => {
+    const prev = {
+      label: "x",
+      content: "",
+      extra_data: { last_generation: { ok: true }, chapter_elements: [{ id: "old" }] },
+    };
+    const next = applyNodeUpdateToData(prev, { chapter_elements: [{ id: "new" }] });
+    expect(next.extra_data.chapter_elements).toEqual([{ id: "new" }]);
+    expect(next.extra_data.last_generation).toEqual({ ok: true });
+  });
+
+  it("preserves label/content when title/content absent in update", () => {
+    const prev = { label: "保留", content: "保留c", extra_data: {} };
+    const next = applyNodeUpdateToData(prev, { chapter_elements: [] });
+    expect(next.label).toBe("保留");
+    expect(next.content).toBe("保留c");
+    expect(next.extra_data.chapter_elements).toEqual([]);
+  });
+
+  it("returns prev unchanged when prev is null", () => {
+    expect(applyNodeUpdateToData(null, { title: "x" })).toBeNull();
   });
 });
 

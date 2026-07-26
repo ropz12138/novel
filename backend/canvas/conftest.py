@@ -25,6 +25,7 @@ import app.models.session  # noqa: E402, F401
 import app.models.character_relation  # noqa: E402, F401
 import app.models.todo_item  # noqa: E402, F401
 import app.models.canvas_checkpoint  # noqa: E402, F401
+import app.models.user_canvas_action  # noqa: E402, F401
 
 
 def _ensure_test_db(db_name: str = "novel_test") -> str:

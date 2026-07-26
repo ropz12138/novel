@@ -62,6 +62,13 @@ class CreateNodeInput(BaseModel):
     node_type: str = Field(description=f"节点类型。{NODE_TYPES_RULES_TEXT}")
     title: str = Field(description="节点标题")
     content: str = Field(default="", description="节点内容")
+    chapter_elements: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "chapter 专用：本章情节元素列表，每项建议包含 title 和 content。"
+            "元素不是节点类型，不要创建 element 节点；创建章节时把本章元素放在这里。"
+        ),
+    )
     layer: int = Field(
         default=0,
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
@@ -76,6 +83,29 @@ class UpdateNodeInput(BaseModel):
     node_id: str = Field(description="节点ID")
     title: Optional[str] = Field(default=None, description="新标题")
     content: Optional[str] = Field(default=None, description="新内容")
+    chapter_elements: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "chapter 专用：更新本章情节元素列表，每项建议包含 title 和 content。"
+            "只更新 extra_data.chapter_elements，不覆盖 extra_data 中的其它字段。"
+        ),
+    )
+    content_edit_instruction: Optional[str] = Field(
+        default=None,
+        description=(
+            "局部编辑节点内容的用户原话。用于章节正文小改（改对话/措辞/删增少量段落）时，"
+            "工具会读取现有 content，生成段落级 edits，校验后应用并返回 diff。"
+            "不要和 content 同时传；content 表示整体覆盖。"
+        ),
+    )
+    content_edit_context: Optional[str] = Field(
+        default=None,
+        description="局部编辑所需上下文（agent 已用查询工具备齐的大纲/角色/伏笔等原文）。仅配合 content_edit_instruction 使用。",
+    )
+    prev_chapter_node_id: Optional[str] = Field(
+        default=None,
+        description="局部编辑章节正文时可传上一章节点ID，工具会注入上一章正文作承接参考。",
+    )
     node_type: Optional[str] = Field(default=None, description="新类型")
     layer: Optional[int] = Field(
         default=None,
@@ -104,10 +134,10 @@ class DeleteNodeInput(BaseModel):
 
 class CreateEdgeInput(BaseModel):
     source_id: str = Field(
-        description=f"源节点 ID。{EDGE_ENDPOINT_RULES_TEXT} element→chapter 时 source 为 element。",
+        description=f"源节点 ID。{EDGE_ENDPOINT_RULES_TEXT}",
     )
     target_id: str = Field(
-        description=f"目标节点 ID。{EDGE_ENDPOINT_RULES_TEXT} element→chapter 时 target 为 chapter。",
+        description=f"目标节点 ID。{EDGE_ENDPOINT_RULES_TEXT}",
     )
     edge_type: str = Field(default="uses", description="连线类型，用简短自然语言描述关系（如'包含'、'角色登场'、'伏笔埋设'、'场景关联'等，不超过100字符）")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -132,6 +162,7 @@ class BatchCreateNodesInput(BaseModel):
     nodes_data: list[dict] = Field(
         description=(
             "节点数据列表，每项含 node_type、title、position_x、position_y、layer 等。"
+            "创建 chapter 时可带 chapter_elements；不要创建 element 节点。"
             f"{NODE_LAYOUT_RULES_TEXT}"
         ),
     )
@@ -268,12 +299,52 @@ def _build_layout_hint(warnings: list) -> str:
     )
 
 
+def _normalize_chapter_elements(chapter_elements) -> tuple[list[dict], str | None]:
+    if chapter_elements is None:
+        return [], None
+    if not isinstance(chapter_elements, list):
+        return [], "chapter_elements 必须是数组"
+    normalized = []
+    for idx, item in enumerate(chapter_elements):
+        if not isinstance(item, dict):
+            return [], f"chapter_elements[{idx}] 必须是对象"
+        title = str(item.get("title") or "").strip()
+        content = str(item.get("content") or "").strip()
+        if not title and not content:
+            return [], f"chapter_elements[{idx}] 至少需要 title 或 content"
+        normalized.append({
+            "id": str(item.get("id") or f"chapter_element_{idx + 1}"),
+            "title": title,
+            "content": content,
+            **{
+                key: value
+                for key, value in item.items()
+                if key not in ("id", "title", "content")
+            },
+        })
+    return normalized, None
+
+
+def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] | None) -> dict:
+    data = dict(extra_data or {})
+    if chapter_elements is not None:
+        data["chapter_elements"] = chapter_elements
+    return data
+
+
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None):
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None):
     try:
         final_scope = resolve_scope(node_type, scope)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
+    normalized_elements = None
+    if chapter_elements is not None:
+        if node_type != "chapter":
+            return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
+        normalized_elements, err = _normalize_chapter_elements(chapter_elements)
+        if err:
+            return json.dumps({"error": err}, ensure_ascii=False)
 
     work_id = _get_current_work_id()
     if not work_id:
@@ -289,6 +360,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             content=content,
             layer=layer,
             scope=final_scope,
+            extra_data=_extra_data_with_chapter_elements({}, normalized_elements),
             position_x=position_x,
             position_y=position_y,
         )
@@ -310,17 +382,45 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.close()
 
 
-def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, scope=None, locked=None, reason=None):
+def _update_node_sync(
+    node_id,
+    title=None,
+    content=None,
+    node_type=None,
+    layer=None,
+    position_x=None,
+    position_y=None,
+    scope=None,
+    locked=None,
+    reason=None,
+    content_edit_instruction=None,
+    content_edit_context=None,
+    prev_chapter_node_id=None,
+    chapter_elements=None,
+):
+    if content_edit_instruction:
+        return json.dumps({
+            "success": False,
+            "error": "content_edit_instruction 需要通过异步工具调用执行；普通同步更新请使用 content 整体覆盖。",
+        }, ensure_ascii=False)
     if node_type is not None:
         try:
             validate_node_type(node_type)
         except ValueError as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+    normalized_elements = None
+    if chapter_elements is not None:
+        normalized_elements, err = _normalize_chapter_elements(chapter_elements)
+        if err:
+            return json.dumps({"error": err}, ensure_ascii=False)
     db = _get_db()
     try:
         node = db.query(Node).filter(Node.id == node_id).first()
         if not node:
             return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        final_type_for_elements = node_type or node.type
+        if chapter_elements is not None and final_type_for_elements != "chapter":
+            return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
         # 锁定校验：被用户固定的节点，其坐标不可被移动
         is_locked = bool(node.locked)
         trying_move = (position_x is not None) or (position_y is not None)
@@ -345,6 +445,8 @@ def _update_node_sync(node_id, title=None, content=None, node_type=None, layer=N
             node.position_y = position_y
         if locked is not None:
             node.locked = locked
+        if chapter_elements is not None:
+            node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized_elements)
         try:
             node.scope = _resolve_update_scope(node, node_type, scope)
         except ValueError as e:
@@ -522,6 +624,12 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             resolve_scope(node_type, data.get("scope"))
         except ValueError as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+        if data.get("chapter_elements") is not None:
+            if node_type != "chapter":
+                return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
+            _, err = _normalize_chapter_elements(data.get("chapter_elements"))
+            if err:
+                return json.dumps({"error": err}, ensure_ascii=False)
 
     db = _get_db()
     try:
@@ -534,12 +642,16 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             position_x = data.get("position_x")
             position_y = data.get("position_y")
             scope = resolve_scope(node_type, data.get("scope"))
+            normalized_elements = None
+            if data.get("chapter_elements") is not None:
+                normalized_elements, _ = _normalize_chapter_elements(data.get("chapter_elements"))
             node = Node(
                 id=str(uuid.uuid4()),
                 work_id=work_id,
                 type=node_type,
                 title=data.get("title", "未命名"),
                 content=data.get("content", ""),
+                extra_data=_extra_data_with_chapter_elements({}, normalized_elements),
                 layer=layer,
                 scope=scope,
                 position_x=position_x if position_x is not None else 0.0,
@@ -629,9 +741,9 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 
 # 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None):
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason))
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -644,9 +756,228 @@ async def _create_node_async(node_type, title, content="", layer=0, position_x=N
     return result
 
 
-async def _update_node_async(node_id, title=None, content=None, node_type=None, layer=None, position_x=None, position_y=None, scope=None, locked=None, reason=None):
+async def _update_node_content_edit_async(
+    node_id,
+    edit_instruction,
+    context="",
+    title=None,
+    node_type=None,
+    layer=None,
+    position_x=None,
+    position_y=None,
+    scope=None,
+    locked=None,
+    reason=None,
+    prev_chapter_node_id=None,
+    chapter_elements=None,
+):
+    from app.services.agents.llm import get_llm, context_model_pref_kwargs
+    from app.services.agents.tools.chapter_tools import (
+        _build_edit_chapter_messages,
+        _collect_chapter_elements,
+        _parse_edits_json,
+        _read_prev_chapter_content,
+    )
+    from app.services.chapter_edit_service import (
+        apply_edits,
+        build_chapter_edit_diff,
+        split_paragraphs,
+        validate_edits,
+    )
+    from app.services.chapter_history_service import clear_chapter_summary_on_content_change
+    from app.services.chapter_word_count import chapter_body_word_count
+    from app.services.global_context import get_global_nodes, format_global_context
+    from app.services.llm_stream import chunk_to_ai_message, emit_llm_stream_deltas
+
+    if node_type is not None:
+        try:
+            validate_node_type(node_type)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+    db = _get_db()
+    try:
+        node = db.query(Node).filter(Node.id == node_id).first()
+        if not node:
+            return json.dumps({"success": False, "error": "节点不存在"}, ensure_ascii=False)
+        if node.type != "chapter":
+            return json.dumps({"success": False, "error": "局部正文编辑目前仅支持 chapter 节点"}, ensure_ascii=False)
+        if not (node.content or "").strip():
+            return json.dumps({
+                "success": False,
+                "error": "节点内容为空，无法局部编辑；请使用 content 整体写入。",
+            }, ensure_ascii=False)
+
+        is_locked = bool(node.locked)
+        trying_move = (position_x is not None) or (position_y is not None)
+        if is_locked and trying_move:
+            return json.dumps({
+                "success": False,
+                "error": f"节点「{node.title}」已被用户锁定，坐标无法移动。请保留该节点当前位置，不要再次尝试调整其 position_x/position_y。",
+            }, ensure_ascii=False)
+
+        old_content = node.content or ""
+        effective_work_id = node.work_id
+        global_nodes = get_global_nodes(db, effective_work_id)
+        global_context = format_global_context(global_nodes)
+        prev_chapter = _read_prev_chapter_content(db, prev_chapter_node_id)
+        elements = _collect_chapter_elements(db, node_id, effective_work_id)
+
+        llm = get_llm(temperature=0.3, streaming=True, **context_model_pref_kwargs())
+        messages = _build_edit_chapter_messages(
+            edit_instruction,
+            old_content,
+            context or "",
+            global_context,
+            prev_chapter,
+            elements,
+        )
+
+        emit = _get_emit()
+        aggregated = None
+        async for chunk in llm.astream(messages):
+            aggregated = chunk if aggregated is None else aggregated + chunk
+            if emit:
+                await emit_llm_stream_deltas(emit, "chapter_edit_stream", chunk)
+
+        resp = chunk_to_ai_message(aggregated) if aggregated is not None else None
+        raw = getattr(resp, "content", "") if resp else ""
+        if isinstance(raw, list):
+            raw = "".join(b.get("text", "") for b in raw if isinstance(b, dict))
+
+        try:
+            parsed = _parse_edits_json(raw)
+        except (json.JSONDecodeError, ValueError) as e:
+            return json.dumps({
+                "success": False,
+                "error": f"无法解析 LLM 输出的 edits JSON: {e}",
+            }, ensure_ascii=False)
+
+        edits = parsed["edits"]
+        paragraphs = split_paragraphs(old_content)
+        validation_errors = validate_edits(edits, paragraphs)
+        if validation_errors:
+            return json.dumps({
+                "success": False,
+                "error": validation_errors[0],
+                "validation_errors": validation_errors,
+            }, ensure_ascii=False)
+
+        try:
+            new_content = apply_edits(old_content, edits)
+        except ValueError as e:
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+        diff = build_chapter_edit_diff(old_content, new_content, edits)
+
+        if title is not None:
+            node.title = title
+        node.content = new_content
+        if node_type is not None:
+            node.type = node_type
+        if layer is not None:
+            node.layer = layer
+        if position_x is not None:
+            node.position_x = position_x
+        if position_y is not None:
+            node.position_y = position_y
+        if locked is not None:
+            node.locked = locked
+        if chapter_elements is not None:
+            if node.type != "chapter" and node_type != "chapter":
+                return json.dumps({"success": False, "error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
+            normalized_elements, err = _normalize_chapter_elements(chapter_elements)
+            if err:
+                return json.dumps({"success": False, "error": err}, ensure_ascii=False)
+            node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized_elements)
+        try:
+            node.scope = _resolve_update_scope(node, node_type, scope)
+        except ValueError as e:
+            db.rollback()
+            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+
+        clear_chapter_summary_on_content_change(db, node)
+        db.commit()
+        db.refresh(node)
+
+        neighbors = _neighbor_items(db, node.id, node.work_id)
+        layout_warnings = _collect_node_layout_warnings(db, node.work_id, node) + _collect_edge_overlap_warnings(db, node.work_id)
+        word_count = chapter_body_word_count(new_content)
+        old_word_count = chapter_body_word_count(old_content)
+        result = {
+            "success": True,
+            "node": _compact(node),
+            "neighbors": neighbors,
+            "layout_warnings": layout_warnings,
+            "layout_hint": _build_layout_hint(layout_warnings),
+            "word_count": word_count,
+            "word_count_delta": word_count - old_word_count,
+            "diff": diff,
+            "content_edit": {
+                "word_count": word_count,
+                "word_count_delta": word_count - old_word_count,
+                "diff": diff,
+            },
+        }
+
+        if emit:
+            await emit("chapter_edit_diff", {
+                "chapter_node_id": node_id,
+                "title": node.title,
+                "word_count": word_count,
+                "word_count_delta": word_count - old_word_count,
+                "diff": diff,
+            })
+            await emit("nodes_updated", {"action": "update", "node_id": node_id})
+
+        return json.dumps(result, ensure_ascii=False)
+    except Exception as e:
+        db.rollback()
+        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
+    finally:
+        db.close()
+
+
+async def _update_node_async(
+    node_id,
+    title=None,
+    content=None,
+    node_type=None,
+    layer=None,
+    position_x=None,
+    position_y=None,
+    scope=None,
+    locked=None,
+    reason=None,
+    content_edit_instruction=None,
+    content_edit_context=None,
+    prev_chapter_node_id=None,
+    chapter_elements=None,
+):
+    if content is not None and content_edit_instruction:
+        return json.dumps({
+            "success": False,
+            "error": "content 和 content_edit_instruction 不能同时传；content 是整体覆盖，content_edit_instruction 是局部编辑。",
+        }, ensure_ascii=False)
+    if content_edit_instruction:
+        return await _update_node_content_edit_async(
+            node_id,
+            content_edit_instruction,
+            content_edit_context or "",
+            title=title,
+            node_type=node_type,
+            layer=layer,
+            position_x=position_x,
+            position_y=position_y,
+            scope=scope,
+            locked=locked,
+            reason=reason,
+            prev_chapter_node_id=prev_chapter_node_id,
+            chapter_elements=chapter_elements,
+        )
+
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -768,6 +1099,7 @@ update_node = StructuredTool.from_function(
     name="update_node",
     description=(
         "更新节点属性或调整布局（position_x/y、layer）。"
+        "章节正文小改时不要整体重写 content，改传 content_edit_instruction 做段落级局部编辑并返回 diff。"
         f"{NODE_LAYOUT_RULES_TEXT} "
         "返回 layout_warnings 与 layout_hint；有警告时须修复直至 warnings 为空。"
     ),

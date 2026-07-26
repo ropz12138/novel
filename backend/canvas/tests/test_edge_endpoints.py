@@ -1,7 +1,7 @@
 """连线端点类型限制测试 — TDD。
 
 - worldbuilding/style（全局节点）禁止任何连线
-- element 只能作为 chapter 的父（element 为 source、chapter 为 target），不得作为 target
+- element 不再是画布节点类型，legacy element 不允许再创建新连线
 """
 import importlib
 import json
@@ -30,12 +30,9 @@ def test_non_global_character_allowed():
     assert validate_edge_endpoints("chapter", "character", "local", "major") is None
 
 
-def test_element_must_target_chapter():
+def test_element_is_no_longer_allowed_as_edge_endpoint():
     assert validate_edge_endpoints("element", "volume", "local", "local")     # 非chapter 拒绝
-    assert validate_edge_endpoints("element", "chapter", "local", "local") is None  # element→chapter 合法
-
-
-def test_element_cannot_be_target():
+    assert validate_edge_endpoints("element", "chapter", "local", "local")
     assert validate_edge_endpoints("chapter", "element", "local", "local")    # element 作 target 拒绝
     assert validate_edge_endpoints("outline", "element", "local", "local")
 
@@ -107,7 +104,7 @@ def test_create_edge_rejects_element_as_target(monkeypatch):
         db.close()
 
 
-def test_create_edge_allows_element_to_chapter(monkeypatch):
+def test_create_edge_rejects_element_to_chapter(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
@@ -116,7 +113,7 @@ def test_create_edge_allows_element_to_chapter(monkeypatch):
         db.add_all([elem, ch])
         db.commit()
         r = json.loads(nt._create_edge_sync(elem.id, ch.id, edge_type="包含"))
-        assert r["success"] is True
+        assert "error" in r
     finally:
         db.close()
 

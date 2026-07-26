@@ -8,6 +8,13 @@ from app.models.user import User
 from app.schemas.edge import EdgeCreate, EdgeUpdate, EdgeResponse, EdgeListResponse
 from app.routers.auth import get_current_user
 from app.node_types import validate_edge_endpoints
+from app.services import user_action_service as action_svc
+
+
+def _endpoint_titles(db, source_id, target_id):
+    src = db.query(Node.title).filter(Node.id == source_id).scalar() or ""
+    tgt = db.query(Node.title).filter(Node.id == target_id).scalar() or ""
+    return src, tgt
 
 router = APIRouter(tags=["edges"])
 
@@ -45,6 +52,11 @@ def create_edge(
     db.add(edge)
     db.commit()
     db.refresh(edge)
+    src_title, tgt_title = _endpoint_titles(db, edge.source_id, edge.target_id)
+    action_svc.record_edge_action(
+        db, work_id=work_id, user_id=current_user.id, action_type="create_edge",
+        edge=edge, source_title=src_title, target_title=tgt_title,
+    )
     return edge
 
 
@@ -90,6 +102,12 @@ def update_edge(
 
     db.commit()
     db.refresh(edge)
+    if action_svc.has_substantial_edge_change(update_data):
+        src_title, tgt_title = _endpoint_titles(db, edge.source_id, edge.target_id)
+        action_svc.record_edge_action(
+            db, work_id=edge.work_id, user_id=current_user.id, action_type="update_edge",
+            edge=edge, source_title=src_title, target_title=tgt_title,
+        )
     return edge
 
 
@@ -104,6 +122,11 @@ def delete_edge(
     if not edge:
         raise HTTPException(status_code=404, detail="Edge not found")
 
+    src_title, tgt_title = _endpoint_titles(db, edge.source_id, edge.target_id)
+    action_svc.record_edge_action(
+        db, work_id=edge.work_id, user_id=current_user.id, action_type="delete_edge",
+        edge=edge, source_title=src_title, target_title=tgt_title,
+    )
     db.delete(edge)
     db.commit()
     return None

@@ -9,13 +9,10 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 
 logger = logging.getLogger(__name__)
 
-# DeepSeek / 兼容 API：启用 reasoning 流
-AGENT_THINKING_EXTRA_BODY = {"thinking": {"type": "enabled"}}
-
 
 def bind_agent_llm_with_tools(llm, tools):
-    """绑定工具并启用 Thinking Mode。"""
-    return llm.bind_tools(tools, extra_body=AGENT_THINKING_EXTRA_BODY)
+    """绑定工具。thinking 等 extra 参数由每个模型从 config 读入实例，不再在此写死。"""
+    return llm.bind_tools(tools)
 
 
 def stream_text_delta(chunk: AIMessageChunk | AIMessage | None) -> str:
@@ -85,6 +82,9 @@ def chunk_to_ai_message(full: AIMessageChunk | AIMessage) -> AIMessage:
     msg_id = getattr(full, "id", None)
     if msg_id:
         kwargs["id"] = msg_id
+    usage = getattr(full, "usage_metadata", None)
+    if usage:
+        kwargs["usage_metadata"] = usage
     rc = getattr(full, "additional_kwargs", {}).get("reasoning_content")
     if rc:
         kwargs["additional_kwargs"] = {"reasoning_content": rc}

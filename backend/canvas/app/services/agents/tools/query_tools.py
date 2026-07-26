@@ -31,6 +31,15 @@ def _get_current_work_id():
         return None
 
 
+def _get_current_session_id():
+    """获取当前 session_id"""
+    try:
+        from app.services.agents.supervisor import get_context
+        return get_context().get("session_id")
+    except:
+        return None
+
+
 # 定义输入Schema
 class QueryNodesInput(BaseModel):
     node_type: Optional[str] = Field(default=None, description="节点类型过滤")
@@ -52,6 +61,13 @@ class ReadNodeContentInput(BaseModel):
         description=(
             "节点 ID 列表（UUID），须来自 get_canvas_index，一次性传入所有需读 ID。"
             "禁止用标题当 ID，禁止连续多次单节点读取。"
+        ),
+    )
+    force_original_context: bool = Field(
+        default=False,
+        description=(
+            "当前 session 已启用压缩上下文时，读取被压缩包引用过的原始节点需显式设为 true，"
+            "并在 reason 说明为什么不能使用 resolve_context_source。"
         ),
     )
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -135,10 +151,36 @@ def _query_edges_sync(source_id=None, target_id=None, edge_type=None, limit=100,
         db.close()
 
 
-def _read_node_content_sync(node_ids: list[str], reason=None):
+def _read_node_content_sync(node_ids: list[str], force_original_context=False, reason=None):
+    session_id = _get_current_session_id()
+    if session_id and not force_original_context:
+        try:
+            from app.services.session_store import session_store
+            compaction = session_store.get_active_context_compaction(session_id)
+            citations = ((compaction or {}).get("meta") or {}).get("citations") or []
+            compacted_node_ids = {
+                c.get("node_id")
+                for c in citations
+                if isinstance(c, dict) and c.get("source_type") == "node" and c.get("node_id")
+            }
+            blocked = [node_id for node_id in node_ids if node_id in compacted_node_ids]
+            if blocked:
+                return json.dumps({
+                    "success": False,
+                    "error": "当前 session 已启用压缩上下文，这些节点属于已压缩来源；请优先使用 resolve_context_source 按 [C...] 引用回查摘录。如确需读取完整原文，请重新调用 read_node_content 并设置 force_original_context=true。",
+                    "blocked_node_ids": blocked,
+                    "context_pack_id": compaction.get("id") if compaction else None,
+                }, ensure_ascii=False)
+        except Exception:
+            pass
+
     db = _get_db()
     try:
-        nodes = db.query(Node).filter(Node.id.in_(node_ids)).all()
+        query = db.query(Node).filter(Node.id.in_(node_ids))
+        work_id = _get_current_work_id()
+        if work_id:
+            query = query.filter(Node.work_id == work_id)
+        nodes = query.all()
         if not nodes:
             return json.dumps({"error": "未找到节点"}, ensure_ascii=False)
         
@@ -266,9 +308,9 @@ async def _query_edges_async(source_id=None, target_id=None, edge_type=None, lim
     return await loop.run_in_executor(None, partial(_query_edges_sync, source_id, target_id, edge_type, limit, reason))
 
 
-async def _read_node_content_async(node_ids: list[str], reason=None):
+async def _read_node_content_async(node_ids: list[str], force_original_context=False, reason=None):
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_read_node_content_sync, node_ids, reason))
+    return await loop.run_in_executor(None, partial(_read_node_content_sync, node_ids, force_original_context, reason))
 
 
 async def _grep_nodes_async(keywords, node_type=None, context_chars=100, limit=20, reason=None):
@@ -302,7 +344,11 @@ read_node_content = StructuredTool.from_function(
     coroutine=_read_node_content_async,
     func=_read_node_content_sync,
     name="read_node_content",
-    description="批量读取节点完整正文。先 get_canvas_index 获取 UUID，再一次性传入 node_ids 列表。",
+    description=(
+        "批量读取节点完整正文。先 get_canvas_index 获取 UUID，再一次性传入 node_ids 列表。"
+        "如果当前 session 已启用压缩上下文，被压缩包引用过的节点默认不可直接重读，"
+        "应使用 resolve_context_source 按 [C...] 引用回查；确需全文时设置 force_original_context=true。"
+    ),
     args_schema=ReadNodeContentInput,
 )
 
@@ -328,7 +374,12 @@ class CanvasIndexInput(BaseModel):
 
 
 class NodeLayoutIssuesInput(BaseModel):
-    node_id: Optional[str] = Field(default=None, description="只查询与该节点相关的布局问题；不传则查询整个画布")
+    node_id: Optional[str] = Field(default=None, description="只查与该节点相关的布局问题；省略则查全画布")
+    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+
+class ListUserCanvasActionsInput(BaseModel):
+    limit: int = Field(default=50, description="返回数量限制，按时间倒序（最新在前）")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -457,6 +508,38 @@ get_node_layout_issues = StructuredTool.from_function(
 )
 
 
+def _list_user_canvas_actions_sync(limit=50, reason=None):
+    from app.services import user_action_service
+
+    work_id = _get_current_work_id()
+    db = _get_db()
+    try:
+        actions = user_action_service.list_actions(db, work_id, limit=limit)
+    finally:
+        db.close()
+    if not actions:
+        return json.dumps({"actions": [], "message": "暂无用户画布操作记录"}, ensure_ascii=False)
+    return json.dumps({"actions": actions, "total": len(actions)}, ensure_ascii=False)
+
+
+async def _list_user_canvas_actions_async(limit=50, reason=None):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(None, partial(_list_user_canvas_actions_sync, limit, reason))
+
+
+list_user_canvas_actions = StructuredTool.from_function(
+    coroutine=_list_user_canvas_actions_async,
+    func=_list_user_canvas_actions_sync,
+    name="list_user_canvas_actions",
+    description=(
+        "列出用户在画布上最近的操作记录（用户手动增删改节点/边，不含你自己的工具操作）。"
+        "create/delete 操作附带内容摘要；update 操作请在结果基础上用 read_node_content / query_edges 查看最新内容。"
+        "按时间倒序（最新在前）。"
+    ),
+    args_schema=ListUserCanvasActionsInput,
+)
+
+
 # 导出所有查询工具
 query_tools = [
     query_nodes,
@@ -466,4 +549,5 @@ query_tools = [
     get_canvas_overview,
     get_canvas_index,
     get_node_layout_issues,
+    list_user_canvas_actions,
 ]

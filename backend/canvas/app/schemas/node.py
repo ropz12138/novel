@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field
-from typing import Optional
+from typing import Optional, List
 from datetime import datetime
 
 
@@ -24,6 +24,10 @@ class NodeUpdate(BaseModel):
     position_x: Optional[float] = None
     position_y: Optional[float] = None
     locked: Optional[bool] = Field(None, description="是否固定节点（固定后坐标不可被 agent 修改）")
+    chapter_elements: Optional[List[dict]] = Field(
+        None,
+        description="仅 chapter 节点：替换 extra_data.chapter_elements，保留 extra_data 中的其它字段",
+    )
 
 
 class NodeResponse(BaseModel):

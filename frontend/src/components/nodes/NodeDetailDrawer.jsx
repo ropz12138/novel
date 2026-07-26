@@ -1,26 +1,108 @@
-import { useState, useEffect, useLayoutEffect, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, Target, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus } from "lucide-react";
+import { Children, useState, useEffect, useLayoutEffect, useRef } from "react";
+import { X, Trash2, BookOpen, FileText, User, Target, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
 
+const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
+const HIGHLIGHT_TOKEN_SUFFIX = "%%";
+
+function maskStrongHighlights(content) {
+  const highlights = [];
+  let masked = "";
+  let cursor = 0;
+
+  while (cursor < content.length) {
+    const start = content.indexOf("**", cursor);
+    if (start < 0) {
+      masked += content.slice(cursor);
+      break;
+    }
+
+    const end = content.indexOf("**", start + 2);
+    if (end < 0) {
+      masked += content.slice(cursor);
+      break;
+    }
+
+    masked += content.slice(cursor, start);
+    const text = content.slice(start + 2, end);
+    if (text) {
+      const index = highlights.length;
+      highlights.push(text);
+      masked += `${HIGHLIGHT_TOKEN_PREFIX}${index}${HIGHLIGHT_TOKEN_SUFFIX}`;
+    } else {
+      masked += "****";
+    }
+    cursor = end + 2;
+  }
+
+  return { masked, highlights };
+}
+
+function renderHighlightTokens(text, highlights, keyPrefix) {
+  const tokenRe = /%%NODE_HIGHLIGHT_(\d+)%%/g;
+  const nodes = [];
+  let cursor = 0;
+  let index = 0;
+  let match;
+
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > cursor) {
+      nodes.push(text.slice(cursor, match.index));
+    }
+    const highlight = highlights[Number(match[1])];
+    if (highlight) {
+      nodes.push(
+        <span
+          key={`${keyPrefix}-${index++}`}
+          className="rounded bg-amber-100 px-0.5 font-semibold text-amber-950 ring-1 ring-amber-200/70"
+        >
+          {highlight}
+        </span>
+      );
+    } else {
+      nodes.push(match[0]);
+    }
+    cursor = match.index + match[0].length;
+  }
+
+  if (cursor < text.length) {
+    nodes.push(text.slice(cursor));
+  }
+
+  return nodes;
+}
+
+function renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix = "hl") {
+  return Children.map(children, (child, index) => {
+    if (typeof child === "string") {
+      return renderHighlightTokens(child, highlights, `${keyPrefix}-${index}`);
+    }
+    return child;
+  });
+}
+
 function MarkdownRenderer({ content }) {
+  const { masked, highlights } = maskStrongHighlights(content || "");
+  const renderChildren = (children, keyPrefix) => renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix);
+
   return (
     <div className="prose prose-sm max-w-none">
     <Markdown
       remarkPlugins={[remarkGfm]}
       components={{
-        h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-3 text-gray-900">{children}</h1>,
-        h2: ({ children }) => <h2 className="text-xl font-bold mt-5 mb-2 text-gray-900">{children}</h2>,
-        h3: ({ children }) => <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-800">{children}</h3>,
-        h4: ({ children }) => <h4 className="text-base font-semibold mt-3 mb-1 text-gray-800">{children}</h4>,
-        p: ({ children }) => <p className="mb-3 leading-relaxed text-gray-700">{children}</p>,
+        h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-3 text-gray-900">{renderChildren(children, "h1")}</h1>,
+        h2: ({ children }) => <h2 className="text-xl font-bold mt-5 mb-2 text-gray-900">{renderChildren(children, "h2")}</h2>,
+        h3: ({ children }) => <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-800">{renderChildren(children, "h3")}</h3>,
+        h4: ({ children }) => <h4 className="text-base font-semibold mt-3 mb-1 text-gray-800">{renderChildren(children, "h4")}</h4>,
+        p: ({ children }) => <p className="mb-3 leading-relaxed text-gray-700">{renderChildren(children, "p")}</p>,
         ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
-        li: ({ children }) => <li className="text-gray-700">{children}</li>,
+        li: ({ children }) => <li className="text-gray-700">{renderChildren(children, "li")}</li>,
         blockquote: ({ children }) => (
           <blockquote className="border-l-4 border-gray-300 pl-4 italic text-gray-600 my-3">
-            {children}
+            {renderChildren(children, "blockquote")}
           </blockquote>
         ),
         code: ({ node, inline, className, children, ...props }) => {
@@ -39,8 +121,8 @@ function MarkdownRenderer({ content }) {
           </div>
         ),
         thead: ({ children }) => <thead className="bg-gray-100">{children}</thead>,
-        th: ({ children }) => <th className="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700">{children}</th>,
-        td: ({ children }) => <td className="border border-gray-300 px-4 py-2 text-gray-700">{children}</td>,
+        th: ({ children }) => <th className="border border-gray-300 px-4 py-2 text-left font-semibold text-gray-700">{renderChildren(children, "th")}</th>,
+        td: ({ children }) => <td className="border border-gray-300 px-4 py-2 text-gray-700">{renderChildren(children, "td")}</td>,
         hr: () => <hr className="my-6 border-gray-300" />,
         strong: ({ children }) => <strong className="font-semibold text-gray-900">{children}</strong>,
         em: ({ children }) => <em className="italic">{children}</em>,
@@ -56,7 +138,7 @@ function MarkdownRenderer({ content }) {
         ),
       }}
     >
-      {content}
+      {masked}
     </Markdown>
     </div>
   );
@@ -109,11 +191,40 @@ function useRememberedDetailScroll(nodeId) {
   return scrollRef;
 }
 
+function ChapterElementsBar({ elements }) {
+  if (!Array.isArray(elements) || elements.length === 0) return null;
+
+  return (
+    <div className="mb-10 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3 text-left">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-700">本章元素</h2>
+        <span className="text-xs text-amber-700/70">{elements.length} 项</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {elements.map((element, index) => {
+          const title = element?.title || element?.content || `元素 ${index + 1}`;
+          const content = element?.content || "";
+          return (
+            <span
+              key={element?.id || `${title}-${index}`}
+              className="inline-flex max-w-full items-center rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-900 shadow-sm"
+              title={content || title}
+            >
+              <span className="truncate">{title}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ChapterReadingView({ node, scrollRef }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
   const wordCount = (node.content || "").replace(/\s+/g, "").length;
+  const chapterElements = node.extra_data?.chapter_elements || [];
 
   return (
     <div ref={scrollRef} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
@@ -141,6 +252,8 @@ function ChapterReadingView({ node, scrollRef }) {
             )}
           </div>
         </div>
+
+        <ChapterElementsBar elements={chapterElements} />
 
         <div className="prose prose-lg max-w-none font-serif">
           <div className="text-lg leading-relaxed text-gray-800">
@@ -244,7 +357,7 @@ function DefaultNodeView({ node, scrollRef }) {
   );
 }
 
-function EditView({ title, content, onTitleChange, onContentChange }) {
+function EditView({ title, content, isChapter, chapterElements, onTitleChange, onContentChange, onChapterElementsChange }) {
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-4">
       <div>
@@ -263,14 +376,62 @@ function EditView({ title, content, onTitleChange, onContentChange }) {
           className="w-full min-h-[360px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y font-mono"
         />
       </div>
+      {isChapter && (
+        <div data-testid="chapter-elements-editor">
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide">本章元素</label>
+            <span className="text-xs text-gray-400">{chapterElements.length} 项</span>
+          </div>
+          <div className="space-y-3">
+            {chapterElements.map((el, index) => (
+              <div key={el.id || `new-${index}`} className="rounded-lg border border-gray-200 p-3 space-y-2 bg-gray-50/50">
+                <div className="flex items-start gap-2">
+                  <input
+                    value={el.title}
+                    onChange={(e) => onChapterElementsChange(chapterElements.map((x, i) => (i === index ? { ...x, title: e.target.value } : x)))}
+                    placeholder="元素标题"
+                    className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onChapterElementsChange(chapterElements.filter((_, i) => i !== index))}
+                    title="删除元素"
+                    className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <textarea
+                  value={el.content}
+                  onChange={(e) => onChapterElementsChange(chapterElements.map((x, i) => (i === index ? { ...x, content: e.target.value } : x)))}
+                  placeholder="元素内容"
+                  className="w-full min-h-[60px] border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none resize-y bg-white"
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => onChapterElementsChange([...chapterElements, { title: "", content: "" }])}
+            className="mt-2 inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
+          >
+            <Plus className="w-4 h-4" />
+            添加元素
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked }) {
+  const isChapter = node.type === "chapter";
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.label);
   const [editContent, setEditContent] = useState(node.content || "");
+  const [editChapterElements, setEditChapterElements] = useState(() =>
+    isChapter ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el })) : []
+  );
   const [saving, setSaving] = useState(false);
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
 
@@ -278,19 +439,28 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
     setIsEditing(false);
     setEditTitle(node.label);
     setEditContent(node.content || "");
+    setEditChapterElements(
+      node.type === "chapter"
+        ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }))
+        : []
+    );
   }, [node]);
 
   const handleSave = async () => {
+    const payload = { title: editTitle, content: editContent };
+    if (node.type === "chapter") {
+      payload.chapter_elements = editChapterElements
+        .map((el) => ({ ...el }))
+        .filter((el) => (el.title || "").trim() || (el.content || "").trim());
+    }
     setSaving(true);
     try {
-      await onUpdate?.(node.id, { title: editTitle, content: editContent });
+      await onUpdate?.(node.id, payload);
       setIsEditing(false);
     } finally {
       setSaving(false);
     }
   };
-
-  const isChapter = node.type === "chapter";
 
   return (
     <div
@@ -382,7 +552,15 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
       </div>
 
       {isEditing ? (
-        <EditView title={editTitle} content={editContent} onTitleChange={setEditTitle} onContentChange={setEditContent} />
+        <EditView
+          title={editTitle}
+          content={editContent}
+          isChapter={isChapter}
+          chapterElements={editChapterElements}
+          onTitleChange={setEditTitle}
+          onContentChange={setEditContent}
+          onChapterElementsChange={setEditChapterElements}
+        />
       ) : isChapter ? (
         <ChapterReadingView node={node} scrollRef={detailScrollRef} />
       ) : (

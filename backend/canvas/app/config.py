@@ -61,6 +61,9 @@ class Settings:
                 self._models[model_name] = {
                     "base_url": model_conf["base_url"],
                     "api_key": model_conf["api_key"],
+                    "max_completed_token": model_conf.get("max_completed_token"),
+                    "context_window": model_conf.get("context_window") or model_conf.get("max_context_tokens") or model_conf.get("max_completed_token"),
+                    "extra_body": model_conf.get("extra_body"),
                 }
 
         self.default_model: str = config.get("default_model", "")
@@ -83,6 +86,26 @@ class Settings:
         if name not in self._models:
             raise KeyError(f"模型 '{name}' 未在配置中找到。可用模型: {list(self._models.keys())}")
         return self._models[name]
+
+    def get_model_context_window(self, model_name: str | None = None) -> int | None:
+        """返回模型上下文上限 token 数；支持配置值如 128k / 512k。"""
+        raw = self.get_model_config(model_name).get("context_window")
+        if raw is None or raw == "":
+            return None
+        if isinstance(raw, int):
+            return raw
+        text = str(raw).strip().lower()
+        multiplier = 1
+        if text.endswith("k"):
+            multiplier = 1000
+            text = text[:-1]
+        elif text.endswith("m"):
+            multiplier = 1000 * 1000
+            text = text[:-1]
+        try:
+            return int(float(text) * multiplier)
+        except ValueError:
+            return None
 
     @property
     def available_models(self) -> list[str]:
