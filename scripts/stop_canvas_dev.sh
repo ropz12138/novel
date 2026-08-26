@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-RUN_DIR="$ROOT_DIR/.run"
+LOG_DIR="$ROOT_DIR/logs"
 
 # --- 杀进程树 ---
 kill_tree() {
@@ -33,7 +33,7 @@ stop_process() {
   fi
 }
 
-stop_process "$RUN_DIR/canvas-backend-dev.pid" "canvas-backend"
-stop_process "$RUN_DIR/canvas-frontend-dev.pid" "canvas-frontend"
+stop_process "$LOG_DIR/canvas-backend-dev.pid" "canvas-backend"
+stop_process "$LOG_DIR/canvas-frontend-dev.pid" "canvas-frontend"
 
 echo "Canvas 开发环境已停止"

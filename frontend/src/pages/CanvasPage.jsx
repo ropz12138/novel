@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, User, Settings, LogOut } from "lucide-react";
+import { Bot, User, Settings, LogOut, BookOpen } from "lucide-react";
 import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
@@ -8,6 +8,7 @@ import { fetchWorks, createWork, deleteWork } from "../lib/canvasApi";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
 
 const CHAT_WIDTH_STORAGE_KEY = "novel_canvas_chat_width";
+const LAST_ACTIVE_WORK_STORAGE_KEY = "novel_canvas_last_active_work";
 const DEFAULT_CHAT_WIDTH = 420;
 const MIN_CHAT_WIDTH = 340;
 const MAX_CHAT_WIDTH = 760;
@@ -38,14 +39,15 @@ export function CanvasPage() {
   const [works, setWorks] = useState([]);
   const [currentWorkId, setCurrentWorkId] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [worksError, setWorksError] = useState("");
   const [showWorkSelector, setShowWorkSelector] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelConfig, setShowModelConfig] = useState(false);
   const insertPillRef = useRef(null);
 
-  const handleAddContext = useCallback((node) => {
-    insertPillRef.current?.(node.id, node.type, node.label);
+  const handleAddContext = useCallback((node, selectedText) => {
+    insertPillRef.current?.(node.id, node.type, node.label, selectedText);
   }, []);
 
   useEffect(() => {
@@ -53,14 +55,29 @@ export function CanvasPage() {
   }, []);
 
   const loadWorks = async () => {
+    setWorksError("");
     try {
       const data = await fetchWorks();
-      setWorks(data.works || []);
-      if (data.works?.length > 0 && !currentWorkId) {
-        setCurrentWorkId(data.works[0].id);
-      }
+      const loadedWorks = data.works || [];
+      setWorks(loadedWorks);
+      setCurrentWorkId((current) => {
+        if (current && loadedWorks.some((work) => work.id === current)) {
+          return current;
+        }
+        const lastActiveWorkId = window.localStorage.getItem(
+          LAST_ACTIVE_WORK_STORAGE_KEY,
+        );
+        if (
+          lastActiveWorkId
+          && loadedWorks.some((work) => work.id === lastActiveWorkId)
+        ) {
+          return lastActiveWorkId;
+        }
+        return loadedWorks[0]?.id || null;
+      });
     } catch (err) {
       console.error("Failed to load works:", err);
+      setWorksError(err?.message || "加载作品失败");
     } finally {
       setLoading(false);
     }
@@ -119,6 +136,18 @@ export function CanvasPage() {
   };
 
   useEffect(() => {
+    if (loading) return;
+    if (currentWorkId) {
+      window.localStorage.setItem(
+        LAST_ACTIVE_WORK_STORAGE_KEY,
+        currentWorkId,
+      );
+    } else {
+      window.localStorage.removeItem(LAST_ACTIVE_WORK_STORAGE_KEY);
+    }
+  }, [currentWorkId, loading]);
+
+  useEffect(() => {
     if (!showChat) return;
     window.localStorage.setItem(CHAT_WIDTH_STORAGE_KEY, String(Math.round(chatWidth)));
   }, [chatWidth, showChat]);
@@ -170,6 +199,12 @@ export function CanvasPage() {
 
   return (
     <div className="h-screen flex flex-col bg-white">
+      {worksError && (
+        <div className="shrink-0 border-b border-red-200 bg-red-50 px-4 py-2 text-center text-sm text-red-700">
+          {worksError}
+          <button type="button" className="ml-3 underline" onClick={loadWorks}>重试</button>
+        </div>
+      )}
       {/* Header */}
       <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-2.5 bg-white">
         <div className="flex items-center gap-3">
@@ -261,6 +296,13 @@ export function CanvasPage() {
 
         <div className="flex items-center gap-2">
           <button
+            onClick={() => navigate("/research")}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 transition-colors hover:bg-indigo-100"
+          >
+            <BookOpen className="h-4 w-4" />
+            <span>小说研究</span>
+          </button>
+          <button
             onClick={() => setShowChat(!showChat)}
             className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
               showChat
@@ -350,7 +392,6 @@ export function CanvasPage() {
                 <AgentChat
                   workId={currentWorkId}
                   onNodesUpdate={handleNodesUpdate}
-                  canvasRef={canvasRef}
                   insertPillRef={insertPillRef}
                 />
               </div>

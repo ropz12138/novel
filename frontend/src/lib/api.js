@@ -1,10 +1,9 @@
-import { authFetch } from "./authFetch";
+import { authJson } from "./authFetch";
 import { API_BASE } from "./runtime-config";
 
 function postRpc(path, body = {}) {
-  return authFetch(`${API_BASE}${path}`, {
+  return authJson(`${API_BASE}${path}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
   });
 }
@@ -12,23 +11,14 @@ function postRpc(path, body = {}) {
 /** API helpers for supervisor session management. */
 export const sessionApi = {
   listSupervisor(workId) {
-    return postRpc("/supervisor-sessions/list", workId ? { work_id: workId } : {}).then((r) => {
-      if (!r.ok) throw new Error("Failed to load supervisor sessions");
-      return r.json();
-    });
+    return postRpc("/supervisor-sessions/list", workId ? { work_id: workId } : {});
   },
 
   getSupervisorMessages(sessionId) {
-    return postRpc("/supervisor-sessions/messages", { session_id: sessionId }).then((r) => {
-      if (!r.ok) throw new Error("Failed to load supervisor messages");
-      return r.json();
-    });
+    return postRpc("/supervisor-sessions/messages", { session_id: sessionId });
   },
 
   deleteSupervisor(sessionId) {
-    return postRpc("/supervisor-sessions/delete", { session_id: sessionId }).then((r) => {
-      if (!r.ok) throw new Error("Failed to delete supervisor session");
-      return r.json().catch(() => ({}));
-    });
+    return postRpc("/supervisor-sessions/delete", { session_id: sessionId });
   },
 };

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-RUN_DIR="$ROOT_DIR/.run"
+LOG_DIR="$ROOT_DIR/logs"
 
 kill_tree() {
   local pid="$1"
@@ -12,7 +12,7 @@ kill_tree() {
   kill "$pid" 2>/dev/null || true
 }
 
-PID_FILE="$RUN_DIR/canvas-backend-prod.pid"
+PID_FILE="$LOG_DIR/canvas-backend-prod.pid"
 if [ -f "$PID_FILE" ]; then
   PID="$(cat "$PID_FILE" 2>/dev/null || true)"
   if [ -n "$PID" ] && kill -0 "$PID" 2>/dev/null; then
@@ -31,7 +31,7 @@ print(cfg['app']['prod_port'])
 " 2>/dev/null || true)"
 
 if [ -n "$PROD_PORT" ]; then
-  pids="$(pgrep -f "uvicorn app.main:app --host 0.0.0.0 --port $PROD_PORT" 2>/dev/null || true)"
+  pids="$(pgrep -f "uvicorn main:app --host 0.0.0.0 --port $PROD_PORT" 2>/dev/null || true)"
   for p in $pids; do kill "$p" 2>/dev/null || true; done
   fuser -k "${PROD_PORT}/tcp" 2>/dev/null || true
 fi

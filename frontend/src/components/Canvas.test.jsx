@@ -33,7 +33,6 @@ vi.mock("@xyflow/react", async () => {
       }
       return [mocks.relationEdges, mocks.setRelationEdges, vi.fn()];
     },
-    useReactFlow: () => ({ fitBounds: vi.fn() }),
     MarkerType: { ArrowClosed: "arrowclosed" },
   };
 });

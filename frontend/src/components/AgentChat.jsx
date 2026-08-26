@@ -1,5 +1,5 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import { Bot, Send, StopCircle, Sparkles, Plus, ChevronDown, Trash2 } from "lucide-react";
+import { Bot, Send, Sparkles, Plus, ChevronDown, Trash2 } from "lucide-react";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "./supervisor/ChatTimeline";
 import { useSmartScroll } from "../hooks/useSmartScroll";
@@ -17,22 +17,14 @@ const NODE_PILL_COLORS = {
   element: "#d97706",
 };
 
-export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPillRef }) {
+export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
   const chat = useSupervisorChat({
     workId,
-    autoMode: true,
     callbacks: {
-      onWorkCreated: () => onNodesUpdate?.(),
       onChapterUpdated: () => onNodesUpdate?.(),
-      onOutlineUpdated: () => onNodesUpdate?.(),
-      onCharactersUpdated: () => onNodesUpdate?.(),
       onNodesUpdate: () => onNodesUpdate?.(),
     },
   });
-
-  const handleHighlightNodes = useCallback((nodeIds) => {
-    canvasRef?.current?.highlightNodes(nodeIds);
-  }, [canvasRef]);
 
   const inputRef = useRef(null);
   const [hasInput, setHasInput] = useState(false);
@@ -55,9 +47,10 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
     return result;
   }, []);
 
-  const insertPill = useCallback((uuid, type, title) => {
+  const insertPill = useCallback((uuid, type, title, selectedText = "") => {
     const el = inputRef.current;
     if (!el) return;
+    const quote = (selectedText || "").trim();
 
     const pill = document.createElement("span");
     pill.contentEditable = false;
@@ -74,13 +67,23 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
       range.deleteContents();
       range.insertNode(pill);
       range.setStartAfter(pill);
+      if (quote) {
+        const quoteNode = document.createTextNode(`\n“${quote}”`);
+        range.insertNode(quoteNode);
+        range.setStartAfter(quoteNode);
+      }
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
     } else {
       el.appendChild(pill);
+      let quoteNode = null;
+      if (quote) {
+        quoteNode = document.createTextNode(`\n“${quote}”`);
+        el.appendChild(quoteNode);
+      }
       const range = document.createRange();
-      range.setStartAfter(pill);
+      range.setStartAfter(quoteNode || pill);
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
@@ -124,22 +127,25 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
   const scrollContainerRef = useRef(null);
   const { stickToBottom, scrollToBottom } = useSmartScroll(scrollContainerRef, [
     chat.timeline, chat.assistantReasoningDraft, chat.assistantDraft,
-    chat.editDiff, chat.outlineDiff, chat.characterDiff, chat.running,
+    chat.running,
   ]);
 
   // Session 下拉框状态
   const [sessions, setSessions] = useState([]);
+  const [sessionError, setSessionError] = useState("");
   const [sessionListOpen, setSessionListOpen] = useState(false);
   const dropdownRef = useRef(null);
   const latestSessionLoadedForWorkRef = useRef(null);
 
   const loadSessions = useCallback(async () => {
+    setSessionError("");
     try {
       const list = await sessionApi.listSupervisor(workId);
       setSessions(list || []);
       return list || [];
-    } catch {
-      return [];
+    } catch (error) {
+      setSessionError(error?.message || "加载对话列表失败");
+      return null;
     }
   }, [workId]);
 
@@ -152,6 +158,7 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
     (async () => {
       const list = await loadSessions();
       if (cancelled) return;
+      if (list === null) return;
 
       latestSessionLoadedForWorkRef.current = workId;
       const latest = getLatestSupervisorSession(list);
@@ -208,8 +215,9 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
       await sessionApi.deleteSupervisor(id);
       setSessions((prev) => prev.filter((s) => s.id !== id));
       if (chat.sessionId === id) handleNewSession();
-    } catch {
-      // ignore
+      setSessionError("");
+    } catch (error) {
+      setSessionError(error?.message || "删除对话失败");
     }
   }, [chat, handleNewSession]);
 
@@ -242,7 +250,9 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
         {/* 下拉列表 */}
         {sessionListOpen && (
           <div className="absolute left-0 top-full z-50 w-full max-h-[280px] overflow-y-auto rounded-b-lg border border-t-0 border-slate-200 bg-white shadow-lg">
-            {sessions.length === 0 ? (
+            {sessionError ? (
+              <p className="px-3 py-4 text-center text-xs text-red-500">{sessionError}</p>
+            ) : sessions.length === 0 ? (
               <p className="px-3 py-4 text-center text-xs text-slate-400">暂无对话</p>
             ) : (
               sessions.map((s) => (
@@ -318,19 +328,12 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
             timeline={chat.timeline}
             assistantReasoningDraft={chat.assistantReasoningDraft}
             assistantDraft={chat.assistantDraft}
-            editDiff={chat.editDiff}
-            outlineDiff={chat.outlineDiff}
-            characterDiff={chat.characterDiff}
-            confirming={chat.confirming}
             running={chat.running}
             onToggleStep={chat.toggleStepPanel}
-            onConfirmEdit={chat.handleConfirmEdit}
-            onConfirmOutline={chat.handleConfirmOutline}
-            onHighlightNodes={handleHighlightNodes}
             onEditMessage={chat.handleEditResend}
           />
 
-          {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.assistantDraft && !chat.assistantReasoningDraft && !chat.editDiff && !chat.outlineDiff && !chat.characterDiff && (
+          {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.assistantDraft && !chat.assistantReasoningDraft && (
             <div className="flex gap-3 justify-start">
               <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-500 animate-pulse">
                 <Bot className="h-3.5 w-3.5" />
@@ -374,15 +377,11 @@ export default function AgentChat({ workId, onNodesUpdate, canvasRef, insertPill
             }`}
           />
           <button
-            onClick={chat.running ? chat.handleInterrupt : handleContentEditableSend}
-            disabled={!chat.running && !hasInput}
-            className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center transition-colors ${
-              chat.running
-                ? "bg-red-500 hover:bg-red-600 text-white"
-                : "bg-blue-500 hover:bg-blue-600 text-white disabled:bg-gray-300 disabled:cursor-not-allowed"
-            }`}
+            onClick={handleContentEditableSend}
+            disabled={chat.running || !hasInput}
+            className="h-10 w-10 shrink-0 rounded-full flex items-center justify-center bg-blue-500 text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300"
           >
-            {chat.running ? <StopCircle className="h-4 w-4" /> : <Send className="h-4 w-4" />}
+            <Send className="h-4 w-4" />
           </button>
         </div>
         <div className="mt-2 text-[10px] text-gray-400 text-center">

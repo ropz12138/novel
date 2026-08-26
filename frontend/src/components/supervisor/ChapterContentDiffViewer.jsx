@@ -13,13 +13,13 @@ const TYPE_COLOR = {
   delete: "bg-red-50 text-red-800 border-red-200",
 };
 
-/**
- * Canvas 原生章节正文 diff 查看器（段落级，只读）。
- */
 export function ChapterContentDiffViewer({
   title = "",
+  nodeType = "",
   hunks = [],
   summary = {},
+  textCount,
+  textCountDelta,
   wordCount,
   wordCountDelta,
 }) {
@@ -33,6 +33,7 @@ export function ChapterContentDiffViewer({
     <div className="space-y-2">
       <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
         {title ? <span className="font-medium text-slate-700">{title}</span> : null}
+        {nodeType ? <span>{nodeType}</span> : null}
         <span>{summary.paragraphs_changed ?? hunks.length} 处修改</span>
         {(summary.chars_added ?? 0) > 0 && (
           <span className="text-green-600">+{summary.chars_added} 字</span>
@@ -40,8 +41,11 @@ export function ChapterContentDiffViewer({
         {(summary.chars_removed ?? 0) > 0 && (
           <span className="text-red-500">-{summary.chars_removed} 字</span>
         )}
-        {typeof wordCount === "number" && (
+        {typeof wordCount === "number" && nodeType === "chapter" && (
           <span>共 {wordCount} 字{typeof wordCountDelta === "number" && wordCountDelta !== 0 ? ` (${wordCountDelta > 0 ? "+" : ""}${wordCountDelta})` : ""}</span>
+        )}
+        {typeof textCount === "number" && nodeType !== "chapter" && (
+          <span>共 {textCount} 字符{typeof textCountDelta === "number" && textCountDelta !== 0 ? ` (${textCountDelta > 0 ? "+" : ""}${textCountDelta})` : ""}</span>
         )}
       </div>
 

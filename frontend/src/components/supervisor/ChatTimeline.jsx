@@ -1,13 +1,8 @@
 import { useRef, Fragment, useState, useEffect } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Check, Loader2, X, Bot, PenLine, Crosshair, ChevronDown, ChevronRight, Pencil } from "lucide-react";
+import { Check, Loader2, X, Bot, PenLine, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { Button } from "../ui/button";
-import { DiffViewer } from "../agent/DiffViewer";
-import { OutlineDiffViewer } from "../agent/OutlineDiffViewer";
-import { CharacterDiffViewer } from "../agent/CharacterDiffViewer";
-import { PatchDiffViewer } from "../agent/PatchDiffViewer";
-import { MetadataDiffViewer } from "../agent/MetadataDiffViewer";
 import { ChapterContentDiffViewer } from "./ChapterContentDiffViewer";
 import { RequirementsTodoCard } from "../agent/RequirementsTodoCard";
 
@@ -21,6 +16,22 @@ const NODE_PILL_COLORS = {
   style: "#a855f7",
   element: "#d97706",
 };
+
+/** 模型连续 tool_call 时的无意义正文占位，不作为气泡展示。 */
+function isPlaceholderEllipsisContent(content) {
+  if (content == null) return false;
+  const text = String(content).trim();
+  return text === "..." || text === "…";
+}
+
+function shouldHideAssistantEllipsisBubble(item) {
+  if (item?.kind !== "message" || item.role !== "assistant") return false;
+  if (item.type === "requirements_todolist" && item.todoCard) return false;
+  if (item.type === "chapter_content_diff_card" && item.chapterContentDiffCard) return false;
+  if (item.type === "error") return false;
+  if (String(item.reasoningContent || item.meta?.reasoning_content || "").trim()) return false;
+  return isPlaceholderEllipsisContent(item.content);
+}
 
 const CTX_MARKER_RE = /(\[\[ctx\|[^|]+\|[^|]+\|[^\]]+\]\])/g;
 
@@ -151,7 +162,7 @@ function ExecStepRow({ item, onToggleStep }) {
           {item.label}
         </div>
         {showContent && hasStream && (
-          <div className="mt-1 max-h-32 overflow-y-auto whitespace-pre-wrap break-words text-[10px] font-normal leading-relaxed text-slate-400">
+          <div className="mt-1 whitespace-pre-wrap break-words text-[10px] font-normal leading-relaxed text-slate-400">
             {item.reasoningStream?.trim() && (
               <CollapsibleReasoning
                 content={item.reasoningStream}
@@ -252,7 +263,16 @@ function AssistantTextMessage({ msg }) {
 function UserMessageBubble({ msg, running, onEditMessage }) {
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(msg.content || "");
-  const canEdit = Boolean(msg.dbMessageId && onEditMessage && !running);
+  const isUserActionsMessage = (
+    msg.type === "user_canvas_actions"
+    || msg.meta?.type === "user_canvas_actions"
+  );
+  const canEdit = Boolean(
+    msg.dbMessageId
+    && onEditMessage
+    && !running
+    && !isUserActionsMessage
+  );
 
   useEffect(() => {
     if (!editing) setDraft(msg.content || "");
@@ -344,31 +364,26 @@ function UserMessageBubble({ msg, running, onEditMessage }) {
 
 /**
  * Shared message/timeline rendering component for Supervisor chat.
- * Renders execution steps, message bubbles, diff cards, and streaming draft.
+ * Renders execution steps, message bubbles, chapter diffs, and streaming draft.
  */
 export function ChatTimeline({
   timeline,
   assistantDraft,
   assistantReasoningDraft = "",
-  editDiff,
-  outlineDiff,
-  characterDiff,
-  confirming,
   running,
   onToggleStep,
-  onConfirmEdit,
-  onConfirmOutline,
-  onHighlightNodes,
   onEditMessage,
 }) {
   const bottomRef = useRef(null);
+  const visibleTimeline = (timeline || []).filter((item) => !shouldHideAssistantEllipsisBubble(item));
+  const visibleDraft = isPlaceholderEllipsisContent(assistantDraft) ? "" : (assistantDraft || "");
 
-  const hasContent = timeline.length > 0 || assistantReasoningDraft || assistantDraft || editDiff || outlineDiff || characterDiff;
+  const hasContent = visibleTimeline.length > 0 || assistantReasoningDraft || visibleDraft;
   if (!hasContent && !running) return null;
 
   return (
     <>
-      {timeline.map((item) => {
+      {visibleTimeline.map((item) => {
         // ── Execution step ──
         if (item.kind === "step") {
           return <ExecStepRow key={`s-${item.id}`} item={item} onToggleStep={onToggleStep} />;
@@ -400,17 +415,8 @@ export function ChatTimeline({
                         : "bg-slate-100 text-slate-800"
                   }`}
                 >
-                  {renderMessageContent(msg, confirming, onConfirmEdit)}
+                  {renderMessageContent(msg)}
                 </div>
-              )}
-              {msg.role !== "user" && msg.operatedNodeIds && msg.operatedNodeIds.length > 0 && onHighlightNodes && (
-                <button
-                  onClick={() => onHighlightNodes(msg.operatedNodeIds)}
-                  className="absolute top-2 right-2 p-1 rounded hover:bg-slate-200/80 transition-colors"
-                  title="高亮本次操作的节点"
-                >
-                  <Crosshair className="h-3.5 w-3.5 text-slate-400" />
-                </button>
               )}
             </div>
             {msg.role === "user" && (
@@ -424,84 +430,11 @@ export function ChatTimeline({
           </div>
         );
       })}
-
-      {/* Floating outline/character diff panel */}
-      {(outlineDiff || characterDiff) && (
-        <div className="flex gap-3 justify-start">
-          <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-violet-100 text-violet-600">
-            <Bot className="h-3.5 w-3.5" />
-          </div>
-          <div className="max-w-[85%] space-y-2">
-            {outlineDiff && (
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
-                  <p className="text-sm text-slate-700">
-                    大纲变更建议
-                    <span className="ml-2 text-xs text-slate-400">
-                      +{outlineDiff.summary?.total_added ?? 0} / ~{outlineDiff.summary?.total_modified ?? 0} / -{outlineDiff.summary?.total_removed ?? 0}
-                    </span>
-                  </p>
-                </div>
-                <div className="px-2 py-2">
-                  <OutlineDiffViewer diff={outlineDiff.diff} summary={outlineDiff.summary ?? {}} collapsed />
-                </div>
-              </div>
-            )}
-            {characterDiff && (
-              <div className="rounded-xl border border-slate-200 bg-white overflow-hidden">
-                <div className="px-4 py-2.5 border-b border-slate-100 flex items-center justify-between">
-                  <p className="text-sm text-slate-700">
-                    角色变更建议
-                    <span className="ml-2 text-xs text-slate-400">
-                      +{characterDiff.summary?.total_added ?? 0} / ~{characterDiff.summary?.total_modified ?? 0} / -{characterDiff.summary?.total_removed ?? 0}
-                    </span>
-                  </p>
-                </div>
-                <div className="px-2 py-2">
-                  <CharacterDiffViewer diff={characterDiff.diff} summary={characterDiff.summary ?? {}} collapsed />
-                </div>
-              </div>
-            )}
-            {outlineDiff?.readonly ? (
-              <div className="text-xs text-slate-500 text-right">
-                已自动应用并保存，无需确认。
-              </div>
-            ) : (
-              <div className="flex items-center gap-2 justify-end">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-8 px-3 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50"
-                  onClick={() => onConfirmOutline("reject")}
-                  disabled={confirming}
-                >
-                  <X className="mr-1.5 h-3.5 w-3.5" />
-                  拒绝
-                </Button>
-                <Button
-                  size="sm"
-                  className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                  onClick={() => onConfirmOutline("accept")}
-                  disabled={confirming}
-                >
-                  {confirming ? (
-                    <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                  ) : (
-                    <Check className="mr-1.5 h-3.5 w-3.5" />
-                  )}
-                  接受修改
-                </Button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
       {/* Streaming draft */}
-      {(assistantReasoningDraft || assistantDraft) && (
+      {(assistantReasoningDraft || visibleDraft) && (
         <StreamingDraftBlock
           assistantReasoningDraft={assistantReasoningDraft}
-          assistantDraft={assistantDraft}
+          assistantDraft={visibleDraft}
           running={running}
         />
       )}
@@ -514,147 +447,24 @@ export function ChatTimeline({
 /**
  * Render the inner content of a message bubble based on its type.
  */
-function renderMessageContent(msg, confirming, onConfirmEdit) {
+function renderMessageContent(msg) {
   switch (msg.type) {
     case "chapter_content_diff_card":
       return (
         <ChapterContentDiffViewer
           title={msg.chapterContentDiffCard?.title ?? ""}
+          nodeType={msg.chapterContentDiffCard?.node_type}
           hunks={msg.chapterContentDiffCard?.hunks ?? []}
           summary={msg.chapterContentDiffCard?.summary ?? {}}
+          textCount={msg.chapterContentDiffCard?.text_count}
+          textCountDelta={msg.chapterContentDiffCard?.text_count_delta}
           wordCount={msg.chapterContentDiffCard?.word_count}
           wordCountDelta={msg.chapterContentDiffCard?.word_count_delta}
         />
       );
 
-    case "patch_diff_card":
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-700">
-              章节局部修改
-              <span className="ml-2 text-xs text-slate-400">
-                {msg.patchDiffCard?.summary?.applied ?? 0} 处改动
-              </span>
-            </p>
-          </div>
-          <PatchDiffViewer
-            hunks={msg.patchDiffCard?.hunks ?? []}
-            summary={msg.patchDiffCard?.summary ?? {}}
-          />
-        </div>
-      );
-
-    case "edit_diff_card":
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-700">
-              第{msg.diffCard?.chapter_number}章修改建议
-              <span className="ml-2 text-xs text-slate-400">
-                +{msg.diffCard?.summary?.lines_added ?? 0}行 / -{msg.diffCard?.summary?.lines_removed ?? 0}行
-              </span>
-            </p>
-          </div>
-          <DiffViewer diff={msg.diffCard?.diff ?? []} summary={msg.diffCard?.summary ?? {}} collapsed />
-          {msg.diffCard?.readonly ? (
-            <div className="text-xs text-slate-500">
-              已自动应用并保存，无需确认。
-            </div>
-          ) : (
-            <div className="flex items-center gap-2 justify-end">
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 px-3 text-xs text-slate-500 hover:text-red-600 hover:bg-red-50"
-                onClick={() => onConfirmEdit("reject", msg.diffCard)}
-                disabled={confirming}
-              >
-                <X className="mr-1.5 h-3.5 w-3.5" />
-                拒绝
-              </Button>
-              <Button
-                size="sm"
-                className="h-8 px-3 text-xs bg-emerald-600 hover:bg-emerald-700 text-white"
-                onClick={() => onConfirmEdit("accept", msg.diffCard)}
-                disabled={confirming}
-              >
-                {confirming ? (
-                  <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
-                ) : (
-                  <Check className="mr-1.5 h-3.5 w-3.5" />
-                )}
-                接受修改
-              </Button>
-            </div>
-          )}
-        </div>
-      );
-
     case "requirements_todolist":
       return <RequirementsTodoCard todoCard={msg.todoCard} />;
-
-    case "outline_diff_card":
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-700">
-              大纲变更建议
-              <span className="ml-2 text-xs text-slate-400">
-                +{msg.outlineDiffCard?.summary?.total_added ?? 0} / ~{msg.outlineDiffCard?.summary?.total_modified ?? 0} / -{msg.outlineDiffCard?.summary?.total_removed ?? 0}
-              </span>
-            </p>
-          </div>
-          <OutlineDiffViewer diff={msg.outlineDiffCard?.diff ?? {}} summary={msg.outlineDiffCard?.summary ?? {}} collapsed />
-        </div>
-      );
-
-    case "character_diff_card":
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-700">
-              角色变更建议
-              <span className="ml-2 text-xs text-slate-400">
-                +{msg.characterDiffCard?.summary?.total_added ?? 0} / ~{msg.characterDiffCard?.summary?.total_modified ?? 0} / -{msg.characterDiffCard?.summary?.total_removed ?? 0}
-              </span>
-            </p>
-          </div>
-          <CharacterDiffViewer diff={msg.characterDiffCard?.diff ?? {}} summary={msg.characterDiffCard?.summary ?? {}} collapsed />
-        </div>
-      );
-
-    case "metadata_diff_card":
-      return (
-        <div className="space-y-2">
-          <div className="flex items-center justify-between">
-            <p className="text-sm text-slate-700">
-              第{msg.metadataDiffCard?.chapter_number}章元数据变更
-              <span className="ml-2 text-xs text-slate-400">
-                +{msg.metadataDiffCard?.diff_summary?.total_added ?? 0} / ~{msg.metadataDiffCard?.diff_summary?.total_modified ?? 0} / -{msg.metadataDiffCard?.diff_summary?.total_removed ?? 0}
-              </span>
-            </p>
-          </div>
-          <MetadataDiffViewer diff={msg.metadataDiffCard?.diff ?? {}} summary={msg.metadataDiffCard?.diff_summary ?? {}} collapsed />
-        </div>
-      );
-
-    case "chapter_meta_card":
-      return (
-        <div className="space-y-2">
-          <p className="text-sm font-medium text-slate-700">章节结构元数据（第{msg.chapterMetaCard?.chapter_number}章）</p>
-          <p className="text-xs text-slate-600 whitespace-pre-wrap">{msg.chapterMetaCard?.summary || "无摘要"}</p>
-        </div>
-      );
-
-    case "consistency_report_card":
-      return (
-        <div className="space-y-1">
-          <p className="text-sm font-medium text-slate-700">一致性检查（第{msg.consistencyReportCard?.chapter_number}章）</p>
-          <p className="text-xs text-slate-600">状态：{msg.consistencyReportCard?.consistency_status || "aligned"}</p>
-          <p className="text-xs text-slate-600">决策：{msg.consistencyReportCard?.decision || "none"}</p>
-        </div>
-      );
 
     default:
       // User message or plain assistant text

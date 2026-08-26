@@ -3,10 +3,10 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
-BACKEND_DIR="$ROOT_DIR/backend/canvas"
-RUN_DIR="$ROOT_DIR/.run"
+BACKEND_DIR="$ROOT_DIR/backend"
+LOG_DIR="$ROOT_DIR/logs"
 
-mkdir -p "$RUN_DIR"
+mkdir -p "$LOG_DIR"
 
 # --- 杀进程树 ---
 kill_tree() {
@@ -112,8 +112,8 @@ print(cfg["frontend"]["dev_port"])
   FRONTEND_PORT="${_cfg_lines[1]}"
 }
 
-cleanup_old "$RUN_DIR/canvas-backend-dev.pid" "canvas-backend"
-cleanup_old "$RUN_DIR/canvas-frontend-dev.pid" "canvas-frontend"
+cleanup_old "$LOG_DIR/canvas-backend-dev.pid" "canvas-backend"
+cleanup_old "$LOG_DIR/canvas-frontend-dev.pid" "canvas-frontend"
 
 read_config
 
@@ -132,39 +132,38 @@ done
 # --- 启动后端 ---
 echo "启动 Canvas 后端 (端口: $BACKEND_PORT)..."
 cd "$BACKEND_DIR"
-if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+VENV_PY="$BACKEND_DIR/.venv/bin/python"
+VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
+if [ ! -x "$VENV_PY" ] || grep -q 'backend/canvas/.venv' "$BACKEND_DIR/.venv/pyvenv.cfg" 2>/dev/null; then
+  echo "重建 Python 虚拟环境..."
+  rm -rf "$BACKEND_DIR/.venv"
+  python3 -m venv "$BACKEND_DIR/.venv"
+  VENV_PY="$BACKEND_DIR/.venv/bin/python"
+  VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
 fi
-source .venv/bin/activate
-pip install -r requirements.txt 2>&1 | tail -3
-
-# --- 数据库迁移（幂等，保证 schema 与 model 一致，避免代码先于迁移导致 500） ---
-echo "--- 执行数据库迁移 ---"
-python run_migrations.py
+"$VENV_PY" -m pip install -r requirements.txt 2>&1 | tail -3
 
 start_backend() {
-  nohup uvicorn app.main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$RUN_DIR/canvas-backend-dev.log" 2>&1 &
-  echo $! > "$RUN_DIR/canvas-backend-dev.pid"
+  nohup "$VENV_UVICORN" main:app --host 0.0.0.0 --port "$BACKEND_PORT" > "$LOG_DIR/canvas-backend-dev.log" 2>&1 &
+  echo $! > "$LOG_DIR/canvas-backend-dev.pid"
 }
 
 start_backend
 sleep 0.5
-if ! pid_alive "$RUN_DIR/canvas-backend-dev.pid" || ! wait_http_post_ok "canvas-backend" "http://127.0.0.1:$BACKEND_PORT/health" 20; then
+if ! pid_alive "$LOG_DIR/canvas-backend-dev.pid" || ! wait_http_post_ok "canvas-backend" "http://127.0.0.1:$BACKEND_PORT/health" 20; then
   echo "canvas-backend 首次启动失败，尝试重启一次..."
-  if pid_alive "$RUN_DIR/canvas-backend-dev.pid"; then
-    kill_tree "$(cat "$RUN_DIR/canvas-backend-dev.pid")"
+  if pid_alive "$LOG_DIR/canvas-backend-dev.pid"; then
+    kill_tree "$(cat "$LOG_DIR/canvas-backend-dev.pid")"
     sleep 1
   fi
   start_backend
   sleep 0.5
-  if ! pid_alive "$RUN_DIR/canvas-backend-dev.pid" || ! wait_http_post_ok "canvas-backend" "http://127.0.0.1:$BACKEND_PORT/health" 20; then
+  if ! pid_alive "$LOG_DIR/canvas-backend-dev.pid" || ! wait_http_post_ok "canvas-backend" "http://127.0.0.1:$BACKEND_PORT/health" 20; then
     echo "canvas-backend 启动失败，最近日志："
-    tail -n 120 "$RUN_DIR/canvas-backend-dev.log" || true
-    deactivate
+    tail -n 120 "$LOG_DIR/canvas-backend-dev.log" || true
     exit 1
   fi
 fi
-deactivate
 
 # --- 启动前端 ---
 echo "启动 Canvas 前端 (端口: $FRONTEND_PORT)..."
@@ -172,12 +171,12 @@ cd "$FRONTEND_DIR"
 if [ ! -d "node_modules" ]; then
   npm install 2>&1 | tail -3
 fi
-nohup npm run dev -- --port "$FRONTEND_PORT" > "$RUN_DIR/canvas-frontend-dev.log" 2>&1 &
-echo $! > "$RUN_DIR/canvas-frontend-dev.pid"
+nohup npm run dev -- --port "$FRONTEND_PORT" > "$LOG_DIR/canvas-frontend-dev.log" 2>&1 &
+echo $! > "$LOG_DIR/canvas-frontend-dev.pid"
 sleep 0.5
-if ! pid_alive "$RUN_DIR/canvas-frontend-dev.pid" || ! wait_http_ok "canvas-frontend" "http://127.0.0.1:$FRONTEND_PORT/" 25; then
+if ! pid_alive "$LOG_DIR/canvas-frontend-dev.pid" || ! wait_http_ok "canvas-frontend" "http://127.0.0.1:$FRONTEND_PORT/" 25; then
   echo "canvas-frontend 启动失败，最近日志："
-  tail -n 120 "$RUN_DIR/canvas-frontend-dev.log" || true
+  tail -n 120 "$LOG_DIR/canvas-frontend-dev.log" || true
   exit 1
 fi
 

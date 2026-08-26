@@ -10,24 +10,13 @@ import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards"
  *
  * @param {Object} options
  * @param {string|null} options.workId
- * @param {boolean}     options.autoMode
- * @param {boolean}     options.enableTodolist
- * @param {boolean}     options.enableEvaluation
  * @param {Object}      [options.callbacks]
- * @param {Function}    [options.callbacks.onOutlineUpdated]
  * @param {Function}    [options.callbacks.onChapterUpdated]
- * @param {Function}    [options.callbacks.onCharactersUpdated]
- * @param {Function}    [options.callbacks.onChapterIntelUpdate]
- * @param {Function}    [options.callbacks.onWorkCreated]
  * @param {Function}    [options.callbacks.onNodesUpdate]
  */
-export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodolist = false, enableEvaluation = false, callbacks = {}, contextNodeIds = [] }) {
+export function useSupervisorChat({ workId, callbacks = {} }) {
   const {
-    onOutlineUpdated,
     onChapterUpdated,
-    onCharactersUpdated,
-    onChapterIntelUpdate,
-    onWorkCreated,
     onNodesUpdate,
   } = callbacks;
 
@@ -43,14 +32,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
   const [assistantReasoningDraft, setAssistantReasoningDraft] = useState("");
   const assistantReasoningDraftRef = useRef("");
   const timelineIdRef = useRef(0);
-  const [editDiff, setEditDiff] = useState(null);
-  const [outlineDiff, setOutlineDiff] = useState(null);
-  const [characterDiff, setCharacterDiff] = useState(null);
-  const [confirming, setConfirming] = useState(false);
   const sseRef = useRef(null);
-  const lastOutlinePhaseRef = useRef("");
-  const lastQueryCategoryRef = useRef(null);
-  const lastOperatedNodeIdsRef = useRef([]);
   const sseCompletedRef = useRef(false);
 
   const syncSessionId = useCallback((id) => {
@@ -69,18 +51,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
           : item
       );
       return [...updated, { kind: "step", id, label, status: "running", reasoningStream: "", stream: "", panelOpen, timestamp: Date.now() }];
-    });
-  }, []);
-
-  const pushExecStepDone = useCallback((label) => {
-    const id = ++timelineIdRef.current;
-    setTimeline((prev) => {
-      const updated = prev.map((item) =>
-        item.kind === "step" && item.status === "running"
-          ? { ...item, status: "done", panelOpen: false }
-          : item
-      );
-      return [...updated, { kind: "step", id, label, status: "done", stream: "", panelOpen: false, timestamp: Date.now() }];
     });
   }, []);
 
@@ -127,13 +97,14 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
   const freezeDraft = useCallback((meta = {}) => {
     const draft = assistantDraftRef.current;
     const reasoning = assistantReasoningDraftRef.current;
-    if ((draft && draft.trim()) || (reasoning && reasoning.trim())) {
+    const visibleDraft = isPlaceholderEllipsisContent(draft) ? "" : (draft || "");
+    if ((visibleDraft && visibleDraft.trim()) || (reasoning && reasoning.trim())) {
       const id = ++timelineIdRef.current;
       setTimeline((prev) => [...prev, {
         kind: "message",
         id,
         role: "assistant",
-        content: draft || "",
+        content: visibleDraft,
         reasoningContent: reasoning || "",
         ...meta,
         timestamp: Date.now(),
@@ -169,6 +140,39 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         syncSessionId(d.session_id);
         break;
 
+      case "user_actions_message_stored":
+        if (d.message_id || d.id) {
+          setTimeline((prev) => {
+            const dbMessageId = d.message_id || d.id;
+            if (prev.some((item) => item.dbMessageId === dbMessageId)) {
+              return prev;
+            }
+            const id = ++timelineIdRef.current;
+            const item = {
+              kind: "message",
+              id,
+              role: "user",
+              content: d.content || "",
+              type: "user_canvas_actions",
+              dbMessageId,
+              meta: d.meta || { type: "user_canvas_actions" },
+              timestamp: Date.now(),
+            };
+            const pendingUserIndex = prev.findLastIndex(
+              (entry) => entry.kind === "message"
+                && entry.role === "user"
+                && !entry.dbMessageId,
+            );
+            if (pendingUserIndex < 0) return [...prev, item];
+            return [
+              ...prev.slice(0, pendingUserIndex),
+              item,
+              ...prev.slice(pendingUserIndex),
+            ];
+          });
+        }
+        break;
+
       case "user_message_stored":
         if (d.message_id) {
           setTimeline((prev) => {
@@ -196,23 +200,18 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
 
       case "tool_calls": {
         freezeDraft();
-        lastOperatedNodeIdsRef.current = [];
-        setTimeline((prev) => appendToolCallSteps(prev, d.tools || [], timelineIdRef));
+        // 一次模型响应中的所有工具调用属于同一个执行步骤；先结束上一阶段，
+        // 避免“思考中”和多个旧工具步骤同时保持运行状态。
+        setTimeline((prev) => appendToolCallSteps(
+          applyFinalizeAllRunningSteps(prev), d.tools || [], timelineIdRef,
+        ));
         break;
       }
 
-      case "tool_result":
-        break;
-
       case "tool_executed":
-        setTimeline((prev) => markToolExecuted(prev, d.tool, d.success !== false));
-        break;
-
-      case "nodes_operated":
-        // 累加本次执行操作的节点 ID
-        lastOperatedNodeIdsRef.current = [
-          ...new Set([...lastOperatedNodeIdsRef.current, ...(d.node_ids || [])])
-        ];
+        setTimeline((prev) => markToolExecuted(
+          prev, d.tool, d.success !== false, d.tool_call_id,
+        ));
         break;
 
       case "supervisor_stream": {
@@ -236,10 +235,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       case "supervisor_done": {
         sseCompletedRef.current = true;
         finalizeAllRunningSteps();
-        const operatedNodeIds = lastOperatedNodeIdsRef.current;
-        freezeDraft({ operatedNodeIds: operatedNodeIds.length > 0 ? operatedNodeIds : undefined });
-        lastOperatedNodeIdsRef.current = [];
-        lastQueryCategoryRef.current = null;
+        freezeDraft();
         reconcileTodolist(activeSessionIdRef.current, setTimeline);
         setRunning(false);
         break;
@@ -247,127 +243,15 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
 
       case "stage_start": {
         freezeDraft();
-        lastQueryCategoryRef.current = null;
-        // 工具阶段：tool_calls 事件已创建"调用工具"step，stage_start(tool) 不再重复创建
-        if (d.stage === "tool") break;
+        // tool_calls 已创建工具步骤，忽略配套阶段事件以免重复。
+        if (d.stage === "tool" || d.stage === "tool_calling") break;
         const label = d.label || d.stage || "进行中";
         pushExecStep(label);
         break;
       }
 
-      case "outline_stream":
-        appendLastRunningStream(d.chunk, d.phase || "content");
-        break;
-
-      case "outline_status":
-        if (d?.phase && d.phase !== lastOutlinePhaseRef.current) {
-          finalizeLastRunningStep();
-          pushExecStep(d?.message || d.phase);
-          lastOutlinePhaseRef.current = d.phase;
-        } else if (d?.message) {
-          appendLastRunningStream(`${d.message}\n`);
-        }
-        break;
-
-      case "outline_tree_progress": {
-        const line = formatOutlineProgress(d);
-        if (line) appendLastRunningStream(line);
-        break;
-      }
-
-      case "outline_done": {
-        finalizeLastRunningStep();
-        lastOutlinePhaseRef.current = "";
-        if (onWorkCreated && d.work_id && !d.stage) {
-          onWorkCreated(d);
-        }
-        addMessage("assistant", formatOutlineDoneMessage(d), {
-          type: d.stage ? "outline_stage_done" : "outline_created",
-          workId: d.work_id,
-          title: d.title,
-          stage: d.stage,
-        });
-        break;
-      }
-
-      case "outline_edit_done":
-        finalizeLastRunningStep();
-        addMessage("assistant", d.message || "大纲已编辑。", { type: "outline_edited" });
-        onOutlineUpdated?.();
-        break;
-
-      case "plan_stream":
-      case "thinking_stream":
-      case "write_stream":
-      case "edit_chapter_stream":
       case "chapter_edit_stream":
         appendLastRunningStream(d.chunk, d.phase || "content");
-        break;
-
-      case "plan_done":
-      case "thinking_done":
-      case "write_done":
-        finalizeLastRunningStep();
-        break;
-
-      case "saved": {
-        finalizeLastRunningStep();
-        const ch = d.chapter_number;
-        addMessage("assistant", `第${ch}章「${d.title}」已保存，共 ${d.word_count} 字。`, {
-          type: "chapter_saved",
-        });
-        if (onChapterUpdated) onChapterUpdated(ch);
-        break;
-      }
-
-      case "evaluation_done":
-        finalizeLastRunningStep();
-        pushExecStepDone(
-          `章节评估完成：编辑 ${d.editor?.total_score ?? "-"} /60，读者 ${d.reader?.total_score ?? "-"} /60`
-        );
-        break;
-
-      case "title_proposed":
-        if (d?.title) pushExecStepDone(`拟定标题: ${d.title}`);
-        break;
-
-      case "query_result": {
-        const source = d.source || "资料";
-        const category = extractQueryCategory(source);
-        if (category && lastQueryCategoryRef.current === category) {
-          // Merge into the last step of the same category
-          setTimeline((prev) => {
-            const lastIdx = prev.findLastIndex((item) => item.kind === "step" && item.queryCategory === category);
-            if (lastIdx < 0) {
-              // fallback: create new step
-              const id = ++timelineIdRef.current;
-              return [...prev, { kind: "step", id, label: `查询 ${source}`, status: "done", stream: "", panelOpen: false, queryCategory: category, queryCount: 1, querySources: [source], timestamp: Date.now() }];
-            }
-            const step = prev[lastIdx];
-            const newCount = (step.queryCount || 1) + 1;
-            const sources = [...(step.querySources || [step.label.replace(/^查询 /, "")]), source];
-            const next = [...prev];
-            next[lastIdx] = { ...next[lastIdx], label: `查询 ${category} (${newCount}项)`, queryCount: newCount, querySources: sources };
-            return next;
-          });
-        } else {
-          lastQueryCategoryRef.current = category;
-          const id = ++timelineIdRef.current;
-          setTimeline((prev) => {
-            const updated = prev.map((item) =>
-              item.kind === "step" && item.status === "running"
-                ? { ...item, status: "done", panelOpen: false }
-                : item
-            );
-            return [...updated, { kind: "step", id, label: `查询 ${source}`, status: "done", stream: "", panelOpen: false, queryCategory: category, queryCount: 1, querySources: [source], timestamp: Date.now() }];
-          });
-        }
-        break;
-      }
-
-      case "characters_updated":
-        if (d?.message) pushExecStepDone(d.message);
-        if (onCharactersUpdated) onCharactersUpdated();
         break;
 
       case "nodes_updated":
@@ -375,20 +259,28 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         if (onNodesUpdate) onNodesUpdate();
         break;
 
-      case "chapter_edit_diff": {
-        finalizeLastRunningStep();
+      case "chapter_edit_diff":
+      case "node_content_diff": {
+        const nodeId = d.node_id || d.chapter_node_id;
+        const nodeType = d.node_type || (ev === "chapter_edit_diff" ? "chapter" : undefined);
+        finalizeAllRunningSteps();
         addMessage("assistant", "", {
           type: "chapter_content_diff_card",
           chapterContentDiffCard: {
-            chapter_node_id: d.chapter_node_id,
+            node_id: nodeId,
+            chapter_node_id: d.chapter_node_id || nodeId,
+            node_type: nodeType,
             title: d.title,
             hunks: d.diff?.hunks ?? [],
             summary: d.diff?.summary ?? {},
+            text_count: d.text_count,
+            text_count_delta: d.text_count_delta,
             word_count: d.word_count,
             word_count_delta: d.word_count_delta,
           },
         });
-        if (onChapterUpdated) onChapterUpdated(d.chapter_node_id);
+        if (nodeType === "chapter" && onChapterUpdated) onChapterUpdated(nodeId);
+        if (nodeType !== "chapter" && onNodesUpdate) onNodesUpdate();
         break;
       }
 
@@ -405,25 +297,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         break;
       }
 
-      case "subtasks_created": {
-        const subtasks = (d.subtasks || []).map(normalizeTodoItem);
-        setTimeline((prev) =>
-          prev.map((item) => {
-            if (item.type !== "requirements_todolist" || !item.todoCard?.todolist) return item;
-            const existing = new Set(item.todoCard.todolist.map((t) => t.db_id).filter(Boolean));
-            const merged = [...item.todoCard.todolist];
-            subtasks.forEach((subtask) => {
-              if (!existing.has(subtask.db_id)) {
-                merged.push(subtask);
-                existing.add(subtask.db_id);
-              }
-            });
-            return { ...item, todoCard: { ...item.todoCard, todolist: merged } };
-          })
-        );
-        break;
-      }
-
       case "task_status_updated": {
         const { task_item_id, new_status, result_summary } = d || {};
         if (!task_item_id) break;
@@ -436,17 +309,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
                 : t
             );
             return { ...item, todoCard: { ...item.todoCard, todolist: updatedTodolist } };
-          })
-        );
-        break;
-      }
-
-      case "todolist_readiness_updated": {
-        const { ready_to_execute } = d || {};
-        setTimeline((prev) =>
-          prev.map((item) => {
-            if (item.type !== "requirements_todolist" || !item.todoCard) return item;
-            return { ...item, todoCard: { ...item.todoCard, ready_to_execute: !!ready_to_execute } };
           })
         );
         break;
@@ -518,171 +380,11 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         break;
       }
 
-      case "edit_chapter_hunk_diff": {
-        addMessage("assistant", "", {
-          type: "patch_diff_card",
-          patchDiffCard: {
-            hunks: d.hunks || [],
-            summary: d.summary || {},
-          },
-        });
-        break;
-      }
-
-      case "edit_chapter_diff": {
-        finalizeLastRunningStep();
-        if (autoMode) break;
-        const readonly = !!d.readonly;
-        if (readonly) {
-          addMessage("assistant", "", {
-            type: "edit_diff_card",
-            diffCard: { diff: d.diff, summary: d.summary, new_content: d.new_content, chapter_number: d.chapter_number, readonly: true },
-          });
-        } else {
-          setEditDiff({ diff: d.diff, summary: d.summary, new_content: d.new_content, chapter_number: d.chapter_number, readonly: false });
-        }
-        break;
-      }
-
-      case "edit_chapter_applied":
-        if (onChapterUpdated && d.chapter_number) onChapterUpdated(d.chapter_number);
-        break;
-
-      case "edit_chapter_auto_applied": {
-        finalizeLastRunningStep();
-        setEditDiff(null);
-        setTimeline((prev) => {
-          const ch = d.chapter_number;
-          const filtered = prev.filter(
-            (item) =>
-              !(
-                item.kind === "message"
-                && item.type === "edit_diff_card"
-                && item.diffCard?.chapter_number === ch
-                && !item.diffCard?.readonly
-              )
-          );
-          const id = ++timelineIdRef.current;
-          return [
-            ...filtered,
-            {
-              kind: "message",
-              id,
-              role: "assistant",
-              content: "",
-              type: "edit_diff_card",
-              diffCard: {
-                diff: d.diff,
-                summary: d.summary,
-                new_content: d.new_content,
-                chapter_number: d.chapter_number,
-                readonly: true,
-              },
-              timestamp: Date.now(),
-            },
-          ];
-        });
-        if (onChapterUpdated && d.chapter_number) onChapterUpdated(d.chapter_number);
-        break;
-      }
-
-      case "edit_chapter_accepted":
-        finalizeLastRunningStep();
-        setEditDiff(null);
-        if (onChapterUpdated && d.chapter_number) onChapterUpdated(d.chapter_number);
-        break;
-
-      case "chapter_metadata_diff": {
-        addMessage("assistant", "", {
-          type: "metadata_diff_card",
-          metadataDiffCard: {
-            chapter_number: d.chapter_number,
-            diff: d.diff,
-            diff_summary: d.diff_summary,
-          },
-        });
-        break;
-      }
-
-      case "chapter_metadata_generated": {
-        finalizeLastRunningStep();
-        if (onChapterIntelUpdate) {
-          onChapterIntelUpdate({
-            chapter_number: d.chapter_number,
-            summary: d.summary,
-            key_plot_points: d.key_plot_points,
-            outline_links: d.outline_links,
-            involved_characters: d.involved_characters,
-            foreshadows: d.foreshadows,
-            facts: d.facts,
-          });
-        }
-        if (d.summary) {
-          addMessage("assistant", "", {
-            type: "chapter_meta_card",
-            chapterMetaCard: {
-              chapter_number: d.chapter_number,
-              summary: d.summary,
-              key_plot_points: d.key_plot_points || [],
-            },
-          });
-        }
-        break;
-      }
-
-      case "consistency_checked": {
-        addMessage("assistant", "", {
-          type: "consistency_report_card",
-          consistencyReportCard: {
-            chapter_number: d.chapter_number,
-            consistency_status: d.consistency_status,
-            decision: d.decision,
-            reason: d.reason,
-          },
-        });
-        break;
-      }
-
-      case "outline_edit_diff": {
-        finalizeLastRunningStep();
-        const readonly = !!d.readonly;
-        if (readonly) {
-          addMessage("assistant", "", {
-            type: "outline_diff_card",
-            outlineDiffCard: { diff: d.diff, summary: d.summary, message: d.message, operations: d.operations, readonly: true },
-          });
-        } else {
-          setOutlineDiff({ diff: d.diff, summary: d.summary, message: d.message, operations: d.operations, readonly: false });
-          addMessage("assistant", "", {
-            type: "outline_diff_card",
-            outlineDiffCard: { diff: d.diff, summary: d.summary, message: d.message, operations: d.operations, readonly: false },
-          });
-        }
-        break;
-      }
-
-      case "character_edit_diff": {
-        finalizeLastRunningStep();
-        addMessage("assistant", "", {
-          type: "character_diff_card",
-          characterDiffCard: { diff: d.diff, summary: d.summary, readonly: !!d.readonly },
-        });
-        setCharacterDiff({ diff: d.diff, summary: d.summary, readonly: !!d.readonly });
-        break;
-      }
-
       case "error":
         sseCompletedRef.current = true;
         finalizeAllRunningSteps();
         addMessage("system", `错误: ${d.message}`, { type: "error" });
         setRunning(false);
-        break;
-
-      case "outline_stage_error":
-        finalizeAllRunningSteps();
-        if (d?.message) {
-          addMessage("system", d.message, { type: "outline_stage_error", stage: d.stage });
-        }
         break;
 
       case "supervisor_interrupted":
@@ -697,10 +399,9 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         break;
     }
   }, [
-    syncSessionId, freezeDraft, pushExecStep, pushExecStepDone,
+    syncSessionId, freezeDraft, pushExecStep,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
-    onWorkCreated, onOutlineUpdated, onChapterUpdated, onCharactersUpdated,
-    onChapterIntelUpdate, onNodesUpdate, workId, autoMode, reloadTimelineFromSession,
+    onChapterUpdated, onNodesUpdate, reloadTimelineFromSession,
   ]);
 
   // ── SSE connection ──
@@ -805,28 +506,22 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     const raw = (overrideMsg ?? input).trim();
     if (!raw) return;
 
-    const msg = chapterNumber != null ? `[用户正在查看第${chapterNumber}章]\n${raw}` : raw;
     addMessage("user", raw);
     setInput("");
 
     const sid = activeSessionIdRef.current;
     if (!sid) {
       connectSSE(`${API_BASE}/supervisor/start`, {
-        message: msg,
+        message: raw,
         work_id: workId,
-        auto_mode: autoMode,
-        enable_todolist: enableTodolist,
-        enable_evaluation: enableEvaluation,
       });
     } else {
       connectSSE(`${API_BASE}/supervisor/resume`, {
         session_id: sid,
-        message: msg,
-        enable_todolist: enableTodolist,
-        enable_evaluation: enableEvaluation,
+        message: raw,
       });
     }
-  }, [running, input, chapterNumber, addMessage, connectSSE, workId, autoMode, enableTodolist, enableEvaluation]);
+  }, [running, input, addMessage, connectSSE, workId]);
 
   const handleEditResend = useCallback((dbMessageId, newContent) => {
     if (running) return;
@@ -840,110 +535,8 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
       session_id: sid,
       message_id: dbMessageId,
       message: trimmed,
-      enable_todolist: enableTodolist,
-      enable_evaluation: enableEvaluation,
     });
-  }, [running, connectSSE, enableTodolist, enableEvaluation]);
-
-  // ── Confirm handlers ──
-
-  const handleInterrupt = useCallback(async () => {
-    const sid = activeSessionIdRef.current || sessionId;
-    if (!sid || !running) {
-      if (running && !sid) {
-        addMessage("system", "中断失败：会话尚未就绪，请稍后再试。", { type: "error" });
-      }
-      return;
-    }
-    addMessage("system", "已请求中断，将在当前生成步骤结束后停止…", { type: "interrupt_pending" });
-    try {
-      const res = await authFetch(`${API_BASE}/supervisor/interrupt`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sid }),
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        addMessage("system", `中断失败: ${data.detail || `HTTP ${res.status}`}`, { type: "error" });
-      }
-    } catch (err) {
-      addMessage("system", `中断请求失败: ${err.message}`, { type: "error" });
-    }
-  }, [sessionId, running, addMessage]);
-
-  const handleConfirmEdit = useCallback(async (action, targetDiff = null) => {
-    const diffTarget = targetDiff || editDiff;
-    if (!sessionId || !diffTarget || confirming) return;
-    setConfirming(true);
-    try {
-      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          session_id: sessionId,
-          action,
-          new_content: action === "accept" ? diffTarget.new_content : undefined,
-        }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || data.message || `HTTP ${res.status}`);
-      }
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      if (action === "accept") {
-        setEditDiff(null);
-        setRunning(false);
-        const ch = data.chapter_number || diffTarget.chapter_number;
-        if (onChapterUpdated) onChapterUpdated(ch);
-        addMessage("assistant", `第${ch}章修改已保存。`, { type: "chapter_edited" });
-      } else {
-        setEditDiff(null);
-        setRunning(false);
-        addMessage("assistant", "已拒绝修改。", { type: "edit_cancelled" });
-      }
-    } catch (err) {
-      addMessage("system", `确认失败: ${err.message}`, { type: "error" });
-    } finally {
-      setConfirming(false);
-    }
-  }, [sessionId, editDiff, confirming, addMessage, onChapterUpdated]);
-
-  const handleConfirmOutline = useCallback(async (action) => {
-    if (!sessionId || (!outlineDiff && !characterDiff) || confirming) return;
-    setConfirming(true);
-    try {
-      const res = await authFetch(`${API_BASE}/supervisor/confirm`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ session_id: sessionId, action }),
-      });
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        throw new Error(data.detail || data.message || `HTTP ${res.status}`);
-      }
-      if (data.error) {
-        throw new Error(data.error);
-      }
-      if (data.status === "accepted") {
-        setOutlineDiff(null);
-        setCharacterDiff(null);
-        setRunning(false);
-        addMessage("assistant", "大纲和角色修改已保存。", { type: "outline_edited" });
-        onOutlineUpdated?.();
-      } else {
-        setOutlineDiff(null);
-        setCharacterDiff(null);
-        setRunning(false);
-        addMessage("assistant", "大纲和角色修改已取消，保持原样。", { type: "edit_cancelled" });
-      }
-    } catch (err) {
-      addMessage("system", `确认失败: ${err.message}`, { type: "error" });
-    } finally {
-      setConfirming(false);
-    }
-  }, [sessionId, outlineDiff, characterDiff, confirming, addMessage, onOutlineUpdated, workId]);
+  }, [running, connectSSE]);
 
   // ── Session management ──
 
@@ -955,13 +548,7 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     assistantDraftRef.current = "";
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
-    setEditDiff(null);
-    setOutlineDiff(null);
-    setCharacterDiff(null);
-    setConfirming(false);
     timelineIdRef.current = 0;
-    lastOutlinePhaseRef.current = "";
-    lastQueryCategoryRef.current = null;
 
     syncSessionId(session.id);
 
@@ -971,10 +558,12 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
         const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
         setTimeline(suppressSupersededChapterEditCards(loaded));
       }
-    } catch {
-      // ignore
+    } catch (error) {
+      addMessage("system", `加载对话失败: ${error?.message || "未知错误"}`, {
+        type: "error",
+      });
     }
-  }, [running, syncSessionId]);
+  }, [running, syncSessionId, addMessage]);
 
   const resetState = useCallback(() => {
     setTimeline([]);
@@ -986,12 +575,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
-    lastOutlinePhaseRef.current = "";
-    lastQueryCategoryRef.current = null;
-    setEditDiff(null);
-    setOutlineDiff(null);
-    setCharacterDiff(null);
-    setConfirming(false);
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
@@ -1008,10 +591,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     sessionId,
     assistantDraft,
     assistantReasoningDraft,
-    editDiff,
-    outlineDiff,
-    characterDiff,
-    confirming,
     // state setters (exposed for external use)
     setInput,
     setRunning,
@@ -1019,7 +598,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     // timeline helpers
     addMessage,
     pushExecStep,
-    pushExecStepDone,
     appendLastRunningStream,
     finalizeLastRunningStep,
     finalizeAllRunningSteps,
@@ -1028,9 +606,6 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
     // actions
     handleSend,
     handleEditResend,
-    handleInterrupt,
-    handleConfirmEdit,
-    handleConfirmOutline,
     handleSelectSession,
     resetState,
     // SSE ref
@@ -1042,6 +617,24 @@ export function useSupervisorChat({ workId, chapterNumber, autoMode, enableTodol
 
 // ── Helpers ──
 
+/** op-4.8 等模型在连续 tool_call 时常用 "..." / "…" 作为无意义正文占位。 */
+export function isPlaceholderEllipsisContent(content) {
+  if (content == null) return false;
+  const text = String(content).trim();
+  return text === "..." || text === "…";
+}
+
+function shouldSkipAssistantEllipsisMessage(m) {
+  if (m?.role !== "assistant") return false;
+  const meta = m.meta || {};
+  if (meta.type === "requirements_todolist" && meta.todoCard) return false;
+  if (meta.type === "chapter_content_diff_card" && meta.chapterContentDiffCard) return false;
+  if (meta.type === "process_note") return false;
+  if (meta.type === "agent_phase" && meta.event === "stage_start") return false;
+  if (String(meta.reasoning_content || "").trim()) return false;
+  return isPlaceholderEllipsisContent(m.content);
+}
+
 function messageTimestamp(m) {
   return m.created_at ? new Date(m.created_at).getTime() : Date.now();
 }
@@ -1052,7 +645,7 @@ function mapStoredMessageToTimelineItem(m, idRef) {
   const meta = m.meta || {};
 
   const isProcess = meta.type === "process_note"
-    || (meta.type === "agent_phase" && ["stage_start", "evaluation_done"].includes(meta.event));
+    || (meta.type === "agent_phase" && meta.event === "stage_start");
   if (m.role === "assistant" && isProcess) {
     return {
       kind: "step",
@@ -1078,19 +671,6 @@ function mapStoredMessageToTimelineItem(m, idRef) {
     };
   }
 
-  if (m.role === "assistant" && meta.intent === "requirements_planner" && meta.requirements_plan) {
-    return {
-      kind: "message",
-      id,
-      role: "assistant",
-      content: "",
-      type: "requirements_todolist",
-      todoCard: meta.requirements_plan,
-      meta,
-      timestamp: ts,
-    };
-  }
-
   return {
     kind: "message",
     id,
@@ -1099,15 +679,7 @@ function mapStoredMessageToTimelineItem(m, idRef) {
     reasoningContent: meta.reasoning_content || "",
     type: meta.type,
     title: meta.title,
-    diffCard: meta.diffCard,
-    outlineDiffCard: meta.outlineDiffCard,
-    characterDiffCard: meta.characterDiffCard,
-    patchDiffCard: meta.patchDiffCard,
     chapterContentDiffCard: meta.chapterContentDiffCard,
-    chapterMetaCard: meta.chapterMetaCard,
-    metadataDiffCard: meta.metadataDiffCard,
-    consistencyReportCard: meta.consistencyReportCard,
-    operatedNodeIds: meta.operatedNodeIds,
     dbMessageId: m.id,
     meta,
     timestamp: ts,
@@ -1118,6 +690,7 @@ function mapStoredMessageToTimelineItem(m, idRef) {
 export function buildTimelineFromHistoryMessages(msgs, idRef = { current: 0 }) {
   const filtered = (msgs || []).filter((m) =>
     ["user", "assistant", "tool_call"].includes(m.role)
+    && !shouldSkipAssistantEllipsisMessage(m)
   );
 
   let timeline = [];
@@ -1156,27 +729,26 @@ export function buildTimelineFromHistoryMessages(msgs, idRef = { current: 0 }) {
 }
 
 export function appendToolCallSteps(timeline, tools, idRef) {
-  let next = timeline;
-  for (const tool of (tools || [])) {
-    if (!tool) continue;
-    next = upsertToolCallStep(next, [tool], idRef);
-  }
-  return next;
+  const calls = (tools || []).filter(Boolean);
+  return calls.length ? upsertToolCallStep(timeline, calls, idRef) : timeline;
 }
 
 export function formatToolCallLabel(tools, count = 1) {
-  const names = (tools || []).filter(Boolean);
+  const names = (tools || []).map(toolCallName).filter(Boolean);
   const base = names.length > 0 ? names.join(", ") : "unknown";
   const label = `工具调用 · ${base}`;
   return count > 1 ? `${label} ×${count}` : label;
 }
 
 export function upsertToolCallStep(timeline, tools, idRef) {
-  const pendingTools = [...(tools || [])];
-  const key = pendingTools.join(",") || "unknown";
+  const pendingToolCalls = (tools || []).map(normalizeToolCall);
+  const pendingTools = pendingToolCalls.map((call) => call.name);
+  const key = pendingToolCalls.map((call) => call.id || call.name).join(",") || "unknown";
   const lastIdx = timeline.length - 1;
   const lastItem = timeline[lastIdx];
-  const mergeIdx = lastItem?.kind === "step" && lastItem.toolCallKey === key ? lastIdx : -1;
+  const mergeIdx = lastItem?.kind === "step"
+    && lastItem.status === "running"
+    && lastItem.toolCallKey === key ? lastIdx : -1;
 
   if (mergeIdx >= 0) {
     const existing = timeline[mergeIdx];
@@ -1188,6 +760,7 @@ export function upsertToolCallStep(timeline, tools, idRef) {
       toolCallCount: count,
       label: formatToolCallLabel(pendingTools, count),
       pendingTools,
+      pendingToolCalls,
       toolResults: {},
       panelOpen: false,
     };
@@ -1205,6 +778,7 @@ export function upsertToolCallStep(timeline, tools, idRef) {
       toolCallCount: 1,
       status: "running",
       pendingTools,
+      pendingToolCalls,
       toolResults: {},
       stream: "",
       reasoningStream: "",
@@ -1214,20 +788,39 @@ export function upsertToolCallStep(timeline, tools, idRef) {
   ];
 }
 
-export function markToolExecuted(timeline, tool, success) {
+function toolCallName(tool) {
+  return typeof tool === "string" ? tool : tool?.name || "";
+}
+
+function normalizeToolCall(tool, index) {
+  const name = toolCallName(tool) || "unknown";
+  return {
+    name,
+    // 旧 SSE 服务端只发送工具名；保留一个稳定的兼容键。
+    id: typeof tool === "string" ? `${name}:${index}` : tool?.id || `${name}:${index}`,
+  };
+}
+
+export function markToolExecuted(timeline, tool, success, toolCallId = "") {
   const idx = timeline.findLastIndex(
     (item) =>
       item.kind === "step"
       && item.status === "running"
-      && item.pendingTools?.includes(tool)
+      && (item.pendingToolCalls || []).some((call) =>
+        toolCallId ? call.id === toolCallId : call.name === tool
+      )
   );
   if (idx < 0) return timeline;
 
   const next = [...timeline];
   const step = next[idx];
-  const toolResults = { ...(step.toolResults || {}), [tool]: success };
-  const pending = step.pendingTools || [];
-  const allDone = pending.every((t) => t in toolResults);
+  const resolvedCall = (step.pendingToolCalls || []).find((call) =>
+    toolCallId ? call.id === toolCallId : call.name === tool && !(call.id in (step.toolResults || {}))
+  );
+  if (!resolvedCall) return timeline;
+  const toolResults = { ...(step.toolResults || {}), [resolvedCall.id]: success };
+  const pending = step.pendingToolCalls || [];
+  const allDone = pending.every((call) => call.id in toolResults);
   const anyFailed = Object.values(toolResults).some((v) => v === false);
 
   next[idx] = {
@@ -1270,43 +863,6 @@ export function applyFinalizeAllRunningSteps(timeline, { onlyLast = false } = {}
   );
 }
 
-export function formatOutlineDoneMessage(d) {
-  const title = d?.title || "未命名作品";
-  switch (d?.stage) {
-    case "meso":
-      return "中纲生成完成。";
-    case "micro":
-      return "小纲生成完成。";
-    case "character_details":
-      return "角色详情生成完成。";
-    default:
-      return `已创建作品「${title}」的大纲。`;
-  }
-}
-
-function formatOutlineProgress(d) {
-  if (!d?.section || !d?.node) return "";
-  const n = d.node;
-  if (d.section === "story") return `作品：${n.title || "未命名"}｜${n.genre || "未分类"}｜${n.volume || ""}\n`;
-  if (d.section === "macro_phases") return `大纲 ${d.index ?? ""}/${d.total ?? ""}：${n.name || ""}${n.goal ? `｜${n.goal}` : ""}\n`;
-  if (d.section === "meso_stages") return `中纲 ${d.index ?? ""}/${d.total ?? ""}：${n.name || ""} - ${n.conflict || n.cause || ""}\n`;
-  if (d.section === "foreshadowing") return `伏笔 ${d.index ?? ""}/${d.total ?? ""}：${n.content || ""}\n`;
-  if (d.section === "characters") return `角色 ${d.index ?? ""}/${d.total ?? ""}：${n.name || ""}（${n.role_type || "配角"}）\n`;
-  return "";
-}
-
-/**
- * Extract the "category" from a query_result source string.
- * e.g. "伏笔 F1" -> "伏笔", "第1章大纲" -> "章节大纲", "第1章" -> "前文", "角色设定" -> null (single)
- */
-function extractQueryCategory(source) {
-  if (!source) return null;
-  if (/^伏笔\s/i.test(source)) return "伏笔";
-  if (/^第\d+章大纲/.test(source)) return "章节大纲";
-  if (/^第\d+章$/.test(source)) return "前文";
-  return source;
-}
-
 /**
  * Fetch authoritative todolist from server and replace in-memory cards.
  * Ensures the UI reflects final state even if SSE events were missed
@@ -1315,7 +871,6 @@ function extractQueryCategory(source) {
 async function reconcileTodolist(sessionId, setTimeline) {
   if (!sessionId) return;
   try {
-    const { sessionApi } = await import("../lib/api.js");
     const msgs = await sessionApi.getSupervisorMessages(sessionId);
     if (!msgs || msgs.length === 0) return;
 
@@ -1324,8 +879,6 @@ async function reconcileTodolist(sessionId, setTimeline) {
       if (m.role !== "assistant" || !m.meta) continue;
       if (m.meta.type === "requirements_todolist" && m.meta.todoCard?.todolist) {
         serverCards.push(m.meta.todoCard);
-      } else if (m.meta.intent === "requirements_planner" && m.meta.requirements_plan?.todolist) {
-        serverCards.push(m.meta.requirements_plan);
       }
     }
     if (serverCards.length === 0) return;

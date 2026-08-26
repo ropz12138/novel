@@ -1,40 +1,43 @@
 import { Children, useState, useEffect, useLayoutEffect, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, Target, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus } from "lucide-react";
+import { X, Trash2, BookOpen, FileText, User, Target, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
 
 const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
 const HIGHLIGHT_TOKEN_SUFFIX = "%%";
+const PLOT_HIGHLIGHT_START = "[[PLOT]]";
+const PLOT_HIGHLIGHT_END = "[[/PLOT]]";
 
-function maskStrongHighlights(content) {
+function maskPlotHighlights(content) {
   const highlights = [];
   let masked = "";
   let cursor = 0;
 
   while (cursor < content.length) {
-    const start = content.indexOf("**", cursor);
+    const start = content.indexOf(PLOT_HIGHLIGHT_START, cursor);
     if (start < 0) {
       masked += content.slice(cursor);
       break;
     }
 
-    const end = content.indexOf("**", start + 2);
+    const contentStart = start + PLOT_HIGHLIGHT_START.length;
+    const end = content.indexOf(PLOT_HIGHLIGHT_END, contentStart);
     if (end < 0) {
       masked += content.slice(cursor);
       break;
     }
 
     masked += content.slice(cursor, start);
-    const text = content.slice(start + 2, end);
+    const text = content.slice(contentStart, end);
     if (text) {
       const index = highlights.length;
       highlights.push(text);
       masked += `${HIGHLIGHT_TOKEN_PREFIX}${index}${HIGHLIGHT_TOKEN_SUFFIX}`;
     } else {
-      masked += "****";
+      masked += `${PLOT_HIGHLIGHT_START}${PLOT_HIGHLIGHT_END}`;
     }
-    cursor = end + 2;
+    cursor = end + PLOT_HIGHLIGHT_END.length;
   }
 
   return { masked, highlights };
@@ -84,7 +87,7 @@ function renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix = 
 }
 
 function MarkdownRenderer({ content }) {
-  const { masked, highlights } = maskStrongHighlights(content || "");
+  const { masked, highlights } = maskPlotHighlights(content || "");
   const renderChildren = (children, keyPrefix) => renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix);
 
   return (
@@ -219,7 +222,7 @@ function ChapterElementsBar({ elements }) {
   );
 }
 
-function ChapterReadingView({ node, scrollRef }) {
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
@@ -227,10 +230,10 @@ function ChapterReadingView({ node, scrollRef }) {
   const chapterElements = node.extra_data?.chapter_elements || [];
 
   return (
-    <div ref={scrollRef} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
-      <div className="max-w-2xl mx-auto px-8 py-12">
+    <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
+      <div className={`${isFullscreen ? "max-w-4xl px-16 py-16" : "max-w-2xl px-8 py-12"} mx-auto`}>
         <div className="text-center mb-12">
-          <h1 className="text-3xl font-serif font-bold text-gray-900 mb-2">
+          <h1 className={`${isFullscreen ? "text-4xl" : "text-3xl"} font-serif font-bold text-gray-900 mb-2`}>
             {node.label}
           </h1>
           <div className="w-16 h-px bg-gray-300 mx-auto" />
@@ -255,8 +258,8 @@ function ChapterReadingView({ node, scrollRef }) {
 
         <ChapterElementsBar elements={chapterElements} />
 
-        <div className="prose prose-lg max-w-none font-serif">
-          <div className="text-lg leading-relaxed text-gray-800">
+        <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none font-serif`}>
+          <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
             {node.content ? <MarkdownRenderer content={node.content} /> : <p className="whitespace-pre-wrap">暂无内容</p>}
           </div>
         </div>
@@ -303,12 +306,12 @@ function ChapterReadingView({ node, scrollRef }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
 
   return (
-    <div ref={scrollRef} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
+    <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
       <div className="p-6 space-y-6">
         <div className="flex items-center gap-3">
           <div className={`p-2 rounded-lg ${config.bg}`}>
@@ -424,7 +427,7 @@ function EditView({ title, content, isChapter, chapterElements, onTitleChange, o
   );
 }
 
-function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked }) {
+function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, chapterNodes, onChapterNavigate }) {
   const isChapter = node.type === "chapter";
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.label);
@@ -433,10 +436,13 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
     isChapter ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el })) : []
   );
   const [saving, setSaving] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectedText, setSelectedText] = useState("");
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
 
   useEffect(() => {
     setIsEditing(false);
+    setSelectedText("");
     setEditTitle(node.label);
     setEditContent(node.content || "");
     setEditChapterElements(
@@ -462,10 +468,27 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
     }
   };
 
+  const handleTextSelect = (event) => {
+    const selection = window.getSelection?.();
+    if (!selection || selection.rangeCount === 0) return;
+    const range = selection.getRangeAt(0);
+    if (!event.currentTarget.contains(range.commonAncestorContainer)) return;
+    setSelectedText(selection.toString().trim());
+  };
+
+  const handleAddContext = () => {
+    onAddContext?.(node, selectedText || undefined);
+    setSelectedText("");
+  };
+
   return (
     <div
       className={`relative flex flex-col bg-white shadow-xl animate-in slide-in-from-left ${
-        isEditing || isChapter ? "w-[700px] max-w-[90vw]" : "w-[420px] max-w-[90vw]"
+        isFullscreen
+          ? "h-full w-full"
+          : isEditing || isChapter
+            ? "h-full w-[700px] max-w-[90vw]"
+            : "h-full w-[420px] max-w-[90vw]"
       }`}
     >
       <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
@@ -496,9 +519,10 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
             <>
               {onAddContext && (
                 <button
-                  onClick={() => onAddContext(node)}
+                  onClick={handleAddContext}
                   className="p-1.5 rounded-md text-gray-400 hover:text-amber-500 hover:bg-amber-50 transition-colors"
-                  title="加入对话上下文"
+                  title={selectedText ? "加入选中文本到对话上下文" : "加入对话上下文"}
+                  aria-label={selectedText ? "加入选中文本到对话上下文" : "加入对话上下文"}
                 >
                   <MessageSquarePlus className="w-4 h-4" />
                 </button>
@@ -542,6 +566,41 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
               )}
             </>
           )}
+          {isChapter && isFullscreen && Array.isArray(chapterNodes) && chapterNodes.length > 1 && (() => {
+            const currentIndex = chapterNodes.findIndex((chapter) => chapter.id === node.id);
+            const previousChapter = currentIndex > 0 ? chapterNodes[currentIndex - 1] : null;
+            const nextChapter = currentIndex >= 0 ? chapterNodes[currentIndex + 1] : null;
+            return (
+              <div className="mr-1 flex items-center gap-1 border-r border-gray-200 pr-1">
+                <button
+                  onClick={() => previousChapter && onChapterNavigate?.(previousChapter)}
+                  disabled={!previousChapter}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
+                  title="上一章"
+                  aria-label="上一章"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button
+                  onClick={() => nextChapter && onChapterNavigate?.(nextChapter)}
+                  disabled={!nextChapter}
+                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
+                  title="下一章"
+                  aria-label="下一章"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })()}
+          <button
+            onClick={() => setIsFullscreen((value) => !value)}
+            className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+            title={isFullscreen ? "退出全屏" : "全屏查看"}
+            aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
+          >
+            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+          </button>
           <button
             onClick={onClose}
             className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -562,22 +621,22 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
           onChapterElementsChange={setEditChapterElements}
         />
       ) : isChapter ? (
-        <ChapterReadingView node={node} scrollRef={detailScrollRef} />
+        <ChapterReadingView node={node} scrollRef={detailScrollRef} isFullscreen={isFullscreen} onTextSelect={handleTextSelect} />
       ) : (
-        <DefaultNodeView node={node} scrollRef={detailScrollRef} />
+        <DefaultNodeView node={node} scrollRef={detailScrollRef} onTextSelect={handleTextSelect} />
       )}
     </div>
   );
 }
 
-export default function NodeDetailDrawer({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked }) {
+export default function NodeDetailDrawer({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, chapterNodes = [], onChapterNavigate }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
-      <NodeDetailDrawerInner node={node} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} />
+      <NodeDetailDrawerInner node={node} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
     </div>
   );
 }

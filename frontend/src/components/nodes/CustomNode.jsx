@@ -39,7 +39,6 @@ const CustomNode = memo(({
   onNodeClick,
   onFocusEdges,
   isEdgesFocused,
-  isHighlighted,
   isCollapsed,
   hasChildren,
   linkedElementCount = 0,
@@ -79,12 +78,12 @@ const CustomNode = memo(({
       <div
         className={`element-node-3d relative box-border rounded-full flex flex-col items-center justify-center px-2 cursor-pointer transition-all ${
           selected ? "ring-2 ring-blue-500" : ""
-        } ${isHighlighted ? "node-highlighted" : ""} ${isLocked ? "ring-2 ring-sky-500" : ""}`}
+        } ${isLocked ? "ring-2 ring-sky-500" : ""}`}
         style={{
           width: ELEMENT_SIZE,
           height: ELEMENT_SIZE,
           "--element-bg": style.bg,
-          "--element-border": isHighlighted ? "#3b82f6" : style.border,
+          "--element-border": style.border,
           "--element-fill-opacity": "0.76",
         }}
         onClick={handleClick}
@@ -134,10 +133,10 @@ const CustomNode = memo(({
     <div
       className={`box-border relative h-[120px] w-[250px] overflow-hidden px-4 py-3 rounded-lg shadow-md border-2 cursor-pointer hover:shadow-lg transition-all group ${
         charScope?.dashed ? "border-dashed" : ""
-      } ${selected ? "ring-2 ring-blue-500" : ""} ${isHighlighted ? "node-highlighted" : ""} ${isLocked ? "ring-2 ring-sky-500" : ""}`}
+      } ${selected ? "ring-2 ring-blue-500" : ""} ${isLocked ? "ring-2 ring-sky-500" : ""}`}
       style={{
         backgroundColor: style.bg,
-        borderColor: isLocked ? "#0ea5e9" : (isHighlighted ? "#3b82f6" : (charScope ? charScope.border : style.border)),
+        borderColor: isLocked ? "#0ea5e9" : (charScope ? charScope.border : style.border),
       }}
       onClick={handleClick}
     >

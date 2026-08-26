@@ -155,21 +155,6 @@ body {
   }
 }
 
-/* Node highlight animation */
-@keyframes node-highlight {
-  0%, 100% {
-    box-shadow: 0 0 0 0 rgba(59, 130, 246, 0.4);
-  }
-  50% {
-    box-shadow: 0 0 0 8px rgba(59, 130, 246, 0);
-  }
-}
-
-.node-highlighted {
-  animation: node-highlight 1s ease-in-out 3;
-  z-index: 10;
-}
-
 /* 元素节点：半透明球面渐变 + 高光反光，增强立体感 */
 .element-node-3d {
   --element-bg: #fef3c7;

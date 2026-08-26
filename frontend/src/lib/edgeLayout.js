@@ -144,11 +144,6 @@ export function pointOnBezier(geometry, t) {
   };
 }
 
-export function bezierPath(geometry) {
-  const { p0, p1, p2, p3 } = geometry;
-  return `M${p0.x},${p0.y} C${p1.x},${p1.y} ${p2.x},${p2.y} ${p3.x},${p3.y}`;
-}
-
 function geometryForEdge(nodeMap, edge) {
   const source = nodeMap.get(edge.source);
   const target = nodeMap.get(edge.target);

@@ -1,4 +1,4 @@
-/** 与 backend/canvas/app/constants.py 及 CustomNode 固定尺寸保持一致 */
+/** 与 backend/constants.py 及 CustomNode 固定尺寸保持一致 */
 export const NODE_WIDTH = 250;
 export const NODE_HEIGHT = 120;
 export const ELEMENT_SIZE = 90;

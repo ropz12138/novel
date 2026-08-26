@@ -7,10 +7,13 @@ dist/
 build/
 .eggs/
 *.whl
+.pytest_cache/
+
+# === Local agent tooling ===
 .agents/
 .claude/
 .codex/
-.pytest_cache/
+
 # === Virtual Environment ===
 .venv/
 venv/
@@ -22,20 +25,19 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# === Frontend Build ===
+# === Frontend build & cache ===
 frontend/dist/
 frontend/.vite/
+frontend/*.log
+*.rdb
 
 # === Config with secrets ===
 config.json
-backend/config.json
 
-# === Runtime logs & pids ===
-.run/*.log
-.run/*.log.*
-.run/*.pid
-.run/canvas_renders/
-.run/illustrations/
+# === Runtime ===
+logs/
+data/
+tmp/
 
 # === IDE ===
 .vscode/
@@ -47,8 +49,4 @@ backend/config.json
 # === OS ===
 .DS_Store
 Thumbs.db
-
-# === Test temp files ===
-test.html
 docs/
-nginx-novel-locations.conf

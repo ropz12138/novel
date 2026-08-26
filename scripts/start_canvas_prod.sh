@@ -3,11 +3,11 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
-BACKEND_DIR="$ROOT_DIR/backend/canvas"
+BACKEND_DIR="$ROOT_DIR/backend"
 NGINX_HTML="/usr/local/nginx/html"
-RUN_DIR="$ROOT_DIR/.run"
+LOG_DIR="$ROOT_DIR/logs"
 
-mkdir -p "$NGINX_HTML/novel" "$RUN_DIR"
+mkdir -p "$NGINX_HTML/novel" "$LOG_DIR"
 
 # --- 读取端口配置 ---
 read_port_config() {
@@ -48,12 +48,12 @@ cleanup_old() {
 
 kill_backend_by_cmdline() {
   local pids
-  pids="$(pgrep -f "uvicorn app.main:app --host 0.0.0.0 --port $PROD_PORT" 2>/dev/null || true)"
+  pids="$(pgrep -f "uvicorn main:app --host 0.0.0.0 --port $PROD_PORT" 2>/dev/null || true)"
   for p in $pids; do kill "$p" 2>/dev/null || true; done
 }
 
 # --- 清理旧进程 ---
-cleanup_old "$RUN_DIR/canvas-backend-prod.pid" "canvas-backend"
+cleanup_old "$LOG_DIR/canvas-backend-prod.pid" "canvas-backend"
 
 kill_backend_by_cmdline
 sleep 1
@@ -79,22 +79,22 @@ echo "前端构建完成"
 # --- 启动后端 ---
 echo "启动 Canvas 后端 (端口: $PROD_PORT)..."
 cd "$BACKEND_DIR"
-if [ ! -d ".venv" ]; then
-  python3 -m venv .venv
+VENV_PY="$BACKEND_DIR/.venv/bin/python"
+VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
+if [ ! -x "$VENV_PY" ] || grep -q 'backend/canvas/.venv' "$BACKEND_DIR/.venv/pyvenv.cfg" 2>/dev/null; then
+  echo "重建 Python 虚拟环境..."
+  rm -rf "$BACKEND_DIR/.venv"
+  python3 -m venv "$BACKEND_DIR/.venv"
+  VENV_PY="$BACKEND_DIR/.venv/bin/python"
+  VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
 fi
-source .venv/bin/activate
-pip install -r requirements.txt 2>&1 | tail -3
+"$VENV_PY" -m pip install -r requirements.txt 2>&1 | tail -3
 
-# --- 数据库迁移（幂等，保证 schema 与 model 一致，避免代码先于迁移导致 500） ---
-echo "--- 执行数据库迁移 ---"
-python run_migrations.py
-
-nohup uvicorn app.main:app --host 0.0.0.0 --port "$PROD_PORT" --workers 1 > "$RUN_DIR/canvas-backend-prod.log" 2>&1 &
-echo $! > "$RUN_DIR/canvas-backend-prod.pid"
-deactivate
+nohup "$VENV_UVICORN" main:app --host 0.0.0.0 --port "$PROD_PORT" --workers 1 > "$LOG_DIR/canvas-backend-prod.log" 2>&1 &
+echo $! > "$LOG_DIR/canvas-backend-prod.pid"
 
 # --- 启动校验 ---
-backend_pid="$(cat "$RUN_DIR/canvas-backend-prod.pid" 2>/dev/null || true)"
+backend_pid="$(cat "$LOG_DIR/canvas-backend-prod.pid" 2>/dev/null || true)"
 started_ok=0
 for _ in $(seq 1 40); do
   if curl --noproxy '*' -fsS -m 2 -X POST -H "Content-Type: application/json" -d '{}' "http://127.0.0.1:$PROD_PORT/health" >/dev/null 2>&1; then
@@ -107,7 +107,7 @@ done
 if [ "$started_ok" -ne 1 ]; then
   echo "ERROR: canvas-backend 启动失败"
   echo "---- 日志 (tail) ----"
-  tail -n 80 "$RUN_DIR/canvas-backend-prod.log" || true
+  tail -n 80 "$LOG_DIR/canvas-backend-prod.log" || true
   exit 1
 fi
 

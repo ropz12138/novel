@@ -5,7 +5,7 @@
 ## Structure
 
 - `frontend`: React 前端（Canvas 画布 + Supervisor 聊天）
-- `backend/canvas`: FastAPI 后端（画布 API + 单 Agent Supervisor）
+- `backend`: FastAPI 后端（画布 API + 单 Agent Supervisor）
 - `scripts`: 开发/生产启动脚本
 - `docs`: 设计文档
 

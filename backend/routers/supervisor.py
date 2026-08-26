@@ -1,0 +1,326 @@
+"""Supervisor 兼容端点 — 对齐 main 分支 API，使 useSupervisorChat 可直接复用"""
+import json
+import asyncio
+import logging
+from datetime import datetime
+from typing import List, Optional
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
+
+from database import SessionLocal
+from models.user import User
+from routers.auth import get_current_user
+from services.agents.supervisor import supervisor_agent
+from services.canvas_checkpoint_service import capture_canvas_checkpoint, prepare_edit_resend
+from services.session_store import session_store
+from services.supervisor_event_persist import persist_supervisor_event_safe
+from services import user_action_service as action_svc
+
+logger = logging.getLogger(__name__)
+
+router = APIRouter(prefix="/supervisor", tags=["supervisor"])
+
+
+class SupervisorStartRequest(BaseModel):
+    message: str
+    work_id: Optional[str] = None
+    context_node_ids: Optional[List[str]] = None
+
+
+class SupervisorResumeRequest(BaseModel):
+    session_id: str
+    message: str
+    context_node_ids: Optional[List[str]] = None
+
+
+class SupervisorEditResendRequest(BaseModel):
+    session_id: str
+    message_id: str
+    message: str
+    context_node_ids: Optional[List[str]] = None
+
+
+def _sse_format(event: str, data: dict) -> str:
+    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+
+def _wrap_emit(session_id: str, queue_put):
+    """包装 emit：SSE 推送 + Todolist 持久化。"""
+
+    async def emit(event: str, data: dict):
+        if session_id and isinstance(data, dict):
+            try:
+                persist_supervisor_event_safe(session_id, event, data)
+            except Exception:
+                logger.exception("persist supervisor event failed: %s", event)
+        await queue_put((event, data))
+
+    return emit
+
+
+def _capture_checkpoint_before_agent(
+    session_id: str,
+    work_id: Optional[str],
+    user_message: dict,
+) -> None:
+    if not work_id or not user_message:
+        return
+    db = SessionLocal()
+    try:
+        capture_canvas_checkpoint(
+            db,
+            session_id=session_id,
+            work_id=work_id,
+            trigger_message_id=user_message["id"],
+            sort_order=user_message.get("sort_order", 0),
+        )
+    finally:
+        db.close()
+
+
+def _store_user_actions_message(session_id: str, work_id: Optional[str]) -> Optional[dict]:
+    """把"自上次 agent 回复后的用户画布操作"作为一条独立 user 消息存入对话，
+    排在用户文字消息之前。agent 在本轮会同时看到操作与用户文字。"""
+    if not work_id:
+        return None
+    db = SessionLocal()
+    try:
+        section = action_svc.build_pending_actions_section(db, work_id)
+    except Exception:
+        logger.exception("build user_actions_section failed work_id=%s", work_id)
+        section = ""
+    finally:
+        db.close()
+    if section:
+        return session_store.add_message(
+            session_id, "user", section, meta={"type": "user_canvas_actions"}
+        )
+    return None
+
+
+async def _execute_supervisor_run(
+    *,
+    session_id: str,
+    user_message: str,
+    context: dict,
+    wrapped_emit,
+) -> None:
+    try:
+        result = await supervisor_agent.run(
+            user_message,
+            context,
+            emit=wrapped_emit,
+        )
+        if not result.get("success", False):
+            raise RuntimeError(result.get("error") or "Supervisor 执行失败")
+        session_store.update_session(session_id, stage="done", status="completed")
+        _advance_watermark_from_context(context)
+    except asyncio.CancelledError:
+        session_store.mark_session_interrupted(session_id)
+        try:
+            await wrapped_emit("supervisor_interrupted", {"reason": "cancelled"})
+        except Exception:
+            logger.exception("emit supervisor_interrupted failed session_id=%s", session_id)
+        raise
+    except Exception as e:
+        await wrapped_emit("error", {"message": str(e)})
+        session_store.update_session(session_id, stage="done", status="error")
+
+
+def _advance_watermark_from_context(context: dict) -> None:
+    """agent 成功结束后推进水位线：下次对话只感知更新的用户操作。"""
+    if not context:
+        return
+    work_id = context.get("work_id")
+    run_started_at = context.get("run_started_at")
+    if not work_id or not run_started_at:
+        return
+    db = SessionLocal()
+    try:
+        action_svc.advance_watermark(db, work_id, run_started_at)
+    except Exception:
+        logger.exception("advance canvas_action_watermark failed work_id=%s", work_id)
+    finally:
+        db.close()
+
+
+def _stream_supervisor_run(
+    *,
+    session_id: str,
+    user_message: str,
+    work_id: Optional[str],
+    user_id: str,
+    context_node_ids: Optional[List[str]],
+    emit_session_created: bool = True,
+    user_message_id: Optional[str] = None,
+    user_actions_message: Optional[dict] = None,
+    pre_run_events: Optional[list[tuple[str, dict]]] = None,
+):
+    queue: asyncio.Queue = asyncio.Queue()
+    wrapped_emit = _wrap_emit(session_id, queue.put)
+
+    run_started_at = datetime.utcnow()
+
+    async def run_agent():
+        try:
+            context = {
+                "user_id": user_id,
+                "work_id": work_id,
+                "session_id": session_id,
+                "context_node_ids": context_node_ids,
+                "run_started_at": run_started_at,
+            }
+            await _execute_supervisor_run(
+                session_id=session_id,
+                user_message=user_message,
+                context=context,
+                wrapped_emit=wrapped_emit,
+            )
+        finally:
+            await queue.put(None)
+
+    async def event_generator():
+        if emit_session_created:
+            yield _sse_format("session_created", {"session_id": session_id})
+        if user_actions_message:
+            yield _sse_format("user_actions_message_stored", user_actions_message)
+        if user_message_id:
+            yield _sse_format("user_message_stored", {"message_id": user_message_id})
+        if pre_run_events:
+            for event, data in pre_run_events:
+                yield _sse_format(event, data)
+        task = asyncio.create_task(run_agent())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                event, data = item
+                if event == "session_created":
+                    continue
+                yield _sse_format(event, data)
+        except asyncio.CancelledError:
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+            raise
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/start")
+async def start_supervisor(
+    payload: SupervisorStartRequest,
+    user: User = Depends(get_current_user),
+):
+    """启动 Supervisor 会话（SSE 流式）"""
+    session = session_store.create_session(user_id=user.id, work_id=payload.work_id)
+    session_id = session["id"]
+
+    user_actions_message = _store_user_actions_message(session_id, payload.work_id)
+    user_msg = session_store.add_message(session_id, "user", payload.message, work_id=payload.work_id)
+    _capture_checkpoint_before_agent(session_id, payload.work_id, user_msg)
+
+    return _stream_supervisor_run(
+        session_id=session_id,
+        user_message=payload.message,
+        work_id=payload.work_id,
+        user_id=user.id,
+        context_node_ids=payload.context_node_ids,
+        user_message_id=user_msg["id"] if user_msg else None,
+        user_actions_message=user_actions_message,
+    )
+
+
+@router.post("/resume")
+async def resume_supervisor(
+    payload: SupervisorResumeRequest,
+    user: User = Depends(get_current_user),
+):
+    """恢复 Supervisor 会话（SSE 流式）"""
+    session = session_store.get_session(payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    session_id = payload.session_id
+    user_actions_message = _store_user_actions_message(
+        session_id, session.get("work_id")
+    )
+    user_msg = session_store.add_message(
+        session_id, "user", payload.message, work_id=session.get("work_id"),
+    )
+    session_store.update_session(session_id, stage="running", status="running")
+    _capture_checkpoint_before_agent(session_id, session.get("work_id"), user_msg)
+
+    return _stream_supervisor_run(
+        session_id=session_id,
+        user_message=payload.message,
+        work_id=session.get("work_id"),
+        user_id=user.id,
+        context_node_ids=payload.context_node_ids,
+        emit_session_created=True,
+        user_message_id=user_msg["id"] if user_msg else None,
+        user_actions_message=user_actions_message,
+    )
+
+
+@router.post("/edit-resend")
+async def edit_resend_supervisor(
+    payload: SupervisorEditResendRequest,
+    user: User = Depends(get_current_user),
+):
+    """编辑已发送用户消息并重新发送：先恢复画布到该消息执行前，截断对话尾巴，再跑 Agent。"""
+    session = session_store.get_session(payload.session_id)
+    if not session:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if session["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    work_id = session.get("work_id")
+    if not work_id:
+        raise HTTPException(status_code=400, detail="会话未绑定作品，无法恢复画布")
+
+    db = SessionLocal()
+    try:
+        new_msg = prepare_edit_resend(
+            db,
+            session_id=payload.session_id,
+            work_id=work_id,
+            message_id=payload.message_id,
+            new_content=payload.message,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+    finally:
+        db.close()
+
+    session_store.update_session(payload.session_id, stage="running", status="running")
+
+    return _stream_supervisor_run(
+        session_id=payload.session_id,
+        user_message=payload.message,
+        work_id=work_id,
+        user_id=user.id,
+        context_node_ids=payload.context_node_ids,
+        emit_session_created=False,
+        pre_run_events=[
+            ("canvas_restored", {"message_id": payload.message_id}),
+            ("messages_truncated", {"from_message_id": payload.message_id}),
+            ("user_message_edited", {"message_id": new_msg["id"], "content": new_msg["content"]}),
+        ],
+    )

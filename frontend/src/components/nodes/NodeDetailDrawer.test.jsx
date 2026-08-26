@@ -43,21 +43,21 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("自动修订 0 次")).toBeDefined();
   });
 
-  it("renders custom double-star highlights in chapter node content", () => {
+  it("renders dedicated plot highlights in chapter node content", () => {
     const node = {
       id: "node-1",
       type: "chapter",
       label: "第一章",
-      content: "开场状态：**重点：含标点。** 后续正文。",
+      content: "开场状态。[[PLOT]]林川进入档案室，并找到了失踪人员名单。[[/PLOT]]后续正文。",
       extra_data: {},
     };
 
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
 
-    const highlighted = screen.getByText("重点：含标点。");
+    const highlighted = screen.getByText("林川进入档案室，并找到了失踪人员名单。");
     expect(highlighted).toBeDefined();
     expect(highlighted.className).toContain("bg-amber-100");
-    expect(screen.queryByText("**重点：含标点。**")).toBeNull();
+    expect(screen.queryByText("[[PLOT]]林川进入档案室，并找到了失踪人员名单。[[/PLOT]]")).toBeNull();
     expect(document.querySelector("strong")).toBeNull();
   });
 
@@ -83,7 +83,7 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("仓库逃亡")).toBeDefined();
   });
 
-  it("renders custom double-star highlights in default node content", () => {
+  it("keeps Markdown double-star syntax as ordinary bold text", () => {
     const node = {
       id: "node-1",
       type: "character",
@@ -94,9 +94,9 @@ describe("NodeDetailDrawer", () => {
 
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
 
-    const highlighted = screen.getByText("谨慎、克制，但会冒险。");
-    expect(highlighted).toBeDefined();
-    expect(highlighted.className).toContain("bg-amber-100");
+    const boldText = screen.getByText("谨慎、克制，但会冒险。");
+    expect(boldText.tagName).toBe("STRONG");
+    expect(boldText.className).not.toContain("bg-amber-100");
   });
 
   it("renders missing planning items when sync check fails", () => {
@@ -129,6 +129,53 @@ describe("NodeDetailDrawer", () => {
   it("renders nothing when node is null", () => {
     const { container } = render(<NodeDetailDrawer node={null} onClose={vi.fn()} />);
     expect(container.firstChild).toBeNull();
+  });
+
+  it("toggles between sidebar and fullscreen modes", () => {
+    const node = { id: "fullscreen-node", type: "outline", label: "大纲", content: "正文" };
+    const { container } = render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+
+    const fullscreenButton = screen.getByTitle("全屏查看");
+    expect(container.querySelector(".w-\\[420px\\]")).not.toBeNull();
+
+    fireEvent.click(fullscreenButton);
+
+    expect(screen.getByTitle("退出全屏")).toBeDefined();
+    expect(container.querySelector(".w-full.h-full")).not.toBeNull();
+  });
+
+  it("shows previous and next chapter buttons only in fullscreen chapter mode", () => {
+    const chapters = [
+      { id: "chapter-1", type: "chapter", label: "第一章", content: "第一章正文" },
+      { id: "chapter-2", type: "chapter", label: "第二章", content: "第二章正文" },
+    ];
+    const onChapterNavigate = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={chapters[0]}
+        onClose={vi.fn()}
+        chapterNodes={chapters}
+        onChapterNavigate={onChapterNavigate}
+      />,
+    );
+
+    expect(screen.queryByTitle("下一章")).toBeNull();
+    fireEvent.click(screen.getByTitle("全屏查看"));
+
+    expect(screen.getByTitle("上一章").disabled).toBe(true);
+    fireEvent.click(screen.getByTitle("下一章"));
+    expect(onChapterNavigate).toHaveBeenCalledWith(chapters[1]);
+  });
+
+  it("enlarges chapter typography in fullscreen mode", () => {
+    const node = { id: "large-chapter", type: "chapter", label: "第一章", content: "正文" };
+    const { container } = render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+
+    expect(container.querySelector(".text-lg.leading-relaxed")).not.toBeNull();
+    fireEvent.click(screen.getByTitle("全屏查看"));
+
+    expect(container.querySelector(".text-xl.leading-loose")).not.toBeNull();
+    expect(container.querySelector(".text-4xl")).not.toBeNull();
   });
 
   it("restores the last scroll position when reopening the same node", async () => {

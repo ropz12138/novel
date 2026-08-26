@@ -5,21 +5,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "../co
 import { Input } from "../components/ui/input";
 import { Label } from "../components/ui/label";
 import { API_BASE } from "../lib/runtime-config";
+import { publicJson } from "../lib/authFetch";
 
 export function RegisterPage() {
   const navigate = useNavigate();
   const [form, setForm] = useState({ username: "", email: "", password: "" });
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
-  const parseError = (data, fallback) => {
-    if (typeof data?.detail === "string" && data.detail) return data.detail;
-    if (Array.isArray(data?.detail) && data.detail.length > 0) {
-      const first = data.detail[0];
-      if (first?.msg) return first.msg;
-    }
-    return fallback;
-  };
-
   if (localStorage.getItem("novel_token")) {
     return <Navigate to="/" replace />;
   }
@@ -33,15 +25,10 @@ export function RegisterPage() {
     setSubmitting(true);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/auth/register`, {
+      const data = await publicJson(`${API_BASE}/auth/register`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify(form),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(parseError(data, "注册失败"));
-      }
+      }, "注册失败");
       localStorage.setItem("novel_token", data.token);
       localStorage.setItem("novel_user", data?.user?.username || form.username || "创作者");
       navigate("/", { replace: true });

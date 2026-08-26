@@ -1,3 +1,4 @@
+import { forwardRef } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
@@ -15,7 +16,9 @@ vi.mock("../lib/canvasApi", () => ({
 }));
 
 vi.mock("../components/Canvas", () => ({
-  default: () => <div data-testid="canvas-mock" />,
+  default: forwardRef(function CanvasMock({ workId }, _ref) {
+    return <div data-testid="canvas-mock" data-work-id={workId} />;
+  }),
 }));
 
 vi.mock("../components/AgentChat", () => ({
@@ -49,7 +52,7 @@ describe("CanvasPage delete work", () => {
 
   it("shows delete button in work selector and calls deleteWork", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <CanvasPage />
       </MemoryRouter>,
     );
@@ -68,9 +71,23 @@ describe("CanvasPage delete work", () => {
     });
   });
 
+  it("restores the last active work after a page refresh", async () => {
+    window.localStorage.setItem("novel_canvas_last_active_work", "w2");
+
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage />
+      </MemoryRouter>,
+    );
+
+    const canvas = await screen.findByTestId("canvas-mock");
+    expect(canvas.dataset.workId).toBe("w2");
+    expect(screen.getByText("作品二")).toBeDefined();
+  });
+
   it("lets the user drag the chat panel wider", async () => {
     render(
-      <MemoryRouter>
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <CanvasPage />
       </MemoryRouter>,
     );
