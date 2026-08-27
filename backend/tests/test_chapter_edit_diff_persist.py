@@ -112,8 +112,8 @@ def test_persist_node_content_diff(db_session, sample_session):
     """node_content_diff 事件应正确写入 supervisor_messages。"""
     session_id = sample_session.id
     data = {
-        "node_id": "node-style-1",
-        "node_type": "style",
+        "node_id": "node-note-1",
+        "node_type": "note",
         "title": "风格说明",
         "text_count": 120,
         "text_count_delta": 12,
@@ -133,9 +133,9 @@ def test_persist_node_content_diff(db_session, sample_session):
 
     msg = db_session.query(SupervisorMessage).filter_by(session_id=session_id).one()
     card = msg.meta["chapterContentDiffCard"]
-    assert card["node_id"] == "node-style-1"
-    assert card["chapter_node_id"] == "node-style-1"
-    assert card["node_type"] == "style"
+    assert card["node_id"] == "node-note-1"
+    assert card["chapter_node_id"] == "node-note-1"
+    assert card["node_type"] == "note"
     assert card["text_count"] == 120
     assert card["text_count_delta"] == 12
     assert card["hunks"][0]["new_text"] == "新风格"

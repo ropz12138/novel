@@ -1,19 +1,14 @@
 """自研 LLM 层：httpx 直连 OpenAI / Anthropic，无 LangChain 传输依赖。
 
-业务入口是 BaseLLMProvider / LLMChatService；不要直接实例化协议客户端。
+业务入口是 BaseLLMProvider / NovelLLM；不要直接实例化协议客户端。
 """
 from __future__ import annotations
 
-import asyncio
-import base64
 import copy
 import json
 import logging
-import mimetypes
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
-from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import Any
 
 import httpx
@@ -22,24 +17,16 @@ from services.llm.llm_complete_utils import (
     LLMCompleteError,
     extract_anthropic_text,
     extract_openai_text,
-    parse_json_object,
 )
 from services.llm.llm_raw_log import LLMRawLog
 from services.llm.llm_tool import (
     ToolCallFinished,
-    ToolCallResult,
-    ToolLoopEvent,
-    ToolRegistry,
     ToolStreamEvent,
-    build_tool_error_result,
 )
-from services.llm.llm_types import ChatMessage, LLMModelConfig
+from services.llm.llm_types import LLMModelConfig
 
 logger = logging.getLogger("llm")
 
-DEFAULT_MAX_TOOL_ITERATIONS = 50
-
-LLMBeforeRequestHook = Callable[[int, list[dict[str, Any]], list[dict[str, Any]]], None]
 LLMRawEventHook = Callable[[dict[str, Any]], None]
 
 
@@ -49,29 +36,6 @@ def resolve_openai_tool_choice(tool_choice):
     if isinstance(tool_choice, str) and tool_choice not in ("auto", "none", "required"):
         return {"type": "function", "function": {"name": tool_choice}}
     return tool_choice
-
-
-@asynccontextmanager
-async def _dummy_traced_run(*args, **kwargs):
-    yield None
-
-
-def _dummy_set_run_outputs(*args, **kwargs):
-    pass
-
-
-try:
-    from services.observability.langsmith_tracing import set_run_outputs, traced_run
-except ImportError:
-    set_run_outputs = _dummy_set_run_outputs
-    traced_run = _dummy_traced_run
-
-try:
-    from services.agent_run_manager import agent_run_manager, current_run_id
-except ImportError:
-    agent_run_manager = None
-    def current_run_id():
-        return None
 
 
 def response_format_json_retryable(detail: str) -> bool:
@@ -98,7 +62,7 @@ class LLMProtocolClient(ABC):
     @abstractmethod
     async def stream_chat(
         self,
-        messages: Sequence[ChatMessage | Mapping[str, Any]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         client: httpx.AsyncClient | None = None,
         tools: list[dict[str, Any]] | None = None,
@@ -110,7 +74,7 @@ class LLMProtocolClient(ABC):
     @abstractmethod
     def complete(
         self,
-        messages: Sequence[ChatMessage | Mapping[str, Any]],
+        messages: Sequence[Mapping[str, Any]],
         *,
         temperature: float = 0.2,
         timeout_seconds: int = 120,
@@ -119,47 +83,9 @@ class LLMProtocolClient(ABC):
     ) -> str:
         raise NotImplementedError
 
-    @abstractmethod
-    async def acomplete(
-        self,
-        messages: Sequence[ChatMessage | Mapping[str, Any]],
-        *,
-        temperature: float = 0.2,
-        timeout_seconds: int = 120,
-        response_format_json: bool = False,
-        client: httpx.AsyncClient | None = None,
-    ) -> str:
-        raise NotImplementedError
-
-    def complete_json(self, messages, *, temperature=0.2, timeout_seconds=120, client=None) -> dict[str, Any]:
-        text = self.complete(
-            messages,
-            temperature=temperature,
-            timeout_seconds=timeout_seconds,
-            response_format_json=True,
-            client=client,
-        )
-        return parse_json_object(text)
-
-    async def acomplete_json(self, messages, *, temperature=0.2, timeout_seconds=120, client=None) -> dict[str, Any]:
-        text = await self.acomplete(
-            messages,
-            temperature=temperature,
-            timeout_seconds=timeout_seconds,
-            response_format_json=True,
-            client=client,
-        )
-        return parse_json_object(text)
-
     @staticmethod
-    def _normalize_messages(messages: Sequence[ChatMessage | Mapping[str, Any]]) -> list[dict[str, Any]]:
-        normalized: list[dict[str, Any]] = []
-        for message in messages:
-            if isinstance(message, ChatMessage):
-                normalized.append(message.to_dict())
-            else:
-                normalized.append(dict(message))
-        return normalized
+    def _normalize_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+        return [dict(message) for message in messages]
 
     @staticmethod
     def _join_url(base_url: str, path: str) -> str:
@@ -252,42 +178,6 @@ class OpenAILLMClient(LLMProtocolClient):
         finally:
             if owns:
                 active.close()
-        return extract_openai_text(body)
-
-    async def acomplete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
-        payload = self._openai_complete_payload(messages, temperature=temperature, response_format_json=response_format_json)
-        url = self._join_url(self.config.base_url, "/chat/completions")
-        owns = client is None
-        active = client or httpx.AsyncClient(timeout=timeout_seconds)
-        raw_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="acomplete")
-        raw_log.request(url=url, payload=payload)
-        try:
-            async def retry_post(next_payload):
-                retry_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="acomplete_retry")
-                retry_log.request(url=url, payload=next_payload)
-                resp = await active.post(url, headers=self._openai_headers(), json=next_payload)
-                return self._handle_complete_response(resp, next_payload, retry_log, lambda p: None)
-
-            response = await active.post(url, headers=self._openai_headers(), json=payload)
-            if response.status_code >= 400:
-                detail = response.text[:500]
-                if response_format_json_retryable(detail) and "response_format" in payload:
-                    payload = dict(payload)
-                    payload.pop("response_format", None)
-                    raw_log.finish()
-                    body = await retry_post(payload)
-                else:
-                    raise LLMCompleteError(f"模型接口返回 HTTP {response.status_code}：{response.text[:500]}")
-            else:
-                body = self._handle_complete_response(response, payload, raw_log, lambda p: None)
-        except Exception as exc:
-            raw_log.fail(exc)
-            if not isinstance(exc, httpx.HTTPError):
-                raise
-            raise LLMCompleteError(f"模型接口连接失败：{exc}") from exc
-        finally:
-            if owns:
-                await active.aclose()
         return extract_openai_text(body)
 
     async def stream_chat(
@@ -519,33 +409,6 @@ class AnthropicLLMClient(LLMProtocolClient):
             raise LLMCompleteError("模型接口返回不是 JSON 对象")
         return extract_anthropic_text(body)
 
-    async def acomplete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
-        del response_format_json
-        payload = self._anthropic_complete_payload(messages, temperature=temperature)
-        url = self._join_url(self.config.base_url, "/messages")
-        owns = client is None
-        active = client or httpx.AsyncClient(timeout=timeout_seconds)
-        raw_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="acomplete")
-        raw_log.request(url=url, payload=payload)
-        try:
-            response = await active.post(url, headers=self._anthropic_headers(), json=payload)
-            raw_log.raw_response(response.content, status_code=response.status_code)
-            if response.status_code >= 400:
-                raise LLMCompleteError(f"模型接口返回 HTTP {response.status_code}：{response.text[:500]}")
-            body = response.json()
-            raw_log.finish()
-        except Exception as exc:
-            raw_log.fail(exc)
-            if not isinstance(exc, httpx.HTTPError):
-                raise
-            raise LLMCompleteError(f"模型接口连接失败：{exc}") from exc
-        finally:
-            if owns:
-                await active.aclose()
-        if not isinstance(body, dict):
-            raise LLMCompleteError("模型接口返回不是 JSON 对象")
-        return extract_anthropic_text(body)
-
     async def stream_chat(self, messages, *, client=None, tools=None, raw_event_hook=None, tool_choice=None):
         normalized = self._normalize_messages(messages)
         system, chat_messages = self.convert_messages(normalized)
@@ -671,155 +534,6 @@ class BaseLLMProvider(LLMProtocolClient):
             logger.warning("主模型 %s complete 失败，切换 fallback %s: %s", self.config.name, self.fallback_config.name if self.fallback_config else "fallback", exc)
             return self.fallback_client.complete(messages, **kwargs)
 
-    def complete_vision(self, *, system_prompt: str, text_parts: Sequence[str], image_paths: Sequence[str | Path], temperature: float = 0.1, timeout_seconds: int = 180, client: httpx.Client | None = None) -> str:
-        if self.config.model_type != "vlm":
-            raise ValueError(f"模型 {self.config.name} 的 type={self.config.model_type}，不支持图片输入")
-        content: list[dict[str, Any]] = [{"type": "text", "text": str(part)} for part in text_parts if str(part).strip()]
-        for raw_path in image_paths:
-            path = Path(raw_path).expanduser().resolve()
-            if not path.is_file():
-                raise FileNotFoundError(f"图片不存在：{path}")
-            media_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
-            encoded = base64.b64encode(path.read_bytes()).decode("ascii")
-            if self.config.provider == "anthropic":
-                content.append({"type": "image", "source": {"type": "base64", "media_type": media_type, "data": encoded}})
-            else:
-                content.append({"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{encoded}"}})
-        return self.complete(
-            [{"role": "system", "content": system_prompt}, {"role": "user", "content": content}],
-            temperature=temperature,
-            timeout_seconds=timeout_seconds,
-            client=client,
-        )
-
-    async def acomplete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
-        kwargs = dict(temperature=temperature, timeout_seconds=timeout_seconds, response_format_json=response_format_json, client=client)
-        try:
-            return await self.client.acomplete(messages, **kwargs)
-        except Exception as exc:
-            if self.fallback_client is None:
-                raise
-            logger.warning("主模型 %s acomplete 失败，切换 fallback %s: %s", self.config.name, self.fallback_config.name if self.fallback_config else "fallback", exc)
-            return await self.fallback_client.acomplete(messages, **kwargs)
-
-    async def acomplete_batch(self, message_batches, *, temperature=0.2, timeout_seconds=120, response_format_json=False, max_concurrency=5) -> list[str]:
-        if max_concurrency < 1:
-            raise ValueError("max_concurrency 必须大于 0")
-        if not message_batches:
-            return []
-        semaphore = asyncio.Semaphore(max_concurrency)
-
-        async def complete_one(messages):
-            async with semaphore:
-                return await self.acomplete(messages, temperature=temperature, timeout_seconds=timeout_seconds, response_format_json=response_format_json)
-
-        return list(await asyncio.gather(*(complete_one(messages) for messages in message_batches)))
-
-    async def acomplete_json_batch(self, message_batches, *, temperature=0.2, timeout_seconds=120, max_concurrency=5) -> list[dict[str, Any]]:
-        texts = await self.acomplete_batch(message_batches, temperature=temperature, timeout_seconds=timeout_seconds, response_format_json=True, max_concurrency=max_concurrency)
-        return [parse_json_object(text) for text in texts]
-
 
 def create_provider(config: LLMModelConfig, fallback_config: LLMModelConfig | None = None) -> BaseLLMProvider:
     return BaseLLMProvider(config, fallback_config)
-
-
-class LLMChatService:
-    def __init__(self, primary: LLMModelConfig, fallback: LLMModelConfig | None = None) -> None:
-        self.primary = primary
-        self.fallback = fallback
-
-    async def stream_chat(self, messages, *, client=None, raw_event_hook=None):
-        async for ev in self._stream_events_with_model(messages, client=client, raw_event_hook=raw_event_hook):
-            if ev.kind == "text":
-                yield ev.text
-
-    async def stream_chat_with_tools(
-        self,
-        messages,
-        *,
-        tools: list[dict[str, Any]],
-        tool_registry: ToolRegistry,
-        client=None,
-        max_tool_iterations: int = DEFAULT_MAX_TOOL_ITERATIONS,
-        on_before_request=None,
-        on_raw_event=None,
-        parent_run=None,
-    ):
-        if max_tool_iterations < 1:
-            raise ValueError("max_tool_iterations 必须 >= 1")
-        conversation = []
-        for m in messages:
-            conversation.append(m.to_dict() if isinstance(m, ChatMessage) else dict(m))
-        iteration = 0
-        while True:
-            iteration += 1
-            if iteration > max_tool_iterations:
-                raise RuntimeError(f"tool 回路超过最大迭代次数 {max_tool_iterations}，疑似模型无限调用 tool")
-            if on_before_request is not None:
-                on_before_request(iteration, copy.deepcopy(conversation), tools)
-            tool_calls_this_round = []
-            assistant_text_parts = []
-            reasoning_parts = []
-            async with traced_run(
-                name=f"llm_iteration_{iteration}",
-                run_type="llm",
-                inputs={"iteration": iteration, "messages": copy.deepcopy(conversation), "tools": tools, "model": self.primary.name},
-                tags=["llm", self.primary.provider],
-                metadata={"iteration": iteration, "model": self.primary.model},
-                parent=parent_run,
-            ) as llm_run:
-                async for ev in self._stream_events_with_model(conversation, client=client, tools=tools, raw_event_hook=None if on_raw_event is None else lambda payload, iteration=iteration: on_raw_event({"iteration": iteration, **payload})):
-                    if ev.kind == "thinking":
-                        reasoning_parts.append(ev.text)
-                        yield ToolLoopEvent(kind="thinking", text=ev.text)
-                    elif ev.kind == "text":
-                        assistant_text_parts.append(ev.text)
-                        yield ToolLoopEvent(kind="text", text=ev.text)
-                    elif ev.kind == "tool_call" and ev.tool_call is not None:
-                        tool_calls_this_round.append(ev.tool_call)
-                        yield ToolLoopEvent(kind="tool_call", tool_call=ev.tool_call)
-                set_run_outputs(llm_run, {"text": "".join(assistant_text_parts), "thinking": "".join(reasoning_parts), "tool_calls": [{"id": tc.call_id, "name": tc.tool_name, "arguments": tc.arguments} for tc in tool_calls_this_round]})
-            if not tool_calls_this_round:
-                return
-            assistant_tool_message = {
-                "role": "assistant",
-                "content": "".join(assistant_text_parts),
-                "tool_calls": [{"id": tc.call_id, "type": "function", "function": {"name": tc.tool_name, "arguments": json.dumps(tc.arguments, ensure_ascii=False)}} for tc in tool_calls_this_round],
-            }
-            if reasoning_parts:
-                assistant_tool_message["reasoning_content"] = "".join(reasoning_parts)
-            conversation.append(assistant_tool_message)
-            for tc in tool_calls_this_round:
-                active_run_id = current_run_id()
-                if active_run_id is not None and agent_run_manager is not None:
-                    agent_run_manager.update_phase(active_run_id, "tool_running", tool_name=tc.tool_name, call_id=tc.call_id)
-                result = await self._execute_tool_safely(tool_registry, tc, parent_run=parent_run)
-                yield ToolLoopEvent(kind="tool_result", tool_call=tc, tool_result=result)
-                conversation.append({"role": "tool", "tool_call_id": tc.call_id, "content": result.to_json_content()})
-                if result.pause_agent:
-                    yield ToolLoopEvent(kind="interaction_required", tool_call=tc, tool_result=result)
-                    return
-
-    async def _execute_tool_safely(self, registry: ToolRegistry, call: ToolCallFinished, *, parent_run=None) -> ToolCallResult:
-        async with traced_run(name=call.tool_name, run_type="tool", inputs={"arguments": call.arguments, "call_id": call.call_id}, tags=["tool"], metadata={"tool_name": call.tool_name}, parent=parent_run) as tool_run:
-            try:
-                result = await registry.execute(call.tool_name, call.arguments, call_id=call.call_id)
-            except Exception as exc:
-                logger.warning("tool %s 执行失败: %s", call.tool_name, exc)
-                result = build_tool_error_result(call.tool_name, f"{call.tool_name} 执行时发生未预期错误：{exc}")
-            set_run_outputs(tool_run, {"is_error": result.is_error, "error_message": result.error_message, "content": result.content})
-            return result
-
-    async def _stream_events_with_model(self, messages, *, client, tools=None, raw_event_hook=None, tool_choice=None):
-        provider = create_provider(self.primary, self.fallback)
-        async for ev in provider.stream_chat(messages, client=client, tools=tools, raw_event_hook=raw_event_hook, tool_choice=tool_choice):
-            yield ev
-
-
-def create_llm_chat_service(primary_name: str | None = None, fallback_name: str | None = None) -> LLMChatService:
-    from services.llm.factory import build_model_config, resolve_model_names
-
-    primary, fallback = resolve_model_names(primary_name, fallback_name)
-    fallback_cfg = build_model_config(fallback) if fallback else None
-    return LLMChatService(build_model_config(primary), fallback_cfg)

@@ -1,6 +1,6 @@
 """连线端点类型限制测试 — TDD。
 
-- worldbuilding/style（全局节点）禁止任何连线
+- worldbuilding/note（全局节点）禁止任何连线
 - element 不再是画布节点类型，legacy element 不允许再创建新连线
 """
 import importlib
@@ -18,9 +18,9 @@ nt = importlib.import_module("services.agents.tools.node_tools")
 # ---------- validate_edge_endpoints 纯函数 ----------
 
 def test_global_scope_cannot_be_edge_endpoint():
-    # scope=global 禁线（worldbuilding/style + 主角 character）
+    # scope=global 禁线（worldbuilding/note + 主角 character）
     assert validate_edge_endpoints("worldbuilding", "chapter", "global", "local")
-    assert validate_edge_endpoints("chapter", "style", "local", "global")
+    assert validate_edge_endpoints("chapter", "note", "local", "global")
     assert validate_edge_endpoints("character", "chapter", "global", "minor")  # 主角 global 禁
 
 

@@ -13,7 +13,7 @@ const NODE_PILL_COLORS = {
   chapter: "#22c55e",
   character: "#ec4899",
   worldbuilding: "#8b5cf6",
-  style: "#a855f7",
+  note: "#a855f7",
   element: "#d97706",
 };
 

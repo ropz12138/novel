@@ -1,5 +1,5 @@
 import { Children, useState, useEffect, useLayoutEffect, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, Target, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
@@ -154,7 +154,7 @@ const NODE_TYPE_CONFIG = {
   chapter: { icon: BookOpen, label: "章节", bg: "bg-green-100", text: "text-green-600", badge: "text-green-700" },
   character: { icon: User, label: "角色", bg: "bg-pink-100", text: "text-pink-600", badge: "text-pink-700" },
   worldbuilding: { icon: MapIcon, label: "世界观", bg: "bg-purple-100", text: "text-purple-600", badge: "text-purple-700" },
-  style: { icon: Target, label: "风格", bg: "bg-fuchsia-100", text: "text-fuchsia-600", badge: "text-fuchsia-700" },
+  note: { icon: StickyNote, label: "笔记", bg: "bg-fuchsia-100", text: "text-fuchsia-600", badge: "text-fuchsia-700" },
 };
 
 const DEFAULT_NODE_TYPE_CONFIG = { icon: FileText, label: "节点", bg: "bg-slate-100", text: "text-slate-600", badge: "text-slate-700" };
@@ -306,6 +306,48 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
   );
 }
 
+function StorylinesPanel({ storylines }) {
+  if (!Array.isArray(storylines) || storylines.length === 0) return null;
+
+  return (
+    <div data-testid="character-storylines" className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-xs font-semibold uppercase tracking-wide text-pink-700">发展线</h4>
+        <span className="text-xs text-pink-700/70">{storylines.length} 条</span>
+      </div>
+      <div className="space-y-3">
+        {storylines.map((line, index) => {
+          const name = line?.name || `线 ${index + 1}`;
+          const steps = Array.isArray(line?.body) ? line.body : [];
+          return (
+            <section
+              key={`${name}-${index}`}
+              className="rounded-lg border border-pink-200 bg-pink-50/60 p-4"
+            >
+              <h5 className="text-sm font-semibold text-pink-900">{name}</h5>
+              {line?.description ? (
+                <p className="mt-1 text-sm leading-relaxed text-pink-800/80">{line.description}</p>
+              ) : null}
+              {steps.length > 0 && (
+                <ol className="mt-3 space-y-2">
+                  {steps.map((step, stepIndex) => (
+                    <li key={`${name}-step-${stepIndex}`} className="flex gap-3 text-sm text-gray-800">
+                      <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-pink-200 text-[11px] font-semibold text-pink-900">
+                        {stepIndex + 1}
+                      </span>
+                      <span className="leading-relaxed">{step}</span>
+                    </li>
+                  ))}
+                </ol>
+              )}
+            </section>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function DefaultNodeView({ node, scrollRef, onTextSelect }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
@@ -336,13 +378,19 @@ function DefaultNodeView({ node, scrollRef, onTextSelect }) {
           </div>
         )}
 
-        {node.extra_data && Object.keys(node.extra_data).length > 0 && (
+        {node.type === "character" && (
+          <StorylinesPanel storylines={node.extra_data?.storylines || []} />
+        )}
+
+        {node.extra_data && Object.entries(node.extra_data).filter(([key]) => key !== "storylines").length > 0 && (
           <div>
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
               额外信息
             </h4>
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
-              {Object.entries(node.extra_data).map(([key, value]) => (
+              {Object.entries(node.extra_data)
+                .filter(([key]) => key !== "storylines")
+                .map(([key, value]) => (
                 <div key={key} className="flex items-start gap-2">
                   <span className="text-xs font-medium text-gray-500 min-w-[80px]">
                     {key}:
@@ -360,7 +408,18 @@ function DefaultNodeView({ node, scrollRef, onTextSelect }) {
   );
 }
 
-function EditView({ title, content, isChapter, chapterElements, onTitleChange, onContentChange, onChapterElementsChange }) {
+function EditView({
+  title,
+  content,
+  isChapter,
+  chapterElements,
+  onTitleChange,
+  onContentChange,
+  onChapterElementsChange,
+  isCharacter,
+  storylines,
+  onStorylinesChange,
+}) {
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-4">
       <div>
@@ -423,17 +482,79 @@ function EditView({ title, content, isChapter, chapterElements, onTitleChange, o
           </button>
         </div>
       )}
+      {isCharacter && (
+        <div data-testid="storylines-editor">
+          <div className="flex items-center justify-between mb-2">
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide">发展线</label>
+            <span className="text-xs text-gray-400">{storylines.length} 条</span>
+          </div>
+          <div className="space-y-3">
+            {storylines.map((line, index) => (
+              <div key={`storyline-${index}`} className="rounded-lg border border-pink-200 p-3 space-y-2 bg-pink-50/40">
+                <div className="flex items-start gap-2">
+                  <input
+                    value={line.name}
+                    onChange={(e) => onStorylinesChange(storylines.map((x, i) => (i === index ? { ...x, name: e.target.value } : x)))}
+                    placeholder="线名，如力量线"
+                    className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none bg-white"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => onStorylinesChange(storylines.filter((_, i) => i !== index))}
+                    title="删除发展线"
+                    className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <textarea
+                  value={line.description}
+                  onChange={(e) => onStorylinesChange(storylines.map((x, i) => (i === index ? { ...x, description: e.target.value } : x)))}
+                  placeholder="该线的说明"
+                  className="w-full min-h-[48px] border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none resize-y bg-white"
+                />
+                <textarea
+                  value={Array.isArray(line.body) ? line.body.join("\n") : ""}
+                  onChange={(e) => onStorylinesChange(storylines.map((x, i) => (
+                    i === index ? { ...x, body: e.target.value.split("\n") } : x
+                  )))}
+                  placeholder="轨迹节点，一行一项"
+                  className="w-full min-h-[80px] border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none resize-y bg-white font-mono"
+                />
+              </div>
+            ))}
+          </div>
+          <button
+            type="button"
+            onClick={() => onStorylinesChange([...storylines, { name: "", description: "", body: [] }])}
+            className="mt-2 inline-flex items-center gap-1 text-sm text-pink-700 hover:text-pink-800"
+          >
+            <Plus className="w-4 h-4" />
+            添加发展线
+          </button>
+        </div>
+      )}
     </div>
   );
 }
 
 function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, chapterNodes, onChapterNavigate }) {
   const isChapter = node.type === "chapter";
+  const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
   const [editTitle, setEditTitle] = useState(node.label);
   const [editContent, setEditContent] = useState(node.content || "");
   const [editChapterElements, setEditChapterElements] = useState(() =>
     isChapter ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el })) : []
+  );
+  const [editStorylines, setEditStorylines] = useState(() =>
+    isCharacter
+      ? (node.extra_data?.storylines || []).map((line) => ({
+          name: line.name || "",
+          description: line.description || "",
+          body: Array.isArray(line.body) ? [...line.body] : [],
+        }))
+      : []
   );
   const [saving, setSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
@@ -450,6 +571,15 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
         ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }))
         : []
     );
+    setEditStorylines(
+      node.type === "character"
+        ? (node.extra_data?.storylines || []).map((line) => ({
+            name: line.name || "",
+            description: line.description || "",
+            body: Array.isArray(line.body) ? [...line.body] : [],
+          }))
+        : []
+    );
   }, [node]);
 
   const handleSave = async () => {
@@ -458,6 +588,17 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
       payload.chapter_elements = editChapterElements
         .map((el) => ({ ...el }))
         .filter((el) => (el.title || "").trim() || (el.content || "").trim());
+    }
+    if (node.type === "character") {
+      payload.storylines = editStorylines
+        .map((line) => ({
+          name: (line.name || "").trim(),
+          description: (line.description || "").trim(),
+          body: (Array.isArray(line.body) ? line.body : [])
+            .map((step) => String(step).trim())
+            .filter(Boolean),
+        }))
+        .filter((line) => line.name && line.body.length > 0);
     }
     setSaving(true);
     try {
@@ -486,7 +627,7 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
       className={`relative flex flex-col bg-white shadow-xl animate-in slide-in-from-left ${
         isFullscreen
           ? "h-full w-full"
-          : isEditing || isChapter
+          : isEditing || isChapter || isCharacter
             ? "h-full w-[700px] max-w-[90vw]"
             : "h-full w-[420px] max-w-[90vw]"
       }`}
@@ -619,6 +760,9 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
           onTitleChange={setEditTitle}
           onContentChange={setEditContent}
           onChapterElementsChange={setEditChapterElements}
+          isCharacter={isCharacter}
+          storylines={editStorylines}
+          onStorylinesChange={setEditStorylines}
         />
       ) : isChapter ? (
         <ChapterReadingView node={node} scrollRef={detailScrollRef} isFullscreen={isFullscreen} onTextSelect={handleTextSelect} />

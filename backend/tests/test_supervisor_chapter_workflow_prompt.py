@@ -9,10 +9,14 @@ PROMPT = (
 
 
 def test_prompt_limits_node_types():
-    for node_type in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "style"):
+    for node_type in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "note"):
         assert f"`{node_type}`" in PROMPT
+    assert "`note`" in PROMPT
+    assert "`style`" not in PROMPT
+    assert "任何需求" in PROMPT
     assert "- `element`" not in PROMPT
     assert "`chapter_elements`" in PROMPT
+    assert "`storylines`" in PROMPT
     for removed in (
         "event", "idea", "setting", "conflict", "foreshadow", "theme",
         "macro_outline", "meso_outline", "micro_outline", "core_idea",
@@ -50,6 +54,7 @@ def test_removed_operational_rules_are_available_from_registered_tools():
     create_schema_text = str(tools["create_node"].args_schema.model_json_schema())
     assert "element 不再是节点类型" in create_schema_text
     assert "chapter_elements" in create_schema_text
+    assert "storylines" in create_schema_text
 
     update_schema_text = str(tools["update_node"].args_schema.model_json_schema())
     update_tool_text = tools["update_node"].description + update_schema_text
@@ -79,7 +84,7 @@ def test_prompt_keeps_layout_in_tools_not_system():
     assert "## 布局建议" not in PROMPT
     from node_types import NODE_LAYOUT_RULES_TEXT
     assert "character" in NODE_LAYOUT_RULES_TEXT
-    assert "style" in NODE_LAYOUT_RULES_TEXT
+    assert "note" in NODE_LAYOUT_RULES_TEXT
     assert "outline/volume/plot/chapter" in NODE_LAYOUT_RULES_TEXT
     assert "element" not in NODE_LAYOUT_RULES_TEXT
 

@@ -153,6 +153,10 @@ def test_has_substantial_node_change_detects_chapter_elements():
     assert svc.has_substantial_node_change({"chapter_elements": []}) is True
 
 
+def test_has_substantial_node_change_detects_storylines():
+    assert svc.has_substantial_node_change({"storylines": []}) is True
+
+
 def test_has_substantial_node_change_position_plus_title():
     assert svc.has_substantial_node_change({"position_x": 1.0, "title": "x"}) is True
 

@@ -9,7 +9,8 @@ from schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from routers.auth import get_current_user
 from services.agents.tools.node_tools import (
     _normalize_chapter_elements,
-    _extra_data_with_chapter_elements,
+    _normalize_storylines,
+    _merge_extra_data_fields,
 )
 from services import user_action_service as action_svc
 
@@ -74,6 +75,7 @@ def update_node(
     update_data = data.model_dump(exclude_unset=True)
     proposed_scope = update_data.pop("scope", None)
     chapter_elements = update_data.pop("chapter_elements", None)
+    storylines = update_data.pop("storylines", None)
     new_type = update_data.get("type")
     try:
         final_scope = resolve_update_scope(node.type, node.scope, new_type, proposed_scope)
@@ -90,11 +92,24 @@ def update_node(
         normalized, err = _normalize_chapter_elements(chapter_elements)
         if err:
             raise HTTPException(status_code=400, detail=err)
-        node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized)
+        node.extra_data = _merge_extra_data_fields(node.extra_data, chapter_elements=normalized)
+
+    if storylines is not None:
+        effective_type = new_type or node.type
+        if effective_type != "character":
+            raise HTTPException(status_code=400, detail="storylines 只能用于 character 节点")
+        normalized, err = _normalize_storylines(storylines)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        node.extra_data = _merge_extra_data_fields(node.extra_data, storylines=normalized)
 
     db.commit()
     db.refresh(node)
-    substantial = action_svc.has_substantial_node_change(update_data) or chapter_elements is not None
+    substantial = (
+        action_svc.has_substantial_node_change(update_data)
+        or chapter_elements is not None
+        or storylines is not None
+    )
     if substantial:
         action_svc.record_node_action(
             db, work_id=node.work_id, user_id=current_user.id, action_type="update_node", node=node

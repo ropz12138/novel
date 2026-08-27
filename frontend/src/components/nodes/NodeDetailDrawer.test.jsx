@@ -99,6 +99,61 @@ describe("NodeDetailDrawer", () => {
     expect(boldText.className).not.toContain("bg-amber-100");
   });
 
+  it("renders character storylines as named tracks with step list", () => {
+    const node = {
+      id: "char-1",
+      type: "character",
+      label: "林川",
+      content: "人设正文",
+      extra_data: {
+        storylines: [
+          {
+            name: "力量线",
+            description: "明线，升级节奏。",
+            body: ["血雨觉醒", "归墟补天"],
+          },
+        ],
+      },
+    };
+
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText("发展线")).toBeDefined();
+    expect(screen.getByText("力量线")).toBeDefined();
+    expect(screen.getByText("明线，升级节奏。")).toBeDefined();
+    expect(screen.getByText("血雨觉醒")).toBeDefined();
+    expect(screen.getByText("归墟补天")).toBeDefined();
+    expect(screen.queryByText(/storylines/)).toBeNull();
+  });
+
+  it("edits character storylines in edit mode and includes them in onUpdate payload", async () => {
+    const node = {
+      id: "char-2",
+      type: "character",
+      label: "林川",
+      content: "人设",
+      extra_data: {
+        storylines: [
+          { name: "力量线", description: "明线", body: ["觉醒", "补天"] },
+        ],
+      },
+    };
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
+
+    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.change(screen.getByDisplayValue("力量线"), { target: { value: "力量线（改）" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith("char-2", expect.objectContaining({
+        storylines: [
+          expect.objectContaining({ name: "力量线（改）", description: "明线", body: ["觉醒", "补天"] }),
+        ],
+      }));
+    });
+  });
+
   it("renders missing planning items when sync check fails", () => {
     const node = {
       id: "node-1",

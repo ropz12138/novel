@@ -18,7 +18,7 @@ const nodeStyles = {
   chapter: { bg: "#dcfce7", border: "#22c55e", icon: "📖", label: "章节" },
   character: { bg: "#fce7f3", border: "#ec4899", icon: "👤", label: "角色" },
   worldbuilding: { bg: "#ede9fe", border: "#8b5cf6", icon: "🌍", label: "世界观" },
-  style: { bg: "#f3e8ff", border: "#a855f7", icon: "🎨", label: "风格" },
+  note: { bg: "#f3e8ff", border: "#a855f7", icon: "📝", label: "笔记" },
   element: { bg: "#fef3c7", border: "#d97706", icon: "🔹", label: "元素" },
 };
 
@@ -188,7 +188,7 @@ const CustomNode = memo(({
         </button>
       </div>
 
-      {data.content && (
+      {data.content && !(isCharacter && (data.extra_data?.storylines || []).length) && (
         <p className="text-xs text-gray-600 mt-1 line-clamp-2">
           {data.content.substring(0, 60)}
           {data.content.length > 60 ? "..." : ""}
@@ -234,6 +234,14 @@ const CustomNode = memo(({
               {lastEvaluation.passed ? "同步通过" : "同步异常"}
             </span>
           )}
+          {isCharacter && (data.extra_data?.storylines || []).map((line, index) => (
+            <span
+              key={`${line?.name || "line"}-${index}`}
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-white/80 text-pink-700"
+            >
+              {line?.name || `线 ${index + 1}`}
+            </span>
+          ))}
         </div>
       </div>
 

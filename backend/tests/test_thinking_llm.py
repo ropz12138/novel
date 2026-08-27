@@ -1,4 +1,4 @@
-"""Thinking Mode reasoning_content 解析测试 — TDD。"""
+"""FallbackLLM 与 get_llm extra_body — TDD。"""
 import asyncio
 
 import pytest
@@ -6,48 +6,10 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 from langchain_core.tools import tool as lc_tool
 
 from config import Settings
-def test_thinking_chat_openai_private_helpers_exist():
-    """ThinkingChatOpenAI 依赖的 langchain_openai 内部转换函数必须存在。"""
-    from langchain_openai.chat_models.base import _convert_from_v1_to_chat_completions
+from services.llm.langchain_adapter import NovelLLM
+from services.llm.llm_types import LLMModelConfig
+from services.thinking_llm import FallbackLLM
 
-    assert callable(_convert_from_v1_to_chat_completions)
-
-
-def test_thinking_convert_delta_to_message_chunk():
-    chunk = thinking_convert_delta_to_message_chunk(
-        {"content": None, "reasoning_content": "分析用户需求"},
-        AIMessageChunk,
-    )
-    assert isinstance(chunk, AIMessageChunk)
-    assert chunk.additional_kwargs.get("reasoning_content") == "分析用户需求"
-
-
-def test_thinking_convert_dict_to_message():
-    msg = thinking_convert_dict_to_message({
-        "role": "assistant",
-        "content": "好的",
-        "reasoning_content": "先理解意图",
-    })
-    assert isinstance(msg, AIMessage)
-    assert msg.additional_kwargs.get("reasoning_content") == "先理解意图"
-
-
-def test_thinking_convert_message_to_dict_roundtrip():
-    ai = AIMessage(
-        content="回复",
-        additional_kwargs={"reasoning_content": "推理过程"},
-    )
-    payload = thinking_convert_message_to_dict(ai)
-    assert payload.get("reasoning_content") == "推理过程"
-
-
-def test_thinking_chat_openai_class_exists():
-    assert issubclass(ThinkingChatOpenAI, object)
-
-
-# --------------------------------------------------------------------------- #
-# FallbackLLM：主模型任意业务报错都切备用模型；仅排除系统级异常
-# --------------------------------------------------------------------------- #
 
 
 class FakeLLM:
@@ -329,7 +291,14 @@ def _sample_tool(text: str) -> str:
 
 
 def _make_llm():
-    return ThinkingChatOpenAI(model="x", base_url="http://x", api_key="x")
+    cfg = LLMModelConfig(
+        name="x",
+        base_url="http://x",
+        api_key="k",
+        provider="openai",
+        model="x",
+    )
+    return NovelLLM.from_configs(cfg)
 
 
 # --- config.py 解析 extra_body ---
@@ -355,7 +324,7 @@ def test_get_model_config_exposes_extra_body():
     assert s.get_model_config("model-a")["extra_body"] == {"thinking": {"type": "adaptive"}}
 
 
-# --- ThinkingChatOpenAI.bind_tools 用实例 extra_body ---
+# --- NovelLLM.bind_tools 用实例 extra_body ---
 
 
 def test_bind_tools_uses_instance_extra_body():
@@ -369,7 +338,6 @@ def test_bind_tools_injects_nothing_when_extra_body_unset():
     llm = _make_llm()
     bound = llm.bind_tools([_sample_tool])
     eb = bound.kwargs.get("extra_body")
-    # 不应注入任何 thinking 参数
     assert not (eb and eb.get("thinking"))
 
 

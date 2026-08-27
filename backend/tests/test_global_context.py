@@ -1,6 +1,6 @@
 """全局节点上下文注入测试 — TDD。
 
-style/theme/worldbuilding 类型的节点自动作为全局设定，
+note/theme/worldbuilding 类型的节点自动作为全局设定，
 注入到 Supervisor system prompt 和工具内 LLM 交互中。
 """
 import importlib
@@ -31,16 +31,16 @@ def test_get_global_nodes_returns_only_global_types():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        style = Node(work_id=work.id, type="style", title="暗黑风格", content="使用阴暗笔调")
+        note = Node(work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
         theme = Node(work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
         world = Node(work_id=work.id, type="worldbuilding", title="魔法体系", content="魔力来源")
         chapter = Node(work_id=work.id, type="chapter", title="第1章", content="正文")
-        db.add_all([style, theme, world, chapter])
+        db.add_all([note, theme, world, chapter])
         db.commit()
 
         nodes = gc.get_global_nodes(db, work.id)
         types = {n.type for n in nodes}
-        assert types == {"style", "theme", "worldbuilding"}
+        assert types == {"note", "theme", "worldbuilding"}
         assert len(nodes) == 3
     finally:
         db.close()
@@ -67,9 +67,9 @@ def test_format_global_context_with_nodes():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        style = Node(work_id=work.id, type="style", title="暗黑风格", content="使用阴暗笔调")
+        note = Node(work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
         theme = Node(work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
-        db.add_all([style, theme])
+        db.add_all([note, theme])
         db.commit()
 
         nodes = gc.get_global_nodes(db, work.id)
@@ -94,9 +94,9 @@ def test_supervisor_prompt_excludes_global_context():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        style = Node(work_id=work.id, type="style", title="硬汉派", content="简洁有力的对白")
+        note = Node(work_id=work.id, type="note", title="硬汉派", content="简洁有力的对白")
         world = Node(work_id=work.id, type="worldbuilding", title="赛博朋克", content="高科技低生活")
-        db.add_all([style, world])
+        db.add_all([note, world])
         db.commit()
 
         agent = sup_mod.SupervisorAgent()

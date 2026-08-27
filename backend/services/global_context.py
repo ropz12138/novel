@@ -1,19 +1,19 @@
-"""全局节点上下文 — style/theme/worldbuilding 类型自动注入 LLM 提示词。"""
+"""全局节点上下文 — note/theme/worldbuilding 类型自动注入 LLM 提示词。"""
 from sqlalchemy.orm import Session
 
 from models.node import Node
 
-GLOBAL_NODE_TYPES = ("style", "theme", "worldbuilding")
+GLOBAL_NODE_TYPES = ("note", "theme", "worldbuilding")
 
 GLOBAL_TYPE_LABELS = {
-    "style": "文风",
+    "note": "笔记",
     "theme": "主题",
     "worldbuilding": "世界观",
 }
 
 
 def get_global_nodes(db: Session, work_id: str | None = None) -> list[Node]:
-    """查询指定作品的全局节点（style/theme/worldbuilding）。"""
+    """查询指定作品的全局节点（note/theme/worldbuilding）。"""
     query = db.query(Node).filter(Node.type.in_(GLOBAL_NODE_TYPES))
     if work_id:
         query = query.filter(Node.work_id == work_id)

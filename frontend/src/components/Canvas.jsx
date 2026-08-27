@@ -936,7 +936,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
               { type: "chapter", icon: "📖", label: "章节", color: "text-green-600" },
               { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
               { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
-              { type: "style", icon: "🎨", label: "风格", color: "text-fuchsia-600" },
+              { type: "note", icon: "📝", label: "笔记", color: "text-fuchsia-600" },
             ].map((item) => (
               <button
                 key={item.type}

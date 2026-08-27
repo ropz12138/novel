@@ -1,11 +1,26 @@
 """章节顺序、前序上下文与评估提示词组装。"""
 from __future__ import annotations
 
+import re
+
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from models.chapter import Chapter
 from models.node import Node
-from services.chapter_context_service import _chapter_order_key
+
+
+def chapter_order_key(node: Node) -> tuple:
+    extra = node.extra_data or {}
+    for key in ("chapter_number", "chapter_index", "order", "sequence"):
+        value = extra.get(key)
+        if isinstance(value, (int, float)):
+            return (0, float(value), node.created_at or 0)
+        if isinstance(value, str) and value.strip().isdigit():
+            return (0, float(value.strip()), node.created_at or 0)
+    match = re.search(r"第\s*(\d+)\s*章", node.title or "")
+    if match:
+        return (0, float(match.group(1)), node.created_at or 0)
+    return (1, node.layer or 0, node.position_x or 0, node.created_at or 0)
 
 RECENT_FULL_HISTORY_LIMIT = 5
 
@@ -32,7 +47,7 @@ def list_ordered_chapters(db, work_id: str) -> list[Node]:
         Node.work_id == work_id,
         Node.type == "chapter",
     ).all()
-    chapters.sort(key=_chapter_order_key)
+    chapters.sort(key=chapter_order_key)
     return chapters
 
 

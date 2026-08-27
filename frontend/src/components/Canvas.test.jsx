@@ -472,6 +472,19 @@ describe("applyNodeUpdateToData", () => {
     expect(next.extra_data.chapter_elements).toEqual([]);
   });
 
+  it("merges storylines into extra_data preserving other fields", () => {
+    const prev = {
+      label: "林川",
+      content: "人设",
+      extra_data: { last_generation: { ok: true }, storylines: [{ name: "旧" }] },
+    };
+    const next = applyNodeUpdateToData(prev, {
+      storylines: [{ name: "力量线", description: "明线", body: ["觉醒"] }],
+    });
+    expect(next.extra_data.storylines[0].name).toBe("力量线");
+    expect(next.extra_data.last_generation).toEqual({ ok: true });
+  });
+
   it("returns prev unchanged when prev is null", () => {
     expect(applyNodeUpdateToData(null, { title: "x" })).toBeNull();
   });

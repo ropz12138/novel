@@ -69,11 +69,19 @@ class CreateNodeInput(BaseModel):
             "元素不是节点类型，不要创建 element 节点；创建章节时把本章元素放在这里。"
         ),
     )
+    storylines: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "character 专用：角色发展线列表，写入 extra_data.storylines，不覆盖 extra_data 中的其它字段。"
+            "每项必须含 name（线名）和 body（轨迹节点的字符串列表，按时间顺序）；"
+            "description 为该线的说明文字。"
+        ),
+    )
     layer: int = Field(
         default=0,
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
     )
-    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/style 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
+    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
     position_x: float = Field(description=f"X 坐标（画布水平位置）。{NODE_LAYOUT_RULES_TEXT}")
     position_y: float = Field(description=f"Y 坐标（画布垂直位置）。{NODE_LAYOUT_RULES_TEXT}")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -88,6 +96,13 @@ class UpdateNodeInput(BaseModel):
         description=(
             "chapter 专用：更新本章情节元素列表，每项建议包含 title 和 content。"
             "只更新 extra_data.chapter_elements，不覆盖 extra_data 中的其它字段。"
+        ),
+    )
+    storylines: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "character 专用：更新角色发展线列表，每项必须含 name 和 body（字符串列表）；"
+            "description 为该线的说明。只更新 extra_data.storylines，不覆盖 extra_data 中的其它字段。"
         ),
     )
     content_edit_instruction: Optional[str] = Field(
@@ -162,7 +177,7 @@ class BatchCreateNodesInput(BaseModel):
     nodes_data: list[dict] = Field(
         description=(
             "节点数据列表，每项含 node_type、title、position_x、position_y、layer 等。"
-            "创建 chapter 时可带 chapter_elements；不要创建 element 节点。"
+            "创建 chapter 时可带 chapter_elements；创建 character 时可带 storylines；不要创建 element 节点。"
             f"{NODE_LAYOUT_RULES_TEXT}"
         ),
     )
@@ -400,15 +415,55 @@ def _normalize_chapter_elements(chapter_elements) -> tuple[list[dict], str | Non
     return normalized, None
 
 
-def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] | None) -> dict:
+def _normalize_storylines(storylines) -> tuple[list[dict], str | None]:
+    if storylines is None:
+        return [], None
+    if not isinstance(storylines, list):
+        return [], "storylines 必须是数组"
+    normalized = []
+    for idx, item in enumerate(storylines):
+        if not isinstance(item, dict):
+            return [], f"storylines[{idx}] 必须是对象"
+        name = str(item.get("name") or "").strip()
+        if not name:
+            return [], f"storylines[{idx}] 需要 name"
+        description = str(item.get("description") or "").strip()
+        body = item.get("body")
+        if not isinstance(body, list):
+            return [], f"storylines[{idx}].body 必须是字符串列表"
+        steps = []
+        for bidx, step in enumerate(body):
+            if not isinstance(step, str):
+                return [], f"storylines[{idx}].body[{bidx}] 必须是字符串"
+            text = step.strip()
+            if not text:
+                return [], f"storylines[{idx}].body[{bidx}] 不能为空"
+            steps.append(text)
+        if not steps:
+            return [], f"storylines[{idx}].body 不能为空"
+        normalized.append({
+            "name": name,
+            "description": description,
+            "body": steps,
+        })
+    return normalized, None
+
+
+def _merge_extra_data_fields(extra_data, *, chapter_elements=None, storylines=None) -> dict:
     data = dict(extra_data or {})
     if chapter_elements is not None:
         data["chapter_elements"] = chapter_elements
+    if storylines is not None:
+        data["storylines"] = storylines
     return data
 
 
+def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] | None) -> dict:
+    return _merge_extra_data_fields(extra_data, chapter_elements=chapter_elements)
+
+
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None):
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None):
     try:
         final_scope = resolve_scope(node_type, scope)
     except ValueError as e:
@@ -418,6 +473,13 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         if node_type != "chapter":
             return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
         normalized_elements, err = _normalize_chapter_elements(chapter_elements)
+        if err:
+            return json.dumps({"error": err}, ensure_ascii=False)
+    normalized_storylines = None
+    if storylines is not None:
+        if node_type != "character":
+            return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
+        normalized_storylines, err = _normalize_storylines(storylines)
         if err:
             return json.dumps({"error": err}, ensure_ascii=False)
 
@@ -445,7 +507,11 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             content=content,
             layer=layer,
             scope=final_scope,
-            extra_data=_extra_data_with_chapter_elements({}, normalized_elements),
+            extra_data=_merge_extra_data_fields(
+                {},
+                chapter_elements=normalized_elements,
+                storylines=normalized_storylines,
+            ),
             position_x=position_x,
             position_y=position_y,
         )
@@ -483,6 +549,7 @@ def _update_node_sync(
     content_edit_context=None,
     prev_chapter_node_id=None,
     chapter_elements=None,
+    storylines=None,
 ):
     if content_edit_instruction:
         return json.dumps({
@@ -499,6 +566,11 @@ def _update_node_sync(
         normalized_elements, err = _normalize_chapter_elements(chapter_elements)
         if err:
             return json.dumps({"error": err}, ensure_ascii=False)
+    normalized_storylines = None
+    if storylines is not None:
+        normalized_storylines, err = _normalize_storylines(storylines)
+        if err:
+            return json.dumps({"error": err}, ensure_ascii=False)
     db = _get_db()
     try:
         node = db.query(Node).filter(Node.id == node_id).first()
@@ -507,6 +579,8 @@ def _update_node_sync(
         final_type_for_elements = node_type or node.type
         if chapter_elements is not None and final_type_for_elements != "chapter":
             return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
+        if storylines is not None and final_type_for_elements != "character":
+            return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
         if content is not None and final_type_for_elements == "chapter":
             from services.plot_highlight_service import validate_plot_highlights
             highlight_validation = validate_plot_highlights(content)
@@ -540,8 +614,12 @@ def _update_node_sync(
             node.position_y = position_y
         if locked is not None:
             node.locked = locked
-        if chapter_elements is not None:
-            node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized_elements)
+        if chapter_elements is not None or storylines is not None:
+            node.extra_data = _merge_extra_data_fields(
+                node.extra_data,
+                chapter_elements=normalized_elements if chapter_elements is not None else None,
+                storylines=normalized_storylines if storylines is not None else None,
+            )
         try:
             node.scope = _resolve_update_scope(node, node_type, scope)
         except ValueError as e:
@@ -725,6 +803,12 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             _, err = _normalize_chapter_elements(data.get("chapter_elements"))
             if err:
                 return json.dumps({"error": err}, ensure_ascii=False)
+        if data.get("storylines") is not None:
+            if node_type != "character":
+                return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
+            _, err = _normalize_storylines(data.get("storylines"))
+            if err:
+                return json.dumps({"error": err}, ensure_ascii=False)
 
     db = _get_db()
     try:
@@ -740,13 +824,20 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             normalized_elements = None
             if data.get("chapter_elements") is not None:
                 normalized_elements, _ = _normalize_chapter_elements(data.get("chapter_elements"))
+            normalized_storylines = None
+            if data.get("storylines") is not None:
+                normalized_storylines, _ = _normalize_storylines(data.get("storylines"))
             node = Node(
                 id=str(uuid.uuid4()),
                 work_id=work_id,
                 type=node_type,
                 title=data.get("title", "未命名"),
                 content=data.get("content", ""),
-                extra_data=_extra_data_with_chapter_elements({}, normalized_elements),
+                extra_data=_merge_extra_data_fields(
+                    {},
+                    chapter_elements=normalized_elements,
+                    storylines=normalized_storylines,
+                ),
                 layer=layer,
                 scope=scope,
                 position_x=position_x if position_x is not None else 0.0,
@@ -837,9 +928,9 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 
 # 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None):
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements))
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -866,6 +957,7 @@ async def _update_node_content_edit_async(
     reason=None,
     prev_chapter_node_id=None,
     chapter_elements=None,
+    storylines=None,
 ):
     from services.agents.llm import get_llm, context_model_pref_kwargs
     from services.chapter_edit_agent import (
@@ -978,13 +1070,26 @@ async def _update_node_content_edit_async(
             node.position_y = position_y
         if locked is not None:
             node.locked = locked
-        if chapter_elements is not None:
-            if node.type != "chapter" and node_type != "chapter":
+        if chapter_elements is not None or storylines is not None:
+            if chapter_elements is not None and node.type != "chapter" and node_type != "chapter":
                 return json.dumps({"success": False, "error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
-            normalized_elements, err = _normalize_chapter_elements(chapter_elements)
-            if err:
-                return json.dumps({"success": False, "error": err}, ensure_ascii=False)
-            node.extra_data = _extra_data_with_chapter_elements(node.extra_data, normalized_elements)
+            if storylines is not None and node.type != "character" and node_type != "character":
+                return json.dumps({"success": False, "error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
+            normalized_elements = None
+            if chapter_elements is not None:
+                normalized_elements, err = _normalize_chapter_elements(chapter_elements)
+                if err:
+                    return json.dumps({"success": False, "error": err}, ensure_ascii=False)
+            normalized_storylines = None
+            if storylines is not None:
+                normalized_storylines, err = _normalize_storylines(storylines)
+                if err:
+                    return json.dumps({"success": False, "error": err}, ensure_ascii=False)
+            node.extra_data = _merge_extra_data_fields(
+                node.extra_data,
+                chapter_elements=normalized_elements if chapter_elements is not None else None,
+                storylines=normalized_storylines if storylines is not None else None,
+            )
         try:
             node.scope = _resolve_update_scope(node, node_type, scope)
         except ValueError as e:
@@ -1063,6 +1168,7 @@ async def _update_node_async(
     content_edit_context=None,
     prev_chapter_node_id=None,
     chapter_elements=None,
+    storylines=None,
 ):
     if content is not None and content_edit_instruction:
         return json.dumps({
@@ -1084,10 +1190,11 @@ async def _update_node_async(
             reason=reason,
             prev_chapter_node_id=prev_chapter_node_id,
             chapter_elements=chapter_elements,
+            storylines=storylines,
         )
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements, storylines))
     # 触发画布更新事件
     try:
         data = json.loads(result)

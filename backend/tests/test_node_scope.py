@@ -1,7 +1,7 @@
 """Node.scope 字段测试 — character 角色分类版。
 
 scope 取 5 值：global / local / major / minor / temp
-- worldbuilding/style：固定 global（全局节点）
+- worldbuilding/note：固定 global（全局节点）
 - outline/volume/plot/chapter：固定 local（层级链）
 - character：global(主角) / major(主要配角) / minor(次要配角,默认) / temp(临时)，
   不允许 local（局部未细分已废弃）
@@ -52,15 +52,15 @@ def test_validate_scope_rejects_unknown():
 
 def test_default_scope_for_type():
     assert node_types.default_scope_for_type("worldbuilding") == "global"
-    assert node_types.default_scope_for_type("style") == "global"
+    assert node_types.default_scope_for_type("note") == "global"
     for t in ("outline", "volume", "plot", "chapter"):
         assert node_types.default_scope_for_type(t) == "local"
     # character 默认 minor（次要配角）
     assert node_types.default_scope_for_type("character") == "minor"
 
 
-def test_global_locked_types_only_worldbuilding_and_style():
-    assert set(node_types.GLOBAL_LOCKED_TYPES) == {"worldbuilding", "style"}
+def test_global_locked_types_only_worldbuilding_and_note():
+    assert set(node_types.GLOBAL_LOCKED_TYPES) == {"worldbuilding", "note"}
 
 
 def test_local_locked_types_are_hierarchy_chain():
@@ -76,7 +76,7 @@ def test_character_scopes_exclude_local():
 
 def test_resolve_scope_locked_global_forces_global_when_omitted():
     assert node_types.resolve_scope("worldbuilding", None) == "global"
-    assert node_types.resolve_scope("style", None) == "global"
+    assert node_types.resolve_scope("note", None) == "global"
 
 
 def test_resolve_scope_locked_global_rejects_local():

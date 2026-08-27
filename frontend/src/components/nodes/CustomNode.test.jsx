@@ -162,4 +162,26 @@ describe("CustomNode character scope badge", () => {
     expect(screen.getByText("大纲")).toBeDefined();
     expect(screen.queryByText("主角")).toBeNull();
   });
+
+  it("shows storyline name badges on character cards", () => {
+    render(
+      <CustomNode
+        id="c5"
+        data={{
+          type: "character",
+          label: "林川",
+          content: "人设很长很长很长",
+          extra_data: {
+            storylines: [
+              { name: "力量线", description: "明线", body: ["觉醒"] },
+              { name: "心境线", description: "暗线", body: ["抉择"] },
+            ],
+          },
+          scope: "global",
+        }}
+      />,
+    );
+    expect(screen.getByText("力量线")).toBeDefined();
+    expect(screen.getByText("心境线")).toBeDefined();
+  });
 });

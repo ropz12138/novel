@@ -146,7 +146,7 @@ def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
-        pass
+        return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
     monkeypatch.setattr(sup_router, "_capture_checkpoint_before_agent", lambda *a, **k: None)
@@ -191,7 +191,7 @@ def test_start_no_actions_stores_only_user_text(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
-        pass
+        return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
     monkeypatch.setattr(sup_router, "_capture_checkpoint_before_agent", lambda *a, **k: None)
@@ -245,7 +245,7 @@ def test_resume_streams_actions_message_before_user_text(mock_auth, monkeypatch)
         db.close()
 
     async def fake_run(msg, context, emit=None):
-        pass
+        return {"success": True}
 
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
@@ -285,7 +285,7 @@ def test_start_advances_watermark_after_success(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
-        pass
+        return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
     monkeypatch.setattr(sup_router, "_capture_checkpoint_before_agent", lambda *a, **k: None)

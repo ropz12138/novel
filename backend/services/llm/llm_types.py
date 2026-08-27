@@ -1,19 +1,8 @@
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
-ChatRole = Literal["system", "user", "assistant"]
 LLMProviderName = Literal["openai", "anthropic"]
 LLMModelType = Literal["llm", "vlm"]
-MessageContent = str | list[dict[str, Any]]
-
-
-@dataclass(frozen=True)
-class ChatMessage:
-    role: ChatRole
-    content: MessageContent
-
-    def to_dict(self) -> dict[str, Any]:
-        return {"role": self.role, "content": self.content}
 
 
 @dataclass(frozen=True)
