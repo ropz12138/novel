@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 
 const mocks = vi.hoisted(() => ({
@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   setRelationEdges: vi.fn(),
   edgesStateCall: 0,
   lastReactFlowProps: null,
+  customNodeProps: [],
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -38,7 +39,10 @@ vi.mock("@xyflow/react", async () => {
 });
 
 vi.mock("./nodes/CustomNode", () => ({
-  default: () => null,
+  default: (props) => {
+    mocks.customNodeProps.push(props);
+    return null;
+  },
 }));
 
 vi.mock("./nodes/NodeDetailDrawer", () => ({
@@ -67,8 +71,11 @@ import {
   fetchCharacterRelations,
   deleteNode,
   restoreCanvasSnapshot,
+  updateEdge,
+  updateNode,
 } from "../lib/canvasApi";
 import { CANVAS_MARQUEE_KEY_CODE } from "../lib/canvasDrag";
+import { loadViewState, saveViewState } from "../lib/canvasViewState";
 
 describe("toCanvasSnapshot", () => {
   it("serializes complete node and edge state", () => {
@@ -896,5 +903,249 @@ describe("Canvas 可见子图接入", () => {
     const props = await renderCanvas();
     expect(props.nodes).toEqual([]);
     expect(props.edges).toEqual([]);
+  });
+});
+
+// ── 布局接管后的职责清理 ──
+
+describe("Canvas 不再回写布局数据", () => {
+  const flowNode = (id, type, label) => ({
+    id,
+    type: "custom",
+    position: { x: 100, y: 100 },
+    data: { type, label, scope: "local", content: "", extra_data: {}, layer: 0 },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.edgesStateCall = 0;
+    mocks.lastReactFlowProps = null;
+    mocks.relationEdges = [];
+    mocks.nodes = [
+      flowNode("o1", "outline", "大纲"),
+      flowNode("v1", "volume", "第一卷"),
+    ];
+    mocks.edges = [
+      {
+        id: "o1->v1",
+        source: "o1",
+        target: "v1",
+        data: { edge_type: "包含", extra_data: {} },
+      },
+    ];
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
+  });
+
+  it("不再把连线布局诊断写回后端", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<Canvas ref={createRef()} workId="w1" />);
+      await vi.advanceTimersByTimeAsync(2000);
+      expect(updateEdge).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("展开状态变化不会触发连线数据写入", async () => {
+    vi.useFakeTimers();
+    try {
+      render(<Canvas ref={createRef()} workId="w1" />);
+      await vi.advanceTimersByTimeAsync(2000);
+      // 布局现在每次展开都会变化，若仍回写诊断会产生大量无意义请求
+      expect(updateEdge).not.toHaveBeenCalled();
+      expect(updateNode).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("画布视图状态持久化", () => {
+  const flowNode = (id, type, label) => ({
+    id,
+    type: "custom",
+    position: { x: 0, y: 0 },
+    data: { type, label, scope: "local", content: "", extra_data: {}, layer: 0 },
+  });
+  const hierEdge = (source, target) => ({
+    id: `${source}->${target}`,
+    source,
+    target,
+    data: { edge_type: "包含", extra_data: {} },
+  });
+
+  const visibleIds = () =>
+    (mocks.lastReactFlowProps?.nodes || []).map((n) => n.id);
+
+  beforeEach(() => {
+    // 上个用例的画布若不卸载，其 effect 会继续写入同一份视图记录
+    cleanup();
+    vi.clearAllMocks();
+    window.localStorage.clear();
+    mocks.edgesStateCall = 0;
+    mocks.lastReactFlowProps = null;
+    mocks.customNodeProps = [];
+    mocks.relationEdges = [];
+    mocks.nodes = [
+      flowNode("o1", "outline", "大纲"),
+      flowNode("v1", "volume", "第一卷"),
+      flowNode("p1", "plot", "开篇情节"),
+    ];
+    mocks.edges = [hierEdge("o1", "v1"), hierEdge("v1", "p1")];
+    fetchNodes.mockResolvedValue({
+      nodes: mocks.nodes.map((node) => ({
+        id: node.id,
+        type: node.data.type,
+        title: node.data.label,
+        content: "",
+        position_x: 0,
+        position_y: 0,
+        extra_data: {},
+        layer: 0,
+        scope: "local",
+      })),
+    });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
+  });
+
+  it("无记录时按默认深度显示，不展示更深层级", async () => {
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+    expect(visibleIds()).toEqual(["o1", "v1"]);
+  });
+
+  it("恢复已保存的展开状态", async () => {
+    saveViewState(
+      "w1",
+      { expandedNodeIds: new Set(["v1"]), viewport: null },
+      window.localStorage,
+    );
+
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(visibleIds()).toContain("p1");
+    });
+  });
+
+  it("其他作品的记录不会影响当前作品", async () => {
+    saveViewState(
+      "other",
+      { expandedNodeIds: new Set(["v1"]), viewport: null },
+      window.localStorage,
+    );
+
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+    expect(visibleIds()).not.toContain("p1");
+  });
+
+  it("展开节点后写入本地记录", async () => {
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+
+    const NodeComp = mocks.lastReactFlowProps.nodeTypes.custom;
+    mocks.customNodeProps = [];
+    render(<NodeComp id="v1" data={mocks.nodes[1].data} />);
+
+    const props = mocks.customNodeProps.at(-1);
+    await act(async () => {
+      props.onCollapseToggle("v1");
+    });
+
+    await waitFor(() => {
+      const saved = loadViewState("w1", window.localStorage);
+      expect(saved?.expandedNodeIds.has("v1")).toBe(true);
+    });
+  });
+
+  it("保存时剔除已不存在的节点", async () => {
+    saveViewState(
+      "w1",
+      { expandedNodeIds: new Set(["v1", "deleted-node"]), viewport: null },
+      window.localStorage,
+    );
+
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      const saved = loadViewState("w1", window.localStorage);
+      expect(saved?.expandedNodeIds.has("deleted-node")).toBe(false);
+    });
+    expect(loadViewState("w1", window.localStorage).expandedNodeIds.has("v1")).toBe(true);
+  });
+
+  it("存在已保存 viewport 时恢复它并跳过自动适配", async () => {
+    saveViewState(
+      "w1",
+      { expandedNodeIds: new Set(), viewport: { x: 40, y: -20, zoom: 0.6 } },
+      window.localStorage,
+    );
+
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+
+    expect(mocks.lastReactFlowProps.defaultViewport).toEqual({
+      x: 40,
+      y: -20,
+      zoom: 0.6,
+    });
+    expect(mocks.lastReactFlowProps.fitView).toBe(false);
+  });
+
+  it("无 viewport 记录时保留自动适配", async () => {
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+    expect(mocks.lastReactFlowProps.fitView).toBe(true);
+  });
+
+  it("切换作品时改用新作品的展开状态", async () => {
+    saveViewState(
+      "w2",
+      { expandedNodeIds: new Set(["v1"]), viewport: null },
+      window.localStorage,
+    );
+
+    const { rerender } = render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+    expect(visibleIds()).not.toContain("p1");
+
+    rerender(<Canvas ref={createRef()} workId="w2" />);
+    await waitFor(() => {
+      expect(visibleIds()).toContain("p1");
+    });
+  });
+
+  it("画布平移后记录 viewport", async () => {
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+
+    await act(async () => {
+      mocks.lastReactFlowProps.onMoveEnd(null, { x: 5, y: 6, zoom: 1.5 });
+    });
+
+    await waitFor(() => {
+      expect(loadViewState("w1", window.localStorage)?.viewport).toEqual({
+        x: 5,
+        y: 6,
+        zoom: 1.5,
+      });
+    });
   });
 });

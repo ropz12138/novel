@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：阶段一至阶段四已实现并通过测试（后端 483 项、前端 272 项）
+- 状态：阶段一至阶段五已实现并通过测试（后端 483 项、前端 295 项）
 - 目标：画布默认只展示主干节点，展开时动态重新布局并收紧空白
 - 适用范围：Canvas 节点、结构关系、展开/收起、自动布局、用户手动调整
 
@@ -55,7 +55,7 @@ React Flow 渲染和动画过渡
 - 新增数据库字段或执行数据迁移；
 - 删除现有节点坐标字段或破坏旧作品兼容性；
 - 多种可切换布局视图；
-- 展开状态的持久化与多端同步；
+- 展开状态的多端同步（本地持久化已实现，见 5.5）；
 - 用户手动调整同级顺序。
 
 ## 5. 核心概念
@@ -128,9 +128,15 @@ outline = 0, volume = 1, plot = 2, chapter = 3
 const [collapsedNodeIds, setCollapsedNodeIds] = useState(() => new Set());
 ```
 
-本期将其语义反转为 `expandedNodeIds`（默认收起，显式记录展开的节点）。由于当前没有 `localStorage` 或后端持久化，这次反转**不涉及任何数据兼容处理**。
+语义反转为 `expandedNodeIds`（默认收起，显式记录展开的节点）。反转时尚无持久化，因此**不涉及任何数据兼容处理**。
 
-后续若增加持久化，必须为视图状态附带版本号，读到旧版本直接丢弃并按当前默认深度重新初始化——旧的空 `collapsedNodeIds` 表示"全部展开"，新的空 `expandedNodeIds` 表示"全部收起"，两者不可混用。视图状态不得写入 Node 语义字段。
+展开集合与 viewport 现已持久化到 `localStorage`（`lib/canvasViewState.js`），按作品分键，记录附带 `VIEW_STATE_VERSION`。视图状态只影响观看方式，不属于作品语义，因此不入库、也不写进 Node 字段。
+
+版本号是必需的而非防御性设计：旧的空 `collapsedNodeIds` 表示"全部展开"，新的空 `expandedNodeIds` 表示"全部收起"，两者不可混用；布局规则变化后，旧记录恢复出来的画面也可能与新规则冲突。读到版本不符或内容损坏时整条丢弃，按当前默认深度重新初始化，比逐字段迁移更可靠。
+
+保存时以当前节点集合为依据剔除已删除的节点 ID，否则记录会随编辑无限增长。节点尚未加载时不保存——此时无法区分"未加载"与"已删空"。
+
+viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultViewport` 恢复并关闭 `fitView`，否则保留自动适配。`defaultViewport` 只在挂载时生效，所以视图状态在 `useState` 初始化阶段同步读取。`CanvasPage` 以 `key={currentWorkId}` 渲染画布，切换作品时组件整体重建，因此挂载时读取即可覆盖切换场景。
 
 ## 6. 功能需求
 
@@ -339,12 +345,15 @@ frontend/src/lib/canvasOrder.js            同级排序键（对应 chapter_orde
 frontend/src/lib/canvasGraph.js            父子索引、根节点、祖先链、子树统计
 frontend/src/lib/canvasVisibility.js       可见子图投影、展开状态、卫星节点
 frontend/src/lib/canvasLayout.js           树布局与 anchor 补偿
+frontend/src/lib/canvasViewState.js        展开集合与 viewport 的本地持久化
 frontend/src/components/nodes/IsolatedNodePanel.jsx  孤立节点侧边入口
 ```
 
 `canvasCollapse.js` 及其测试已删除：它的 contains 字符串判断由 `canvasRelation.js` 的类型判据取代，element 相关逻辑随 element 节点类型废弃一并移除。
 
-节点位置过渡动画在 `styles.css` 中通过 `.react-flow__node` 的 `transform` transition 实现，无需 JS 动画库。层级链节点不可拖动，因此过渡不会与拖动手感冲突。
+节点位置过渡动画在 `styles.css` 中通过 `.react-flow__node` 的 `transform` transition 实现，无需 JS 动画库。节点位置不由拖动决定，因此过渡不会与拖动手感冲突。
+
+`canvasDrag.js` 只保留框选修饰键与抽屉关闭判据，坐标持久化函数随布局接管一并删除；`edgeLayout.js` 的 `computeEdgeLayoutDiagnostics` 及其专属辅助同期删除。
 
 ### 9.3 可见子图算法
 
@@ -436,9 +445,14 @@ Agent 创建或更新节点后：
 - `NODE_LAYOUT_RULES_TEXT` 改写为"坐标由前端自动布局，不需要提供"；
 - 删除 `test_node_layout_feedback.py`、`test_element_layout_geometry.py`、`test_edge_overlap.py`。
 
-### 阶段五：视图增强（本期不做）
+### 阶段五：视图持久化（已实现）
 
-- 持久化每个作品的展开状态与 viewport，附带版本号；
+- 新增 `lib/canvasViewState.js`：按作品分键的 `localStorage` 读写、版本校验、`pruneExpandedIds`；
+- 画布挂载时同步恢复展开集合与 viewport，展开变化与 `onMoveEnd` 时写回；
+- 同期清理布局接管后的遗留职责：移除连线布局诊断回写（布局每次展开都变，回写会持续产生无意义的 `PUT /edges`，并把瞬时诊断写进 `edge.extra_data`）、删除节点坐标持久化与拖拽快照死代码、新建节点不再计算坐标。
+
+### 阶段六：视图增强（未实现）
+
 - 支持同级顺序手动调整，届时引入 `sort_order` 字段；
 - 支持混合布局与固定节点；
 - 支持隐藏关系聚合；
@@ -518,6 +532,6 @@ Agent 创建或更新节点后：
 - 配角以卫星节点形式在选中关联结构节点时临时出现，既不常驻画布也不丢失关系查看能力；
 - 隐藏数量以可见集合为判据统计，不从展开集合反推；
 - Agent 输出语义结构，不输出像素坐标；
-- 展开状态属于用户视图，不属于小说语义，本期不持久化；
+- 展开状态属于用户视图，不属于小说语义，因此持久化在 localStorage 而非数据库，且必须带版本号；
 - 动态布局必须维持操作节点的视觉锚点；
 - 本期不引入 pinned，避免与树布局产生未定义的冲突。

@@ -253,11 +253,7 @@ body {
 }
 
 /* 展开/收起后节点位置由布局重新计算，用过渡动画避免瞬移。
-   层级链节点不可拖动，因此过渡不会与拖动手感冲突。 */
+   节点位置不由拖动决定，因此过渡不会与拖动手感冲突。 */
 .react-flow__node {
   transition: transform 280ms cubic-bezier(0.25, 0.1, 0.25, 1);
-}
-
-.react-flow.dragging .react-flow__node {
-  transition: none;
 }

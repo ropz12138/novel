@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   applyEdgeLabelAvoidance,
-  computeEdgeLayoutDiagnostics,
   normalizeEdgeLayout,
   resolveOptimalSides,
   edgeHandlesFromSides,
@@ -142,22 +141,6 @@ describe("edge layout", () => {
       routing_offset: 90,
       manually_positioned: false,
     });
-  });
-
-  it("detects strongly overlapping curves", () => {
-    const nodes = [node("a", 0, 0), node("b", 0, 300)];
-    const diagnostics = computeEdgeLayoutDiagnostics(nodes, [
-      edge("e1", "a", "b"),
-      edge("e2", "a", "b"),
-    ]);
-
-    expect(diagnostics[0].issues).toEqual(expect.arrayContaining([
-      expect.objectContaining({
-        type: "edge_overlap",
-        other_edge_id: "e2",
-        severity: "high",
-      }),
-    ]));
   });
 
   it("separates colliding relation labels when a free candidate exists", () => {

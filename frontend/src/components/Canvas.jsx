@@ -30,7 +30,6 @@ import {
   updateNode,
   fetchEdges,
   createEdge,
-  updateEdge,
   deleteEdge,
   deleteNode,
   restoreCanvasSnapshot,
@@ -40,7 +39,6 @@ import {
 } from "../lib/canvasApi";
 import {
   applyEdgeLabelAvoidance,
-  computeEdgeLayoutDiagnostics,
   applyEdgeHandles,
   resolveOptimalSides,
   edgeHandlesFromSides,
@@ -57,10 +55,14 @@ import {
 import { layoutVisibleGraph } from "../lib/canvasLayout";
 import {
   CANVAS_MARQUEE_KEY_CODE,
-  getMovedNodesFromSnapshot,
-  persistNodePositionUpdates,
   shouldClearDrawerOnSelection,
 } from "../lib/canvasDrag";
+import {
+  loadViewState,
+  saveViewState,
+  pruneExpandedIds,
+  localViewStorage,
+} from "../lib/canvasViewState";
 import {
   filterGraphAfterNodeRemoval,
   isCanvasDeleteKey,
@@ -136,23 +138,26 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
   const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [focusedNodeId, setFocusedNodeId] = useState(null);
-  const [isDragging, setIsDragging] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [expandedNodeIds, setExpandedNodeIds] = useState(() => new Set());
+  // 视图状态在挂载时同步读取：defaultViewport 只在挂载生效，晚一帧就来不及
+  const [initialViewState] = useState(() =>
+    loadViewState(workId, localViewStorage()),
+  );
+  const [expandedNodeIds, setExpandedNodeIds] = useState(
+    () => initialViewState?.expandedNodeIds ?? new Set(),
+  );
   // 展开/收起时记录操作节点与操作前的坐标，用于布局后的整体平移补偿
   const [layoutAnchor, setLayoutAnchor] = useState(null);
   const contextMenuRef = useRef(null);
+  const viewportRef = useRef(initialViewState?.viewport ?? null);
   const layoutPositionsRef = useRef(new Map());
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const characterRelationsRef = useRef(characterRelations);
   const undoStackRef = useRef([]);
-  const dragSnapshotRef = useRef(null);
-  const dragFinalizedRef = useRef(false);
   const isDraggingRef = useRef(false);
   const selectedNodeIdsRef = useRef([]);
   const restoringRef = useRef(false);
-  const diagnosticsSentRef = useRef(new Map());
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -183,6 +188,19 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     }
   }, [workId]);
 
+  // 切换作品时载入该作品的视图状态。挂载那次已在 useState 初始化里读过，
+  // 这里跳过以免重复触发布局。
+  const viewStateWorkIdRef = useRef(workId);
+  useEffect(() => {
+    if (!workId || viewStateWorkIdRef.current === workId) return;
+    viewStateWorkIdRef.current = workId;
+
+    const restored = loadViewState(workId, localViewStorage());
+    setExpandedNodeIds(restored?.expandedNodeIds ?? new Set());
+    // viewport 只能在挂载时经 defaultViewport 恢复，此处仅接管后续保存的基准
+    viewportRef.current = restored?.viewport ?? null;
+  }, [workId]);
+
   const loadData = async () => {
     if (!workId) return;
 
@@ -205,7 +223,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       edgesRef.current = flowEdges;
       characterRelationsRef.current = flowRelations;
       undoStackRef.current = [];
-      diagnosticsSentRef.current.clear();
     } catch (err) {
       console.error("Failed to load data:", err);
       setLoadError(err?.message || "加载画布失败");
@@ -584,34 +601,31 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
 
     try {
       pushUndoSnapshot();
-      let maxX = 50;
-      nodes.forEach((n) => {
-        if (n.position.x > maxX) maxX = n.position.x;
-      });
 
-      const newNodeData = {
+      // 位置由布局推导，不再计算坐标
+      const created = await createNode(workId, {
         type,
         title: `新${type}节点`,
         content: "",
-        position_x: maxX + 350,
-        position_y: 200,
-      };
-
-      const created = await createNode(workId, newNodeData);
+      });
 
       setNodes((nds) => {
         const next = [
           ...nds,
           {
-          id: created.id,
-          type: "custom",
-          position: { x: created.position_x, y: created.position_y },
-          data: {
-            type: created.type,
-            label: created.title,
-            content: created.content,
-            extra_data: created.extra_data,
-          },
+            id: created.id,
+            type: "custom",
+            position: { x: 0, y: 0 },
+            data: {
+              type: created.type,
+              label: created.title,
+              content: created.content,
+              extra_data: created.extra_data,
+              layer: created.layer ?? 0,
+              scope: created.scope ?? "local",
+              locked: created.locked ?? false,
+              created_at: created.created_at,
+            },
           },
         ];
         nodesRef.current = next;
@@ -672,52 +686,15 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     setSelectedNode(null);
   }, []);
 
-  const beginDragSnapshot = useCallback(() => {
-    dragFinalizedRef.current = false;
+  // 节点坐标由布局推导，拖动不会改变位置，这里只跟踪拖动状态：
+  // 框选拖动期间不清空详情抽屉。
+  const beginDragTracking = useCallback(() => {
     isDraggingRef.current = true;
-    dragSnapshotRef.current = toCanvasSnapshot(
-      nodesRef.current,
-      edgesRef.current,
-      characterRelationsRef.current,
-    );
-    setIsDragging(true);
   }, []);
 
-  const finishDragPersist = useCallback(() => {
-    if (dragFinalizedRef.current) return;
-    dragFinalizedRef.current = true;
+  const endDragTracking = useCallback(() => {
     isDraggingRef.current = false;
-    setIsDragging(false);
-
-    const snapshot = dragSnapshotRef.current;
-    if (snapshot) {
-      pushUndoSnapshot(snapshot);
-      dragSnapshotRef.current = null;
-    }
-
-    const movedNodes = getMovedNodesFromSnapshot(snapshot, nodesRef.current);
-    if (movedNodes.length === 0) return;
-
-    persistNodePositionUpdates(movedNodes, updateNode).catch((err) => {
-      console.error("Failed to persist node positions:", err);
-    });
-  }, [pushUndoSnapshot]);
-
-  const handleNodeDragStart = useCallback(() => {
-    beginDragSnapshot();
-  }, [beginDragSnapshot]);
-
-  const handleNodeDragStop = useCallback(() => {
-    finishDragPersist();
-  }, [finishDragPersist]);
-
-  const handleSelectionDragStart = useCallback(() => {
-    beginDragSnapshot();
-  }, [beginDragSnapshot]);
-
-  const handleSelectionDragStop = useCallback(() => {
-    finishDragPersist();
-  }, [finishDragPersist]);
+  }, []);
 
   // ── 可见子图投影与动态布局 ──
   // nodes / edges 保存完整语义图；下面派生出当前视图，隐藏节点不会被丢弃。
@@ -775,6 +752,39 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     });
     setExpandedNodeIds((prev) => toggleExpanded(prev, nodeId));
   }, []);
+
+  const persistViewState = useCallback(
+    (expanded) => {
+      // 节点集合是 prune 的依据，尚未加载时无法区分「未加载」与「已删空」
+      if (!workId || !nodesRef.current.length) return;
+      saveViewState(
+        workId,
+        {
+          expandedNodeIds: pruneExpandedIds(
+            expanded,
+            new Set(nodesRef.current.map((node) => node.id)),
+          ),
+          viewport: viewportRef.current,
+        },
+        localViewStorage(),
+      );
+    },
+    [workId],
+  );
+
+  useEffect(() => {
+    persistViewState(expandedNodeIds);
+  }, [persistViewState, expandedNodeIds, nodes]);
+
+  // onMoveEnd 是移动结束事件而非每帧回调，直接写入即可
+  const handleMoveEnd = useCallback(
+    (_event, viewport) => {
+      if (!viewport) return;
+      viewportRef.current = viewport;
+      persistViewState(expandedNodeIds);
+    },
+    [persistViewState, expandedNodeIds],
+  );
 
   const displayedNodes = useMemo(
     () => visibleGraph.visibleNodes.map((node) => ({
@@ -855,40 +865,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     ],
   );
 
-  useEffect(() => {
-    if (!workId || !nodes.length || !edges.length || restoringRef.current) return undefined;
-    const diagnostics = computeEdgeLayoutDiagnostics(nodes, edges);
-    const pending = diagnostics.filter((item) => {
-      const previousVersion = diagnosticsSentRef.current.get(item.edge_id);
-      return previousVersion !== item.layout_version;
-    });
-    if (!pending.length) return undefined;
-
-    const timer = window.setTimeout(async () => {
-      const edgeMap = new Map(edgesRef.current.map((edge) => [edge.id, edge]));
-      await Promise.all(pending.map(async (diagnostic) => {
-        const edge = edgeMap.get(diagnostic.edge_id);
-        if (!edge) return;
-        diagnosticsSentRef.current.set(
-          diagnostic.edge_id,
-          diagnostic.layout_version,
-        );
-        try {
-          await updateEdge(diagnostic.edge_id, {
-            extra_data: {
-              ...(edge.data?.extra_data || {}),
-              layout_diagnostics: diagnostic,
-            },
-          });
-        } catch (error) {
-          diagnosticsSentRef.current.delete(diagnostic.edge_id);
-          console.error("Failed to persist edge layout diagnostics:", error);
-        }
-      }));
-    }, 700);
-    return () => window.clearTimeout(timer);
-  }, [workId, nodes, edges]);
-
   return (
     <div className="w-full h-full flex relative">
       <div className="flex-1 relative">
@@ -931,16 +907,18 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
           onPaneClick={onPaneClick}
           onPaneContextMenu={onPaneContextMenu}
           onSelectionChange={handleSelectionChange}
-          onNodeDragStart={handleNodeDragStart}
-          onNodeDragStop={handleNodeDragStop}
-          onSelectionDragStart={handleSelectionDragStart}
-          onSelectionDragStop={handleSelectionDragStop}
+          onNodeDragStart={beginDragTracking}
+          onNodeDragStop={endDragTracking}
+          onSelectionDragStart={beginDragTracking}
+          onSelectionDragStop={endDragTracking}
           selectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
           multiSelectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
           deleteKeyCode={null}
           nodeTypes={nodeTypes}
           edgeTypes={edgeTypes}
-          fitView
+          onMoveEnd={handleMoveEnd}
+          defaultViewport={initialViewState?.viewport ?? undefined}
+          fitView={!initialViewState?.viewport}
           attributionPosition="bottom-left"
         >
           <Background />
