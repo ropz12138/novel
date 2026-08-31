@@ -51,15 +51,19 @@ export function isCanvasStructuralType(nodeType) {
 }
 
 /**
- * 孤立节点：后端规定 scope=global 的节点禁止任何连线
- * （worldbuilding、note 以及主角 character），它们在图中没有任何边。
- * 这类节点默认不进入画布，否则会以"根节点"身份铺满画布。
+ * 侧栏节点：不参与树布局的节点类型（character、worldbuilding、note）。
+ *
+ * 判定只看类型，不看 scope。scope 有 global/major/minor/temp 四种角色取值，
+ * 若只把 global（主角）算作侧栏节点，配角就既不在树里也不在侧栏，
+ * 仅在选中恰好关联的结构节点时作为卫星闪现——等于没有常驻入口。
+ *
+ * 它们不进入画布主干：worldbuilding 与 note 在图中没有任何边，若按
+ * "无父边即根节点"处理会全部默认显示，数十条设定就能占满画布。
  */
-export function isIsolatedType(nodeType, scope) {
-  if (isCanvasStructuralType(nodeType)) return false;
-  return scope === "global";
+export function isIsolatedType(nodeType) {
+  return !isCanvasStructuralType(nodeType);
 }
 
 export function isIsolatedNode(node) {
-  return isIsolatedType(node?.data?.type, node?.data?.scope);
+  return isIsolatedType(node?.data?.type);
 }

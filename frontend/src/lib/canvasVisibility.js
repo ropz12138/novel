@@ -6,11 +6,7 @@
  * 而不能先布局全部节点再隐藏一部分。
  */
 import { hierarchyRootIds, ancestorChain, childIdsOf, hasHierarchyChildren } from "./canvasGraph";
-import {
-  isHierarchyEdge,
-  isCanvasStructuralType,
-  isIsolatedNode,
-} from "./canvasRelation";
+import { isHierarchyEdge, isCanvasStructuralType } from "./canvasRelation";
 
 /** 默认从根节点向下展开的层数：0 只显示根，1 额外显示第一层子节点。 */
 export const DEFAULT_EXPAND_DEPTH = 1;
@@ -67,8 +63,9 @@ export function projectVisibleGraph({
       const otherId = edge.source === selectedNodeId ? edge.target : edge.source;
       const otherNode = index.nodeById.get(otherId);
       if (!otherNode) continue;
+      // 非结构节点即卫星候选。worldbuilding 与 note 被禁止连线，
+      // 在图中没有边，因此不会走到这里。
       if (isCanvasStructuralType(otherNode.data?.type)) continue;
-      if (isIsolatedNode(otherNode)) continue;
       satelliteAnchorById.set(otherId, selectedNodeId);
       visibleNodeIds.add(otherId);
     }

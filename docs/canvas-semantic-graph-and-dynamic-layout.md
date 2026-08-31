@@ -151,7 +151,7 @@ viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultVi
 
 默认深度为可配置常量，后续可升级为作品级设置。
 
-### 6.2 孤立节点不进入画布
+### 6.2 非层级链节点不进入画布主干
 
 这一条直接决定"紧凑"目标能否达成，必须明确实现。
 
@@ -159,10 +159,14 @@ viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultVi
 
 方案：
 
-- `worldbuilding`、`note`、主角 `character` 默认不渲染到画布；
-- 侧边栏提供按类型分组的聚合入口，显示各类型条目数量，点开为列表；
+- `character`、`worldbuilding`、`note` 默认不渲染到画布主干；
+- 侧边栏提供分组聚合入口，显示各分组条目数量，点开为列表；
 - 从列表点击条目时打开详情抽屉，不改变画布布局；
-- 非主角 `character`（`major` / `minor` / `temp`）有关联边，按 6.6 的关系显示策略处理，不参与树布局。
+- 配角另有 6.6 的卫星显示策略，但侧栏入口不因此省略。
+
+**侧栏收录判据只看节点类型，不看 scope。** 这一点曾被实现错：早期版本把"孤立"定义为"非层级链类型且 `scope === global`"，理由是 global 节点禁止连线、在图中真正孤立。但 `scope` 对 `character` 有四种取值（`global` 主角、`major` / `minor` / `temp` 配角），于是配角既不在树里（非层级链类型），也不在侧栏里（scope 不是 global），仅在选中恰好与之相连的结构节点时作为卫星闪现——默认视图下没有任何入口。实测一部含 4 个 `major` 配角的作品，这 4 个节点在画布和侧栏中都无处可寻。
+
+因此判据改为"非层级链类型即收录"，`scope` 只用于侧栏内部的分组与标签（主角 / 主要配角 / 次要配角 / 临时角色）。分组键穷举了后端强校验的四种 `character` scope，不存在归类不到的取值。
 
 同时需要修改 `NODE_LAYOUT_RULES_TEXT`：其中"character 位于画布左侧，纵向排列""note、worldbuilding 位于画布左侧"以及"前端不会自动重排"等表述在前端接管布局后全部失效，必须移除。
 
@@ -210,9 +214,9 @@ viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultVi
 
 **卫星节点**：非主角 `character`（`major` / `minor` / `temp`）不属于层级链，因此不会作为结构根节点进入画布。但它们通过 `reference` 边与章节、情节关联，若一律不显示，画布上查看角色与章节关系的能力就丢失了。
 
-处理方式：选中某个可见的结构节点时，与它直接相连的非结构、非孤立节点作为卫星节点临时出现，挂在该节点右侧纵向排列；取消选中即消失。卫星节点不参与树的宽度计算，也不占用树深度，因此不会影响主干的紧凑性。
+处理方式：选中某个可见的结构节点时，与它直接相连的非层级链节点作为卫星节点临时出现，挂在该节点右侧纵向排列；取消选中即消失。卫星节点不参与树的宽度计算，也不占用树深度，因此不会影响主干的紧凑性。
 
-孤立节点（`worldbuilding` / `note` / 主角）被后端禁止连线，不存在把它们带上画布的路径，只能从 6.2 的侧边栏进入。
+卫星资格只排除层级链类型，不再额外排除侧栏节点：`worldbuilding`、`note` 与主角被后端 `validate_edge_endpoints` 硬性拒绝作为连线端点，在图中没有边，因此不存在把它们带上画布的路径，无需在投影里重复判断。卫星显示与侧栏入口是并存的两条路径，不是二选一。
 
 ### 6.7 动态布局
 
@@ -340,13 +344,13 @@ const displayEdges = routeVisibleEdges(...);
 ### 9.2 新增模块
 
 ```text
-frontend/src/lib/canvasRelation.js         关系类别派生、层级序号、孤立节点判定
+frontend/src/lib/canvasRelation.js         关系类别派生、层级序号、侧栏节点判定
 frontend/src/lib/canvasOrder.js            同级排序键（对应 chapter_order_key）
 frontend/src/lib/canvasGraph.js            父子索引、根节点、祖先链、子树统计
 frontend/src/lib/canvasVisibility.js       可见子图投影、展开状态、卫星节点
 frontend/src/lib/canvasLayout.js           树布局与 anchor 补偿
 frontend/src/lib/canvasViewState.js        展开集合与 viewport 的本地持久化
-frontend/src/components/nodes/IsolatedNodePanel.jsx  孤立节点侧边入口
+frontend/src/components/nodes/IsolatedNodePanel.jsx  角色与设定侧边入口
 ```
 
 `canvasCollapse.js` 及其测试已删除：它的 contains 字符串判断由 `canvasRelation.js` 的类型判据取代，element 相关逻辑随 element 节点类型废弃一并移除。
@@ -528,8 +532,9 @@ Agent 创建或更新节点后：
 - 层级判据必须是"严格降一级"，同类型之间归为 sequence，否则 `chapter → chapter` 会破坏树结构；
 - 同级顺序复用 `chapter_order_key` 的回退链，不新增 `sort_order` 字段；
 - 单父与无环校验是树布局的前提，当前后端完全缺失，必须补齐；
-- 孤立节点（worldbuilding / note / 主角）默认不进画布，改由侧边栏聚合入口访问，否则紧凑目标无法达成；
-- 配角以卫星节点形式在选中关联结构节点时临时出现，既不常驻画布也不丢失关系查看能力；
+- 非层级链节点（character / worldbuilding / note）默认不进画布主干，改由侧边栏聚合入口访问，否则紧凑目标无法达成；
+- 侧栏收录判据只看类型不看 scope：按 scope 筛选会让配角在画布与侧栏中都不可见；
+- 配角在侧栏之外，还以卫星节点形式在选中关联结构节点时临时出现，两条路径并存；
 - 隐藏数量以可见集合为判据统计，不从展开集合反推；
 - Agent 输出语义结构，不输出像素坐标；
 - 展开状态属于用户视图，不属于小说语义，因此持久化在 localStorage 而非数据库，且必须带版本号；

@@ -117,17 +117,17 @@ describe("节点类型分组", () => {
     expect(isCanvasStructuralType("worldbuilding")).toBe(false);
   });
 
-  it("禁止连线的节点为孤立节点，不进入画布", () => {
-    // 后端规定 scope=global 的节点禁止任何连线：worldbuilding / note / 主角
-    expect(isIsolatedType("worldbuilding", "global")).toBe(true);
-    expect(isIsolatedType("note", "global")).toBe(true);
-    expect(isIsolatedType("character", "global")).toBe(true);
+  it("所有非层级链节点都归入侧栏，不进入画布主干", () => {
+    expect(isIsolatedType("worldbuilding")).toBe(true);
+    expect(isIsolatedType("note")).toBe(true);
+    expect(isIsolatedType("character")).toBe(true);
   });
 
-  it("有关联边的配角不是孤立节点", () => {
-    expect(isIsolatedType("character", "major")).toBe(false);
-    expect(isIsolatedType("character", "minor")).toBe(false);
-    expect(isIsolatedType("character", "temp")).toBe(false);
+  it("判定不依赖 scope：配角同样需要侧栏入口", () => {
+    // 配角只在选中关联结构节点时作为卫星出现，若不进侧栏就没有任何常驻入口
+    for (const scope of ["global", "major", "minor", "temp"]) {
+      expect(isIsolatedType("character", scope)).toBe(true);
+    }
   });
 
   it("层级链节点不是孤立节点", () => {
