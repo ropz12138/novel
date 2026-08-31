@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：方案已定稿，可进入开发
+- 状态：阶段一至阶段四已实现并通过测试（后端 483 项、前端 272 项）
 - 目标：画布默认只展示主干节点，展开时动态重新布局并收紧空白
 - 适用范围：Canvas 节点、结构关系、展开/收起、自动布局、用户手动调整
 
@@ -188,19 +188,25 @@ const [collapsedNodeIds, setCollapsedNodeIds] = useState(() => new Set());
 有隐藏后代的节点必须显示明确的可发现性提示：
 
 - 展开/收起图标；
-- 直接子节点数量；
 - 隐藏后代总数；
-- 按类型聚合的摘要，例如"3 个情节 · 12 章"。
+- 按类型聚合的摘要，例如"2 个情节 · 12 章"。
 
 节点没有 hierarchy 子节点时，不显示展开控件。
 
-### 6.6 非结构关系的显示策略
+隐藏数量必须以**可见集合**为判据统计（后代是否在 `visibleNodeIds` 中），而不是从 `expandedNodeIds` 反推。默认展开深度会让根节点的直接子节点可见却不出现在 `expandedNodeIds` 里，从展开集合推导会把它们误判为隐藏。
+
+### 6.6 非结构关系与卫星节点
 
 默认主视图只持续显示 `hierarchy` 边。其他关系按需显示：
 
 - 选中节点时显示与该节点直接相关的 `reference` 和 `sequence` 边；
-- 指向隐藏节点的关系不绘制到不可见端点，本期直接隐藏；
 - 本期不实现聚合代理边。
+
+**卫星节点**：非主角 `character`（`major` / `minor` / `temp`）不属于层级链，因此不会作为结构根节点进入画布。但它们通过 `reference` 边与章节、情节关联，若一律不显示，画布上查看角色与章节关系的能力就丢失了。
+
+处理方式：选中某个可见的结构节点时，与它直接相连的非结构、非孤立节点作为卫星节点临时出现，挂在该节点右侧纵向排列；取消选中即消失。卫星节点不参与树的宽度计算，也不占用树深度，因此不会影响主干的紧凑性。
+
+孤立节点（`worldbuilding` / `note` / 主角）被后端禁止连线，不存在把它们带上画布的路径，只能从 6.2 的侧边栏进入。
 
 ### 6.7 动态布局
 
@@ -328,14 +334,17 @@ const displayEdges = routeVisibleEdges(...);
 ### 9.2 新增模块
 
 ```text
-frontend/src/lib/canvasRelation.js    关系类别派生与层级序号
-frontend/src/lib/canvasGraph.js       父子索引、根节点、祖先链、子树统计、环检测
-frontend/src/lib/canvasVisibility.js  根据展开状态生成可见子图
-frontend/src/lib/canvasLayout.js      对可见子图计算坐标
-frontend/src/lib/canvasOrder.js       同级排序键（对应 chapter_order_key）
+frontend/src/lib/canvasRelation.js         关系类别派生、层级序号、孤立节点判定
+frontend/src/lib/canvasOrder.js            同级排序键（对应 chapter_order_key）
+frontend/src/lib/canvasGraph.js            父子索引、根节点、祖先链、子树统计
+frontend/src/lib/canvasVisibility.js       可见子图投影、展开状态、卫星节点
+frontend/src/lib/canvasLayout.js           树布局与 anchor 补偿
+frontend/src/components/nodes/IsolatedNodePanel.jsx  孤立节点侧边入口
 ```
 
-`canvasCollapse.js` 的 contains 字符串判断与 element 逻辑迁移完成后删除。
+`canvasCollapse.js` 及其测试已删除：它的 contains 字符串判断由 `canvasRelation.js` 的类型判据取代，element 相关逻辑随 element 节点类型废弃一并移除。
+
+节点位置过渡动画在 `styles.css` 中通过 `.react-flow__node` 的 `transform` transition 实现，无需 JS 动画库。层级链节点不可拖动，因此过渡不会与拖动手感冲突。
 
 ### 9.3 可见子图算法
 
@@ -395,11 +404,10 @@ Agent 创建或更新节点后：
 
 ### 阶段一：关系判定与结构校验（无数据迁移）
 
-- 实现关系类别派生函数，含"严格降一级"判据与 `chapter → chapter` 的 sequence 归类；
-- 在 `routers/edge.py` 增加自环、跨级、单父、无环校验；
-- 前端新增 `canvasRelation.js`、`canvasOrder.js`，替换 `canvasCollapse.js` 的字符串判断；
-- 删除 element 相关遗留逻辑；
-- 保持当前画布坐标和渲染行为不变；
+- 新增 `backend/services/edge_relation.py`，实现关系类别派生，含"严格降一级"判据与 `chapter → chapter` 的 sequence 归类；
+- 在 `routers/edge.py` 与 Agent 的 `create_edge` / `batch_create_edges` 共用同一套校验：自环、跨级、反向、单父；
+- 批量建边遇到非法结构时整批回滚并报错，不静默跳过；
+- 前端新增 `canvasRelation.js`、`canvasOrder.js`，删除 `canvasCollapse.js`；
 - 补齐前后端单元测试。
 
 ### 阶段二：可见子图
@@ -422,10 +430,11 @@ Agent 创建或更新节点后：
 
 ### 阶段四：职责清理
 
-- Agent 节点工具不再要求坐标；
-- 删除布局 warning 到 `update_node` 的修复循环；
-- 移除 `NODE_LAYOUT_RULES_TEXT` 与 Supervisor 中的坐标规划提示词；
-- 更新相关测试。
+- `create_node` 的 `position_x` / `position_y` 改为可选；
+- 工具返回值移除 `layout_warnings` / `layout_hint`，删除布局 warning 到 `update_node` 的修复循环；
+- 删除 `services/agents/node_layout.py` 与 `get_node_layout_issues` 工具；
+- `NODE_LAYOUT_RULES_TEXT` 改写为"坐标由前端自动布局，不需要提供"；
+- 删除 `test_node_layout_feedback.py`、`test_element_layout_geometry.py`、`test_edge_overlap.py`。
 
 ### 阶段五：视图增强（本期不做）
 
@@ -505,7 +514,9 @@ Agent 创建或更新节点后：
 - 层级判据必须是"严格降一级"，同类型之间归为 sequence，否则 `chapter → chapter` 会破坏树结构；
 - 同级顺序复用 `chapter_order_key` 的回退链，不新增 `sort_order` 字段；
 - 单父与无环校验是树布局的前提，当前后端完全缺失，必须补齐；
-- 孤立节点（worldbuilding / note / 主角）默认不进画布，否则紧凑目标无法达成；
+- 孤立节点（worldbuilding / note / 主角）默认不进画布，改由侧边栏聚合入口访问，否则紧凑目标无法达成；
+- 配角以卫星节点形式在选中关联结构节点时临时出现，既不常驻画布也不丢失关系查看能力；
+- 隐藏数量以可见集合为判据统计，不从展开集合反推；
 - Agent 输出语义结构，不输出像素坐标；
 - 展开状态属于用户视图，不属于小说语义，本期不持久化；
 - 动态布局必须维持操作节点的视觉锚点；

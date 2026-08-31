@@ -38,7 +38,7 @@ def test_contains_is_plain_natural_language(monkeypatch):
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
         n1 = Node(work_id=work.id, type="outline", title="主线", layer=1)
-        n2 = Node(work_id=work.id, type="chapter", title="第1章", layer=3)
+        n2 = Node(work_id=work.id, type="volume", title="第一卷", layer=2)
         db.add_all([n1, n2])
         db.commit()
 

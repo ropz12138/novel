@@ -43,6 +43,7 @@ export function mergeRefreshedNodes(_currentNodes, fetchedRawNodes) {
       layer: node.layer ?? 0,
       scope: node.scope ?? "local",
       locked: node.locked ?? false,
+      created_at: node.created_at,
     },
   }));
 }

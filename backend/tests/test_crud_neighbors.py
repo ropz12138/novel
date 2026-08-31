@@ -93,7 +93,7 @@ def test_create_edge_returns_endpoints_as_neighbors(monkeypatch):
     try:
         work = _make_work(monkeypatch, db)
         a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        b = Node(work_id=work.id, type="volume", title="B", layer=2)
         db.add_all([a, b])
         db.commit()
 
@@ -146,7 +146,7 @@ def test_batch_create_edges_returns_endpoints(monkeypatch):
     try:
         work = _make_work(monkeypatch, db)
         a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        b = Node(work_id=work.id, type="volume", title="B", layer=2)
         db.add_all([a, b])
         db.commit()
 

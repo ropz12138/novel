@@ -20,6 +20,7 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import CustomNode from "./nodes/CustomNode";
+import IsolatedNodePanel from "./nodes/IsolatedNodePanel";
 import CustomEdge from "./edges/CustomEdge";
 import CharacterRelationEdge from "./edges/CharacterRelationEdge";
 import NodeDetailDrawer from "./nodes/NodeDetailDrawer";
@@ -45,14 +46,15 @@ import {
   edgeHandlesFromSides,
 } from "../lib/edgeLayout";
 import {
-  isContainsEdge,
-  isDescendantOfCollapsed,
-  buildContainsParentMap,
-  buildContainsChildSources,
-  buildElementChapterLinks,
-  isNodeHiddenByCollapse,
-  buildCollapsibleNodeIds,
-} from "../lib/canvasCollapse";
+  buildGraphIndex,
+  hasHierarchyChildren,
+  hiddenDescendantSummary,
+} from "../lib/canvasGraph";
+import {
+  projectVisibleGraph,
+  toggleExpanded,
+} from "../lib/canvasVisibility";
+import { layoutVisibleGraph } from "../lib/canvasLayout";
 import {
   CANVAS_MARQUEE_KEY_CODE,
   getMovedNodesFromSnapshot,
@@ -77,19 +79,31 @@ import {
   toCanvasSnapshot,
 } from "../lib/canvasFlowAdapters";
 
-const createNodeTypes = (onNodeClick, onFocusEdges, focusedNodeId, collapsedNodeIds = new Set(), hasCollapsibleIds = new Set(), chapterElementCounts = {}, onCollapseToggle) => ({
-  custom: (props) => (
-    <CustomNode
-      {...props}
-      onNodeClick={onNodeClick}
-      onFocusEdges={onFocusEdges}
-      isEdgesFocused={props.id === focusedNodeId}
-      isCollapsed={collapsedNodeIds.has(props.id)}
-      hasChildren={hasCollapsibleIds.has(props.id)}
-      linkedElementCount={chapterElementCounts[props.id] || 0}
-      onCollapseToggle={onCollapseToggle}
-    />
-  ),
+const createNodeTypes = (
+  onNodeClick,
+  onFocusEdges,
+  focusedNodeId,
+  expandedNodeIds = new Set(),
+  expandableNodeIds = new Set(),
+  hiddenSummaryById = new Map(),
+  onCollapseToggle,
+) => ({
+  custom: (props) => {
+    const summary = hiddenSummaryById.get(props.id);
+    return (
+      <CustomNode
+        {...props}
+        onNodeClick={onNodeClick}
+        onFocusEdges={onFocusEdges}
+        isEdgesFocused={props.id === focusedNodeId}
+        isExpanded={expandedNodeIds.has(props.id)}
+        hasChildren={expandableNodeIds.has(props.id)}
+        hiddenDescendantCount={summary?.total || 0}
+        hiddenDescendantText={summary?.text || ""}
+        onCollapseToggle={onCollapseToggle}
+      />
+    );
+  },
 });
 
 const edgeTypes = {
@@ -101,7 +115,6 @@ function isRelHandle(handleId) {
   return (handleId || "").startsWith("rel-");
 }
 
-export { isContainsEdge, isDescendantOfCollapsed };
 export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
@@ -125,8 +138,11 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
   const [focusedNodeId, setFocusedNodeId] = useState(null);
   const [isDragging, setIsDragging] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [collapsedNodeIds, setCollapsedNodeIds] = useState(() => new Set());
+  const [expandedNodeIds, setExpandedNodeIds] = useState(() => new Set());
+  // 展开/收起时记录操作节点与操作前的坐标，用于布局后的整体平移补偿
+  const [layoutAnchor, setLayoutAnchor] = useState(null);
   const contextMenuRef = useRef(null);
+  const layoutPositionsRef = useRef(new Map());
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
   const characterRelationsRef = useRef(characterRelations);
@@ -703,101 +719,119 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     finishDragPersist();
   }, [finishDragPersist]);
 
+  // ── 可见子图投影与动态布局 ──
+  // nodes / edges 保存完整语义图；下面派生出当前视图，隐藏节点不会被丢弃。
+  const graphIndex = useMemo(() => buildGraphIndex(nodes, edges), [nodes, edges]);
+
+  const visibleGraph = useMemo(
+    () => projectVisibleGraph({
+      index: graphIndex,
+      expandedNodeIds,
+      focusNodeId: focusedNodeId,
+      selectedNodeId: selectedNode?.id ?? null,
+    }),
+    [graphIndex, expandedNodeIds, focusedNodeId, selectedNode?.id],
+  );
+
+  const layoutPositions = useMemo(
+    () => layoutVisibleGraph({
+      index: graphIndex,
+      visibleNodeIds: visibleGraph.visibleNodeIds,
+      depthById: visibleGraph.depthById,
+      satelliteAnchorById: visibleGraph.satelliteAnchorById,
+      previousPositions: layoutAnchor?.positions ?? null,
+      anchorNodeId: layoutAnchor?.nodeId ?? null,
+    }),
+    [graphIndex, visibleGraph, layoutAnchor],
+  );
+
+  useEffect(() => {
+    layoutPositionsRef.current = layoutPositions;
+  }, [layoutPositions]);
+
+  const expandableNodeIds = useMemo(() => {
+    const ids = new Set();
+    for (const node of visibleGraph.visibleNodes) {
+      if (hasHierarchyChildren(graphIndex, node.id)) ids.add(node.id);
+    }
+    return ids;
+  }, [graphIndex, visibleGraph]);
+
+  const hiddenSummaryById = useMemo(() => {
+    const summaries = new Map();
+    for (const nodeId of expandableNodeIds) {
+      summaries.set(
+        nodeId,
+        hiddenDescendantSummary(graphIndex, nodeId, visibleGraph.visibleNodeIds),
+      );
+    }
+    return summaries;
+  }, [graphIndex, expandableNodeIds, visibleGraph]);
+
+  const handleCollapseToggle = useCallback((nodeId) => {
+    setLayoutAnchor({
+      nodeId,
+      positions: new Map(layoutPositionsRef.current),
+    });
+    setExpandedNodeIds((prev) => toggleExpanded(prev, nodeId));
+  }, []);
+
+  const displayedNodes = useMemo(
+    () => visibleGraph.visibleNodes.map((node) => ({
+      ...node,
+      position: layoutPositions.get(node.id) ?? node.position,
+      // 位置由可见子图推导，手动拖动不参与布局
+      draggable: false,
+    })),
+    [visibleGraph, layoutPositions],
+  );
+
+  // 连线的连接点与标签避让必须基于布局后的坐标，否则会指向节点的旧位置
   const visibleStructuralEdges = useMemo(
     () => {
       if (!showStructuralEdges) return [];
       return focusedNodeId
-        ? edges.filter((edge) => edge.source === focusedNodeId || edge.target === focusedNodeId)
-        : edges;
+        ? visibleGraph.visibleEdges.filter(
+          (edge) => edge.source === focusedNodeId || edge.target === focusedNodeId,
+        )
+        : visibleGraph.visibleEdges;
     },
-    [edges, focusedNodeId, showStructuralEdges],
+    [visibleGraph, focusedNodeId, showStructuralEdges],
   );
 
   const visibleCharacterRelations = useMemo(
     () => {
       if (!showCharacterRelations) return [];
+      const onCanvas = characterRelations.filter(
+        (edge) =>
+          visibleGraph.visibleNodeIds.has(edge.source) &&
+          visibleGraph.visibleNodeIds.has(edge.target),
+      );
       return focusedNodeId
-        ? characterRelations.filter(
+        ? onCanvas.filter(
           (edge) => edge.source === focusedNodeId || edge.target === focusedNodeId,
         )
-        : characterRelations;
+        : onCanvas;
     },
-    [characterRelations, focusedNodeId, showCharacterRelations],
+    [characterRelations, visibleGraph, focusedNodeId, showCharacterRelations],
   );
 
   const displayStructuralEdges = useMemo(
     () => applyEdgeLabelAvoidance(
-      nodes,
-      applyEdgeHandles(nodes, visibleStructuralEdges),
+      displayedNodes,
+      applyEdgeHandles(displayedNodes, visibleStructuralEdges),
     ),
-    [nodes, visibleStructuralEdges],
+    [displayedNodes, visibleStructuralEdges],
   );
 
   const displayCharacterRelations = useMemo(
-    () => applyEdgeHandles(nodes, visibleCharacterRelations, { relation: true }),
-    [nodes, visibleCharacterRelations],
+    () => applyEdgeHandles(displayedNodes, visibleCharacterRelations, { relation: true }),
+    [displayedNodes, visibleCharacterRelations],
   );
 
-  const allVisibleEdges = useMemo(
+  const displayedEdges = useMemo(
     () => [...displayStructuralEdges, ...displayCharacterRelations],
     [displayStructuralEdges, displayCharacterRelations],
-  );
-
-  // ── 收起/展开：结构 contains 子树 + 章节关联 element ──
-  const parentMap = useMemo(() => buildContainsParentMap(edges), [edges]);
-
-  const { elementToChapters, chapterToElements } = useMemo(
-    () => buildElementChapterLinks(edges, nodes),
-    [edges, nodes],
-  );
-
-  const nodeTypeById = useMemo(
-    () => new Map(nodes.map((n) => [n.id, n.data?.type])),
-    [nodes],
-  );
-
-  const hasCollapsibleIds = useMemo(
-    () => buildCollapsibleNodeIds(buildContainsChildSources(edges), chapterToElements),
-    [edges, chapterToElements],
-  );
-
-  const chapterElementCounts = useMemo(() => {
-    const counts = {};
-    for (const [chapterId, elements] of Object.entries(chapterToElements)) {
-      counts[chapterId] = elements.length;
-    }
-    return counts;
-  }, [chapterToElements]);
-
-  const isHiddenByCollapse = useCallback(
-    (nodeId) => isNodeHiddenByCollapse(nodeId, {
-      parentMap,
-      collapsedNodeIds,
-      elementToChapters,
-      nodeTypeById,
-    }),
-    [parentMap, collapsedNodeIds, elementToChapters, nodeTypeById],
-  );
-
-  const handleCollapseToggle = useCallback((nodeId) => {
-    setCollapsedNodeIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(nodeId)) next.delete(nodeId);
-      else next.add(nodeId);
-      return next;
-    });
-  }, []);
-
-  const displayedNodes = useMemo(
-    () => nodes.map((n) => ({ ...n, hidden: isHiddenByCollapse(n.id) })),
-    [nodes, isHiddenByCollapse],
-  );
-
-  const collapsedHiddenEdges = useMemo(
-    () => (isDragging ? allVisibleEdges : allVisibleEdges).filter(
-      (e) => !isHiddenByCollapse(e.source) && !isHiddenByCollapse(e.target),
-    ),
-    [isDragging, allVisibleEdges, isHiddenByCollapse],
   );
 
   const nodeTypes = useMemo(
@@ -805,18 +839,18 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       handleNodeClick,
       handleFocusEdges,
       focusedNodeId,
-      collapsedNodeIds,
-      hasCollapsibleIds,
-      chapterElementCounts,
+      expandedNodeIds,
+      expandableNodeIds,
+      hiddenSummaryById,
       handleCollapseToggle,
     ),
     [
       handleNodeClick,
       handleFocusEdges,
       focusedNodeId,
-      collapsedNodeIds,
-      hasCollapsibleIds,
-      chapterElementCounts,
+      expandedNodeIds,
+      expandableNodeIds,
+      hiddenSummaryById,
       handleCollapseToggle,
     ],
   );
@@ -889,7 +923,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
         </div>
         <ReactFlow
           nodes={displayedNodes}
-          edges={collapsedHiddenEdges}
+          edges={displayedEdges}
           onNodesChange={onNodesChange}
           onEdgesChange={onCombinedEdgesChange}
           onConnect={onConnect}
@@ -965,6 +999,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
           </div>
         )}
       </div>
+
+      {/* 全局节点入口：禁止连线的孤立节点不进画布，避免铺满可视区域 */}
+      <IsolatedNodePanel nodes={nodes} onSelect={handleNodeClick} />
 
       {/* 节点详情抽屉 */}
       <NodeDetailDrawer node={selectedNode} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />

@@ -142,11 +142,9 @@ EDGE_CONNECTION_RULES_TEXT = (
 )
 
 NODE_LAYOUT_RULES_TEXT = (
-    "画布节点位置布局（position_x/position_y/layer，前端不会自动重排）："
-    "① character 位于画布左侧，纵向排列（position_y 递增）；"
-    "② note、worldbuilding 位于画布左侧；"
-    "③ outline/volume/plot/chapter 从上到下层级排列（Y 随层级递增），"
-    "同级多个节点水平排列（position_x 错开）。"
+    "节点位置由前端根据当前展开状态自动布局，不需要提供 position_x/position_y："
+    "父子层级决定纵向位置，同级顺序决定横向位置。"
+    "传入坐标不会影响画布呈现，请把精力放在节点内容与父子关系上。"
 )
 
 

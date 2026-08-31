@@ -10,8 +10,6 @@ from pydantic import BaseModel, Field
 
 from models.node import Node
 from models.edge import Edge
-from constants import NODE_WIDTH, NODE_HEIGHT
-from services.agents.node_layout import node_rect, detect_rect_issue
 
 
 def _get_db():
@@ -371,11 +369,6 @@ class CanvasIndexInput(BaseModel):
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
-class NodeLayoutIssuesInput(BaseModel):
-    node_id: Optional[str] = Field(default=None, description="只查与该节点相关的布局问题；省略则查全画布")
-    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
-
-
 class ListUserCanvasActionsInput(BaseModel):
     limit: int = Field(default=50, description="返回数量限制，按时间倒序（最新在前）")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -431,79 +424,6 @@ get_canvas_index = StructuredTool.from_function(
 )
 
 
-def _get_node_layout_issues_sync(node_id=None, reason=None):
-    db = _get_db()
-    try:
-        work_id = _get_current_work_id()
-        query = db.query(Node)
-        if work_id:
-            query = query.filter(Node.work_id == work_id)
-        nodes = query.all()
-
-        counts = {"overlap": 0, "touching": 0, "too_close": 0}
-        empty = {
-            "total": 0,
-            "counts": counts,
-            "issues": [],
-            "node_size": {"width": NODE_WIDTH, "height": NODE_HEIGHT},
-        }
-        if not nodes:
-            return json.dumps(empty, ensure_ascii=False)
-        if node_id and not any(n.id == node_id for n in nodes):
-            return json.dumps(empty, ensure_ascii=False)
-
-        rects = [node_rect(n) for n in nodes]
-        issues = []
-        for i in range(len(nodes)):
-            for j in range(i + 1, len(nodes)):
-                a, b = nodes[i], nodes[j]
-                if node_id and a.id != node_id and b.id != node_id:
-                    continue
-                issue = detect_rect_issue(rects[i], rects[j])
-                if not issue:
-                    continue
-                issues.append({
-                    "type": issue["type"],
-                    "message": issue["message"],
-                    "node_a": {"id": a.id, "title": a.title, "type": a.type},
-                    "node_b": {"id": b.id, "title": b.title, "type": b.type},
-                    "metrics": {
-                        "overlap_width": issue["overlap_width"],
-                        "overlap_height": issue["overlap_height"],
-                        "horizontal_gap": issue["horizontal_gap"],
-                        "vertical_gap": issue["vertical_gap"],
-                        "edge_distance": issue["edge_distance"],
-                    },
-                })
-                counts[issue["type"]] += 1
-
-        return json.dumps({
-            "total": len(issues),
-            "counts": counts,
-            "issues": issues,
-            "node_size": {"width": NODE_WIDTH, "height": NODE_HEIGHT},
-        }, ensure_ascii=False)
-    finally:
-        db.close()
-
-
-async def _get_node_layout_issues_async(node_id=None, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_get_node_layout_issues_sync, node_id, reason))
-
-
-get_node_layout_issues = StructuredTool.from_function(
-    coroutine=_get_node_layout_issues_async,
-    func=_get_node_layout_issues_sync,
-    name="get_node_layout_issues",
-    description=(
-        "检测画布布局问题（重叠/边界紧贴/间距过近）。"
-        "create_node/update_node 后若 layout_warnings 非空，用 update_node 修复"
-        "（建议水平间距≥300px、垂直间距≥200px），再调用本工具确认已清零。"
-        "传 node_id 只查与该节点相关的问题；省略则查全画布。"
-    ),
-    args_schema=NodeLayoutIssuesInput,
-)
 
 
 def _list_user_canvas_actions_sync(limit=50, reason=None):
@@ -546,6 +466,5 @@ query_tools = [
     grep_nodes,
     get_canvas_overview,
     get_canvas_index,
-    get_node_layout_issues,
     list_user_canvas_actions,
 ]

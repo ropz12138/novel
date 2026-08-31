@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from models.node import Node
 from models.edge import Edge
 from services.edge_layout_service import build_edge_layout
-from services.agents.node_layout import node_rect, detect_rect_issue, detect_edge_overlap
+from services.edge_relation import validate_hierarchy_structure
 from node_types import (
     STANDARD_NODE_TYPES,
     NODE_TYPES_RULES_TEXT,
@@ -82,8 +82,8 @@ class CreateNodeInput(BaseModel):
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
     )
     scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
-    position_x: float = Field(description=f"X 坐标（画布水平位置）。{NODE_LAYOUT_RULES_TEXT}")
-    position_y: float = Field(description=f"Y 坐标（画布垂直位置）。{NODE_LAYOUT_RULES_TEXT}")
+    position_x: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
+    position_y: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -233,85 +233,6 @@ def _neighbor_items(db, node_id, work_id):
             neighbors.append({"node": _compact(s), "edge": {"edge_type": e.edge_type, "direction": "in"}})
             seen.add(e.source_id)
     return neighbors
-
-
-def _detect_rect_issue(rect_a: dict, rect_b: dict) -> str:
-    """包装 node_layout.detect_rect_issue，返回纯文本消息（无问题返回空串）。"""
-    issue = detect_rect_issue(rect_a, rect_b)
-    return issue["message"] if issue else ""
-
-
-def _format_layout_warning(other_node, issue: dict) -> str:
-    """把单条布局问题格式化为带对方节点标题的自然语言句子。"""
-    title = other_node.title
-    msg = issue["message"]
-    if issue["type"] == "overlap":
-        # 圆形重叠时 overlap_width/overlap_height 为 0，用 edge_distance(负值) 描述重叠深度
-        if issue.get("overlap_width", 0) == 0 and issue.get("overlap_height", 0) == 0:
-            depth = abs(issue.get("edge_distance", 0))
-            return f"与节点「{title}」{msg}（重叠深度约 {depth:.0f}px）"
-        return (f"与节点「{title}」{msg}"
-                f"（水平重叠 {issue['overlap_width']}px，垂直重叠 {issue['overlap_height']}px）")
-    if issue["type"] == "touching":
-        return f"与节点「{title}」{msg}（当前边距 {issue['edge_distance']}px）"
-    return f"与节点「{title}」{msg}"
-
-
-def _collect_node_layout_warnings(db, work_id, target_node) -> list:
-    """检测 target_node 与同 work 内其它节点的布局冲突，返回自然语言警告列表。"""
-    others = db.query(Node).filter(
-        Node.work_id == work_id, Node.id != target_node.id
-    ).all()
-    target_rect = node_rect(target_node)
-    warnings = []
-    for other in others:
-        issue = detect_rect_issue(target_rect, node_rect(other))
-        if issue:
-            warnings.append(_format_layout_warning(other, issue))
-    return warnings
-
-
-def _collect_batch_layout_warnings(db, work_id, created_nodes) -> list:
-    """批量创建后检测：每个新节点 vs 全量节点（含其它新节点），按节点对去重。"""
-    all_nodes = db.query(Node).filter(Node.work_id == work_id).all()
-    new_ids = {n.id for n in created_nodes}
-    new_set = [n for n in all_nodes if n.id in new_ids]
-    warnings = []
-    seen_pairs = set()
-    for node in new_set:
-        node_r = node_rect(node)
-        for other in all_nodes:
-            if other.id == node.id:
-                continue
-            pair_key = tuple(sorted((node.id, other.id)))
-            if pair_key in seen_pairs:
-                continue
-            seen_pairs.add(pair_key)
-            issue = detect_rect_issue(node_r, node_rect(other))
-            if issue:
-                warnings.append(_format_layout_warning(other, issue))
-    return warnings
-
-
-def _collect_edge_overlap_warnings(db, work_id) -> list:
-    """检测作品内连线间的平行覆盖（同方向、区间重叠），返回自然语言警告列表。"""
-    nodes = db.query(Node).filter(Node.work_id == work_id).all()
-    edges = db.query(Edge).filter(Edge.work_id == work_id).all()
-    return detect_edge_overlap(nodes, edges)
-
-
-def _build_layout_hint(warnings: list) -> str:
-    """根据警告数量生成给 agent 的处置提示。"""
-    if not warnings:
-        return ""
-    return (
-        f"检测到 {len(warnings)} 个布局问题。"
-        "请直接调用 update_node 调整 position_x/position_y/layer 修复，不要询问用户是否修复。"
-        "建议水平间距≥300px、垂直间距≥200px。"
-        "每轮移动后调用 get_node_layout_issues 确认该节点 warnings 已清零；"
-        "batch_create_nodes 多个警告时逐节点修复直至 layout_warnings 为空。"
-        "若画布过于密集、确实无法完全消除冲突，须在最终回复中逐条列出未解决节点对及原因。"
-    )
 
 
 def _chapter_has_character_edge(db, work_id, chapter_node_id: str) -> bool:
@@ -518,13 +439,10 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.add(node)
         db.commit()
         db.refresh(node)
-        layout_warnings = _collect_node_layout_warnings(db, work_id, node) + _collect_edge_overlap_warnings(db, work_id)
         return json.dumps({
             "success": True,
             "node": _compact(node),
             "neighbors": [],
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
             **_relation_feedback_fields(db, work_id, node),
         }, ensure_ascii=False)
     except Exception as e:
@@ -628,13 +546,10 @@ def _update_node_sync(
         db.commit()
         db.refresh(node)
         neighbors = _neighbor_items(db, node.id, node.work_id)
-        layout_warnings = _collect_node_layout_warnings(db, node.work_id, node) + _collect_edge_overlap_warnings(db, node.work_id)
         return json.dumps({
             "success": True,
             "node": _compact(node),
             "neighbors": neighbors,
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
         }, ensure_ascii=False)
     except Exception as e:
         db.rollback()
@@ -688,6 +603,9 @@ def _create_edge_sync(source_id, target_id, edge_type="uses", reason=None):
         endpoint_err = validate_edge_endpoints(source.type, target.type, source.scope, target.scope)
         if endpoint_err:
             return json.dumps({"error": endpoint_err}, ensure_ascii=False)
+        structure_err = validate_hierarchy_structure(db, work_id, source, target)
+        if structure_err:
+            return json.dumps({"error": structure_err}, ensure_ascii=False)
         existing = db.query(Edge).filter(
             Edge.source_id == source_id, Edge.target_id == target_id, Edge.edge_type == edge_type
         ).first()
@@ -709,13 +627,10 @@ def _create_edge_sync(source_id, target_id, edge_type="uses", reason=None):
             {"node": _compact(target), "edge": {"edge_type": edge_type, "direction": "out"}},
             {"node": _compact(source), "edge": {"edge_type": edge_type, "direction": "in"}},
         ]
-        layout_warnings = _collect_edge_overlap_warnings(db, work_id)
         return json.dumps({
             "success": True,
             "edge": {"id": edge.id, "source_id": source_id, "source_title": source.title, "target_id": target_id, "target_title": target.title, "edge_type": edge_type, "label": ""},
             "neighbors": neighbors,
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
         }, ensure_ascii=False)
     except Exception as e:
         db.rollback()
@@ -769,13 +684,10 @@ def _update_edge_sync(edge_id, edge_type=None, label=None, reason=None):
             n = db.query(Node).filter(Node.id == nid).first()
             if n:
                 endpoints.append(_compact(n))
-        layout_warnings = _collect_edge_overlap_warnings(db, edge.work_id)
         return json.dumps({
             "success": True,
             "edge": {"id": edge.id, "source_id": edge.source_id, "target_id": edge.target_id, "edge_type": edge.edge_type, "label": edge.label},
             "neighbors": endpoints,
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
         }, ensure_ascii=False)
     except Exception as e:
         db.rollback()
@@ -849,14 +761,11 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
         db.commit()
         for node in created_nodes:
             db.refresh(node)
-        layout_warnings = _collect_batch_layout_warnings(db, work_id, created_nodes) + _collect_edge_overlap_warnings(db, work_id)
         return json.dumps({
             "success": True,
             "nodes": [_compact(n) for n in created_nodes],
             "neighbors": [],
             "count": len(created_nodes),
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
             **_relation_feedback_fields(db, work_id, created_nodes),
         }, ensure_ascii=False)
     except Exception as e:
@@ -888,6 +797,10 @@ def _batch_create_edges_sync(edges_data, reason=None):
                 continue
             if validate_edge_endpoints(source.type, target.type, source.scope, target.scope):
                 continue
+            structure_err = validate_hierarchy_structure(db, work_id, source, target)
+            if structure_err:
+                db.rollback()
+                return json.dumps({"error": structure_err}, ensure_ascii=False)
             edge = Edge(
                 id=str(uuid.uuid4()),
                 work_id=work_id,
@@ -898,6 +811,8 @@ def _batch_create_edges_sync(edges_data, reason=None):
                 extra_data=build_edge_layout(source, target),
             )
             db.add(edge)
+            # 让同一批次内后续的单父校验能看到刚加入的边
+            db.flush()
             created_edges.append(edge)
         db.commit()
         for edge in created_edges:
@@ -911,14 +826,11 @@ def _batch_create_edges_sync(edges_data, reason=None):
                     n = db.query(Node).filter(Node.id == nid).first()
                     if n:
                         endpoint_ids.append(_compact(n))
-        layout_warnings = _collect_edge_overlap_warnings(db, work_id)
         return json.dumps({
             "success": True,
             "edges": [{"id": e.id, "source_id": e.source_id, "target_id": e.target_id, "edge_type": e.edge_type} for e in created_edges],
             "neighbors": endpoint_ids,
             "count": len(created_edges),
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
         }, ensure_ascii=False)
     except Exception as e:
         db.rollback()
@@ -1101,15 +1013,12 @@ async def _update_node_content_edit_async(
         db.refresh(node)
 
         neighbors = _neighbor_items(db, node.id, node.work_id)
-        layout_warnings = _collect_node_layout_warnings(db, node.work_id, node) + _collect_edge_overlap_warnings(db, node.work_id)
         word_count = chapter_body_word_count(new_content)
         old_word_count = chapter_body_word_count(old_content)
         result = {
             "success": True,
             "node": _compact(node),
             "neighbors": neighbors,
-            "layout_warnings": layout_warnings,
-            "layout_hint": _build_layout_hint(layout_warnings),
             "text_count": len(new_content),
             "text_count_delta": len(new_content) - len(old_content),
             "word_count": word_count,
@@ -1304,8 +1213,8 @@ create_node = StructuredTool.from_function(
     func=_create_node_sync,
     name="create_node",
     description=(
-        "创建新节点。返回 layout_warnings 与 layout_hint（有重叠/间距问题时须按 hint 修复）。"
-        "创建 chapter 时额外返回 relation_warnings 与 relation_hint："
+        "创建新节点。"
+        "创建 chapter 时返回 relation_warnings 与 relation_hint："
         "若章节未连接任何角色节点，须按 hint 补建角色并 create_edge 连接。"
         f"{NODE_TYPES_RULES_TEXT} {NODE_LAYOUT_RULES_TEXT}"
     ),
@@ -1317,11 +1226,10 @@ update_node = StructuredTool.from_function(
     func=_update_node_sync,
     name="update_node",
     description=(
-        "更新节点属性或调整布局（position_x/y、layer）。"
+        "更新节点属性。"
         "任何节点文本小改时不要整体重写 content，改传 content_edit_instruction 做段落级局部编辑并返回 diff；"
         "整篇重写或空节点首次写入才使用 content 全量覆盖。"
-        f"{NODE_LAYOUT_RULES_TEXT} "
-        "返回 layout_warnings 与 layout_hint；有警告时须修复直至 warnings 为空。"
+        f"{NODE_LAYOUT_RULES_TEXT}"
     ),
     args_schema=UpdateNodeInput,
 )
@@ -1366,10 +1274,9 @@ batch_create_nodes = StructuredTool.from_function(
     func=_batch_create_nodes_sync,
     name="batch_create_nodes",
     description=(
-        "批量创建多个节点。返回 layout_warnings 与 layout_hint；"
+        "批量创建多个节点。"
         f"{NODE_LAYOUT_RULES_TEXT} "
-        "多个警告时逐节点修复直至 layout_warnings 为空。"
-        "若创建了 chapter，额外返回 relation_warnings 与 relation_hint："
+        "若创建了 chapter，返回 relation_warnings 与 relation_hint："
         "章节未连角色时须补建角色并 create_edge / batch_create_edges 连接。"
     ),
     args_schema=BatchCreateNodesInput,

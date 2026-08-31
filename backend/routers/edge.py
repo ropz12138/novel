@@ -9,6 +9,7 @@ from schemas.edge import EdgeCreate, EdgeUpdate, EdgeResponse, EdgeListResponse
 from routers.auth import get_current_user
 from node_types import validate_edge_endpoints
 from services import user_action_service as action_svc
+from services.edge_relation import validate_hierarchy_structure
 
 
 def _endpoint_titles(db, source_id, target_id):
@@ -40,6 +41,10 @@ def create_edge(
     )
     if endpoint_err:
         raise HTTPException(status_code=400, detail=endpoint_err)
+
+    structure_err = validate_hierarchy_structure(db, work_id, source, target)
+    if structure_err:
+        raise HTTPException(status_code=400, detail=structure_err)
 
     edge = Edge(
         work_id=work_id,

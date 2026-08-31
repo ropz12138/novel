@@ -80,12 +80,13 @@ def test_prompt_requires_dedicated_plot_markers_and_post_write_review():
     assert "`plot_highlight_validation`" in PROMPT
 
 
-def test_prompt_keeps_layout_in_tools_not_system():
+def test_prompt_leaves_layout_to_frontend():
+    """布局由前端按可见子图自动计算，提示词不再指导 Agent 摆放坐标。"""
     assert "## 布局建议" not in PROMPT
     from node_types import NODE_LAYOUT_RULES_TEXT
-    assert "character" in NODE_LAYOUT_RULES_TEXT
-    assert "note" in NODE_LAYOUT_RULES_TEXT
-    assert "outline/volume/plot/chapter" in NODE_LAYOUT_RULES_TEXT
+    assert "前端" in NODE_LAYOUT_RULES_TEXT
+    assert "画布左侧" not in NODE_LAYOUT_RULES_TEXT
+    assert "不会自动重排" not in NODE_LAYOUT_RULES_TEXT
     assert "element" not in NODE_LAYOUT_RULES_TEXT
 
 

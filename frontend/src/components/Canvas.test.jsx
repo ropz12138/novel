@@ -60,7 +60,7 @@ vi.mock("../lib/canvasApi", () => ({
   deleteCharacterRelation: vi.fn(),
 }));
 
-import { Canvas, mergeRefreshedNodes, toCanvasSnapshot, isDescendantOfCollapsed, isContainsEdge, applyNodeUpdateToData } from "./Canvas";
+import { Canvas, mergeRefreshedNodes, toCanvasSnapshot, applyNodeUpdateToData } from "./Canvas";
 import {
   fetchNodes,
   fetchEdges,
@@ -146,59 +146,8 @@ describe("toCanvasSnapshot", () => {
   });
 });
 
-// ── 收起子节点：isDescendantOfCollapsed 纯函数测试 ──
-
-describe("isContainsEdge (父子连线判定)", () => {
-  it("英文 contains 与中文 包含 都算父子连线", () => {
-    expect(isContainsEdge("contains")).toBe(true);
-    expect(isContainsEdge("包含")).toBe(true);
-  });
-  it("其它自然语言关系不算父子", () => {
-    expect(isContainsEdge("角色登场")).toBe(false);
-    expect(isContainsEdge("inherits")).toBe(false);
-    expect(isContainsEdge("")).toBe(false);
-    expect(isContainsEdge(undefined)).toBe(false);
-  });
-});
-
-describe("isDescendantOfCollapsed (收起子树判定)", () => {
-  // parentMap: childId -> parentId（contains 连线）
-  const parentMap = { ch1: "root", ch2: "root", g1: "ch1", g2: "ch1", g3: "ch2" };
-
-  it("未收起任何节点时，所有节点都可见", () => {
-    const collapsed = new Set();
-    expect(isDescendantOfCollapsed("root", parentMap, collapsed)).toBe(false);
-    expect(isDescendantOfCollapsed("ch1", parentMap, collapsed)).toBe(false);
-    expect(isDescendantOfCollapsed("g2", parentMap, collapsed)).toBe(false);
-  });
-
-  it("收起 root 后，整棵子树（子+孙）都判定为隐藏", () => {
-    const collapsed = new Set(["root"]);
-    expect(isDescendantOfCollapsed("ch1", parentMap, collapsed)).toBe(true);
-    expect(isDescendantOfCollapsed("ch2", parentMap, collapsed)).toBe(true);
-    expect(isDescendantOfCollapsed("g1", parentMap, collapsed)).toBe(true); // 孙辈
-    expect(isDescendantOfCollapsed("g3", parentMap, collapsed)).toBe(true); // 孙辈
-  });
-
-  it("收起中间节点，只隐藏它的子树，兄弟分支不受影响", () => {
-    const collapsed = new Set(["ch1"]);
-    expect(isDescendantOfCollapsed("g1", parentMap, collapsed)).toBe(true);
-    expect(isDescendantOfCollapsed("g2", parentMap, collapsed)).toBe(true);
-    // ch2 分支不受影响
-    expect(isDescendantOfCollapsed("ch2", parentMap, collapsed)).toBe(false);
-    expect(isDescendantOfCollapsed("g3", parentMap, collapsed)).toBe(false);
-  });
-
-  it("被收起的节点自身不隐藏（root 自身）", () => {
-    const collapsed = new Set(["root"]);
-    expect(isDescendantOfCollapsed("root", parentMap, collapsed)).toBe(false);
-  });
-
-  it("无父节点的孤立节点永不隐藏", () => {
-    const collapsed = new Set(["root"]);
-    expect(isDescendantOfCollapsed("orphan", parentMap, collapsed)).toBe(false);
-  });
-});
+// 父子关系判定与收起子树的测试见 lib/canvasRelation.test.js 与 lib/canvasGraph.test.js，
+// 判定依据已由自然语言 edge_type 改为节点类型。
 
 // ── 纯函数 mergeRefreshedNodes 测试 ──
 
@@ -817,5 +766,135 @@ describe("Canvas deleteNode", () => {
     document.body.removeChild(input);
 
     expect(deleteNode).not.toHaveBeenCalled();
+  });
+});
+
+// ── 可见子图与动态布局接入 ──
+
+describe("Canvas 可见子图接入", () => {
+  const flowNode = (id, type, label, scope = "local") => ({
+    id,
+    type: "custom",
+    position: { x: 9999, y: 9999 },
+    data: { type, label, scope, content: "", extra_data: {}, layer: 0 },
+  });
+
+  const flowEdge = (source, target, edgeType = "包含") => ({
+    id: `${source}->${target}`,
+    source,
+    target,
+    data: { edge_type: edgeType, extra_data: {} },
+  });
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.edgesStateCall = 0;
+    mocks.lastReactFlowProps = null;
+    mocks.relationEdges = [];
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
+
+    mocks.nodes = [
+      flowNode("o1", "outline", "大纲"),
+      flowNode("v1", "volume", "第一卷"),
+      flowNode("v2", "volume", "第二卷"),
+      flowNode("p1", "plot", "情节一"),
+      flowNode("c1", "chapter", "第1章"),
+      flowNode("w1", "worldbuilding", "世界观", "global"),
+      flowNode("n1", "note", "笔记", "global"),
+      flowNode("hero", "character", "主角", "global"),
+    ];
+    mocks.edges = [
+      flowEdge("o1", "v1"),
+      flowEdge("o1", "v2"),
+      flowEdge("v1", "p1"),
+      flowEdge("p1", "c1"),
+    ];
+  });
+
+  const renderCanvas = async () => {
+    render(<Canvas ref={createRef()} workId="w1" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+    });
+    return mocks.lastReactFlowProps;
+  };
+
+  it("默认只把主干节点交给 ReactFlow 渲染", async () => {
+    const props = await renderCanvas();
+    const ids = props.nodes.map((n) => n.id);
+    expect(new Set(ids)).toEqual(new Set(["o1", "v1", "v2"]));
+  });
+
+  it("更深层节点默认不渲染", async () => {
+    const props = await renderCanvas();
+    const ids = props.nodes.map((n) => n.id);
+    expect(ids).not.toContain("p1");
+    expect(ids).not.toContain("c1");
+  });
+
+  it("孤立节点不占用画布", async () => {
+    const props = await renderCanvas();
+    const ids = props.nodes.map((n) => n.id);
+    expect(ids).not.toContain("w1");
+    expect(ids).not.toContain("n1");
+    expect(ids).not.toContain("hero");
+  });
+
+  it("隐藏节点仍保留在完整数据中", async () => {
+    await renderCanvas();
+    // mocks.nodes 是完整语义图，投影不会从中删除节点
+    expect(mocks.nodes.map((n) => n.id)).toContain("c1");
+    expect(mocks.nodes.map((n) => n.id)).toContain("w1");
+  });
+
+  it("节点坐标由布局计算，不使用数据库坐标", async () => {
+    const props = await renderCanvas();
+    for (const node of props.nodes) {
+      expect(node.position.x).not.toBe(9999);
+      expect(node.position.y).not.toBe(9999);
+    }
+  });
+
+  it("层级链节点不可手动拖动", async () => {
+    const props = await renderCanvas();
+    for (const node of props.nodes) {
+      expect(node.draggable).toBe(false);
+    }
+  });
+
+  it("只保留两端都可见的结构连线", async () => {
+    const props = await renderCanvas();
+    const ids = props.edges.map((e) => e.id);
+    expect(new Set(ids)).toEqual(new Set(["o1->v1", "o1->v2"]));
+  });
+
+  it("父节点位于可见子节点的水平中心", async () => {
+    const props = await renderCanvas();
+    const byId = new Map(props.nodes.map((n) => [n.id, n.position]));
+    const parentCenter = byId.get("o1").x;
+    const childrenCenter = (byId.get("v1").x + byId.get("v2").x) / 2;
+    expect(parentCenter).toBeCloseTo(childrenCenter, 5);
+  });
+
+  it("同一层级的节点纵坐标一致且低于父层", async () => {
+    const props = await renderCanvas();
+    const byId = new Map(props.nodes.map((n) => [n.id, n.position]));
+    expect(byId.get("v1").y).toBe(byId.get("v2").y);
+    expect(byId.get("v1").y).toBeGreaterThan(byId.get("o1").y);
+  });
+
+  it("为有隐藏后代的节点提供展开控件与摘要", async () => {
+    const props = await renderCanvas();
+    expect(typeof props.nodeTypes.custom).toBe("function");
+  });
+
+  it("空图不报错", async () => {
+    mocks.nodes = [];
+    mocks.edges = [];
+    const props = await renderCanvas();
+    expect(props.nodes).toEqual([]);
+    expect(props.edges).toEqual([]);
   });
 });

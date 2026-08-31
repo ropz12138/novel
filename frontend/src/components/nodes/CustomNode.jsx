@@ -39,9 +39,10 @@ const CustomNode = memo(({
   onNodeClick,
   onFocusEdges,
   isEdgesFocused,
-  isCollapsed,
+  isExpanded,
   hasChildren,
-  linkedElementCount = 0,
+  hiddenDescendantCount = 0,
+  hiddenDescendantText = "",
   onCollapseToggle,
 }) => {
   const style = nodeStyles[data.type] || DEFAULT_STYLE;
@@ -49,9 +50,7 @@ const CustomNode = memo(({
   const charScope = isCharacter ? CHARACTER_SCOPE_STYLE[data.scope] : null;
   const isChapter = data.type === "chapter";
   const isLocked = !!data.locked;
-  const collapseLabel = isChapter && linkedElementCount > 0
-    ? (isCollapsed ? "展开元素" : "收起元素")
-    : (isCollapsed ? "展开子节点" : "收起子节点");
+  const collapseLabel = isExpanded ? "收起子节点" : "展开子节点";
   const wordCount = isChapter
     ? (data.content || "").replace(/\s+/g, "").length
     : 0;
@@ -170,7 +169,7 @@ const CustomNode = memo(({
             className="nodrag ml-auto rounded px-1.5 py-0.5 text-xs bg-white/70 text-slate-500 hover:bg-white transition-colors"
             onClick={handleCollapseToggle}
           >
-            {isCollapsed ? "▸" : "▾"}
+            {isExpanded ? "▾" : "▸"}
           </button>
         )}
         <button
@@ -242,6 +241,14 @@ const CustomNode = memo(({
               {line?.name || `线 ${index + 1}`}
             </span>
           ))}
+          {hiddenDescendantCount > 0 && hiddenDescendantText && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-500"
+              title={`${hiddenDescendantCount} 个节点已折叠`}
+            >
+              {hiddenDescendantText}
+            </span>
+          )}
         </div>
       </div>
 

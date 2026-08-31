@@ -85,7 +85,7 @@ describe("CustomNode chapter status", () => {
         id="el-1"
         data={{ type: "element", label: "伏笔", content: "", extra_data: {} }}
         hasChildren
-        isCollapsed={false}
+        isExpanded={false}
         onCollapseToggle={vi.fn()}
       />,
     );
@@ -93,7 +93,88 @@ describe("CustomNode chapter status", () => {
     expect(screen.queryByRole("button", { name: "收起子节点" })).toBeNull();
     expect(screen.queryByRole("button", { name: "展开子节点" })).toBeNull();
   });
+});
 
+describe("CustomNode 展开控件", () => {
+  const baseData = { type: "volume", label: "第一卷", content: "", extra_data: {} };
+
+  it("没有结构子节点时不显示展开控件", () => {
+    render(<CustomNode id="v0" data={baseData} hasChildren={false} />);
+    expect(screen.queryByRole("button", { name: "展开子节点" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "收起子节点" })).toBeNull();
+  });
+
+  it("未展开时提供展开入口", () => {
+    render(<CustomNode id="v1" data={baseData} hasChildren isExpanded={false} />);
+    expect(screen.getByRole("button", { name: "展开子节点" })).toBeDefined();
+  });
+
+  it("已展开时提供收起入口", () => {
+    render(<CustomNode id="v1" data={baseData} hasChildren isExpanded />);
+    expect(screen.getByRole("button", { name: "收起子节点" })).toBeDefined();
+  });
+
+  it("点击展开控件回调节点 id", () => {
+    const onCollapseToggle = vi.fn();
+    render(
+      <CustomNode
+        id="v1"
+        data={baseData}
+        hasChildren
+        isExpanded={false}
+        onCollapseToggle={onCollapseToggle}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "展开子节点" }));
+    expect(onCollapseToggle).toHaveBeenCalledWith("v1");
+  });
+
+  it("展开控件不触发打开节点详情", () => {
+    const onNodeClick = vi.fn();
+    render(
+      <CustomNode
+        id="v1"
+        data={baseData}
+        hasChildren
+        isExpanded={false}
+        onNodeClick={onNodeClick}
+        onCollapseToggle={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "展开子节点" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+  });
+
+  it("显示隐藏后代的数量与类型摘要", () => {
+    render(
+      <CustomNode
+        id="v1"
+        data={baseData}
+        hasChildren
+        isExpanded={false}
+        hiddenDescendantCount={14}
+        hiddenDescendantText="2 个情节 · 12 章"
+      />,
+    );
+    expect(screen.getByText("2 个情节 · 12 章")).toBeDefined();
+  });
+
+  it("没有隐藏后代时不显示摘要", () => {
+    render(
+      <CustomNode
+        id="v1"
+        data={baseData}
+        hasChildren
+        isExpanded
+        hiddenDescendantCount={0}
+        hiddenDescendantText=""
+      />,
+    );
+    expect(screen.queryByText(/个情节/)).toBeNull();
+  });
+});
+
+describe("CustomNode element 节点", () => {
   it("uses 90x90 outer boundary for element nodes", () => {
     const { container } = render(
       <CustomNode
