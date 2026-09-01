@@ -93,8 +93,8 @@ def test_update_edge_async_emits_nodes_updated(monkeypatch):
     try:
         work = _make_work(db)
         monkeypatch.setattr(nt, "_get_current_work_id", lambda: work.id)
-        a = Node(work_id=work.id, type="outline", title="A", layer=0)
-        b = Node(work_id=work.id, type="outline", title="B", layer=0)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=0)
+        b = Node(sort_order=0, work_id=work.id, type="outline", title="B", layer=0)
         db.add_all([a, b])
         db.commit()
         e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="x")
@@ -124,7 +124,7 @@ def test_create_node_async_emits_nodes_updated(monkeypatch):
         _inject_emit(work.id, collect)
 
         result = json.loads(asyncio.run(
-            nt._create_node_async("outline", "回归节点", layer=0, position_x=0, position_y=0)
+            nt._create_node_async("outline", "回归节点", layer=0, position_x=0, position_y=0, sort_order=1)
         ))
         assert result["success"] is True
         assert any(ev == "nodes_updated" for ev, _ in events)

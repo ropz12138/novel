@@ -13,6 +13,10 @@ class Node(Base):
     work_id = Column(String(36), ForeignKey("canvas_works.id", ondelete="CASCADE"), nullable=False, index=True)
     type = Column(String(30), nullable=False, index=True)
     layer = Column(Integer, nullable=False, default=0)
+    # 同级显示顺序。创建时必须显式提供：此前靠 extra_data 序号、标题章号与
+    # created_at 推断，Agent 不再写坐标后顺序落到 created_at 上，而批量创建的
+    # 时间戳可能相同，同级顺序因此不确定。
+    sort_order = Column(Integer, nullable=False)
     scope = Column(String(20), nullable=False, default="local")
     title = Column(String(200), nullable=False)
     content = Column(Text, default="")

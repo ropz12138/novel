@@ -22,7 +22,7 @@ def test_node_layer_default_zero():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="idea", title="灵感")
+        node = Node(sort_order=0, work_id=work.id, type="idea", title="灵感")
         db.add(node)
         db.commit()
         db.refresh(node)
@@ -35,7 +35,7 @@ def test_node_layer_persisted():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="outline", title="主线", layer=2)
+        node = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=2)
         db.add(node)
         db.commit()
         fetched = db.query(Node).filter_by(id=node.id).first()

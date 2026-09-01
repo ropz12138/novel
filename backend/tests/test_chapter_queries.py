@@ -25,7 +25,7 @@ def test_read_node_content_is_scoped_to_work(monkeypatch):
     try:
         work1 = _make_work(db, "one")
         work2 = _make_work(db, "two")
-        foreign = Node(work_id=work2.id, type="idea", title="其他作品", content="secret")
+        foreign = Node(sort_order=0, work_id=work2.id, type="idea", title="其他作品", content="secret")
         db.add(foreign)
         db.commit()
         monkeypatch.setattr(qt, "_get_current_work_id", lambda: work1.id)

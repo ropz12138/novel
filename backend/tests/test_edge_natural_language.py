@@ -37,8 +37,8 @@ def test_contains_is_plain_natural_language(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(work_id=work.id, type="outline", title="主线", layer=1)
-        n2 = Node(work_id=work.id, type="volume", title="第一卷", layer=2)
+        n1 = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=1)
+        n2 = Node(sort_order=0, work_id=work.id, type="volume", title="第一卷", layer=2)
         db.add_all([n1, n2])
         db.commit()
 
@@ -54,8 +54,8 @@ def test_arbitrary_natural_language_edge(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(work_id=work.id, type="character", title="主角", layer=2)
-        n2 = Node(work_id=work.id, type="chapter", title="第1章", layer=3)
+        n1 = Node(sort_order=0, work_id=work.id, type="character", title="主角", layer=2)
+        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", layer=3)
         db.add_all([n1, n2])
         db.commit()
 
@@ -71,8 +71,8 @@ def test_empty_edge_type_rejected(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(work_id=work.id, type="idea", title="a")
-        n2 = Node(work_id=work.id, type="idea", title="b")
+        n1 = Node(sort_order=0, work_id=work.id, type="idea", title="a")
+        n2 = Node(sort_order=0, work_id=work.id, type="idea", title="b")
         db.add_all([n1, n2])
         db.commit()
 

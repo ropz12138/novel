@@ -56,8 +56,8 @@ def test_delete_work_cascades_nodes_and_edges():
     try:
         user = db.query(User).filter_by(username="owner").first()
         work = _make_work(db, user.id)
-        n1 = Node(work_id=work.id, type="character", title="角色A")
-        n2 = Node(work_id=work.id, type="chapter", title="第一章")
+        n1 = Node(sort_order=0, work_id=work.id, type="character", title="角色A")
+        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章")
         db.add_all([n1, n2])
         db.commit()
         db.refresh(n1)

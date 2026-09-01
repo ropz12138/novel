@@ -1,8 +1,6 @@
 """章节顺序、前序上下文与评估提示词组装。"""
 from __future__ import annotations
 
-import re
-
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from models.chapter import Chapter
@@ -10,17 +8,13 @@ from models.node import Node
 
 
 def chapter_order_key(node: Node) -> tuple:
-    extra = node.extra_data or {}
-    for key in ("chapter_number", "chapter_index", "order", "sequence"):
-        value = extra.get(key)
-        if isinstance(value, (int, float)):
-            return (0, float(value), node.created_at or 0)
-        if isinstance(value, str) and value.strip().isdigit():
-            return (0, float(value.strip()), node.created_at or 0)
-    match = re.search(r"第\s*(\d+)\s*章", node.title or "")
-    if match:
-        return (0, float(match.group(1)), node.created_at or 0)
-    return (1, node.layer or 0, node.position_x or 0, node.created_at or 0)
+    """章节排序键。
+
+    顺序只认 sort_order：它是创建时必填的字段。此前从 extra_data 序号、标题
+    「第N章」正则与坐标逐级推断，同一份顺序因此有多个来源，彼此可能矛盾。
+    node.id 只作为并列时的确定性 tie-breaker，保证两次排序结果一致。
+    """
+    return (node.sort_order, node.id or "")
 
 RECENT_FULL_HISTORY_LIMIT = 5
 

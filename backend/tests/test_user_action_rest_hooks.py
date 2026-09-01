@@ -51,7 +51,7 @@ def test_create_node_via_rest_logs_action(mock_auth):
         work = _make_work(db, mock_auth.id)
         res = client.post(
             f"/api/works/{work.id}/nodes",
-            json={"type": "chapter", "title": "第一章", "content": "正文内容"},
+            json={"sort_order": 1, "type": "chapter", "title": "第一章", "content": "正文内容"},
         )
         assert res.status_code == 201
         actions = _actions(db, work.id)
@@ -69,7 +69,7 @@ def test_delete_node_via_rest_logs_action_without_content(mock_auth):
         work = _make_work(db, mock_auth.id)
         create_res = client.post(
             f"/api/works/{work.id}/nodes",
-            json={"type": "chapter", "title": "待删", "content": "被删内容留痕"},
+            json={"sort_order": 1, "type": "chapter", "title": "待删", "content": "被删内容留痕"},
         )
         node_id = create_res.json()["id"]
         db.query(UserCanvasAction).delete()  # 清掉 create 的记录，只看 delete
@@ -92,7 +92,7 @@ def test_update_node_title_via_rest_logs_action(mock_auth):
         work = _make_work(db, mock_auth.id)
         create_res = client.post(
             f"/api/works/{work.id}/nodes",
-            json={"type": "chapter", "title": "原标题", "content": "原内容"},
+            json={"sort_order": 1, "type": "chapter", "title": "原标题", "content": "原内容"},
         )
         node_id = create_res.json()["id"]
         db.query(UserCanvasAction).delete()
@@ -115,7 +115,7 @@ def test_update_node_position_only_does_not_log(mock_auth):
         work = _make_work(db, mock_auth.id)
         create_res = client.post(
             f"/api/works/{work.id}/nodes",
-            json={"type": "chapter", "title": "n", "content": ""},
+            json={"sort_order": 1, "type": "chapter", "title": "n", "content": ""},
         )
         node_id = create_res.json()["id"]
         db.query(UserCanvasAction).delete()
@@ -134,7 +134,7 @@ def test_update_node_locked_only_does_not_log(mock_auth):
         work = _make_work(db, mock_auth.id)
         create_res = client.post(
             f"/api/works/{work.id}/nodes",
-            json={"type": "chapter", "title": "n", "content": ""},
+            json={"sort_order": 1, "type": "chapter", "title": "n", "content": ""},
         )
         node_id = create_res.json()["id"]
         db.query(UserCanvasAction).delete()
@@ -152,8 +152,9 @@ def test_update_node_locked_only_does_not_log(mock_auth):
 def _make_two_nodes(work_id):
     db = database.SessionLocal()
     try:
-        a = client.post(f"/api/works/{work_id}/nodes", json={"type": "chapter", "title": "源", "content": ""}).json()
-        b = client.post(f"/api/works/{work_id}/nodes", json={"type": "chapter", "title": "目标", "content": ""}).json()
+        # 同级连线非法，用 character → chapter 的引用边
+        a = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 1, "type": "character", "title": "源", "content": ""}).json()
+        b = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 2, "type": "chapter", "title": "目标", "content": ""}).json()
         return a["id"], b["id"]
     finally:
         db.close()

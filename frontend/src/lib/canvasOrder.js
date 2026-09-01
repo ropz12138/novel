@@ -1,55 +1,16 @@
 /**
  * 同级顺序排序键 —— 对应 backend/services/chapter_history_service.chapter_order_key。
  *
- * 不引入 sort_order 字段：现有数据已经能提供确定性顺序。回退链依次为
- * extra_data 显式序号 → 标题中的章号 → layer → x 坐标 → 创建时间 → id。
+ * 顺序只认 sort_order：它在创建节点时必填。此前从 extra_data 序号、标题章号与
+ * 坐标逐级推断，同一份顺序因此有多个来源，彼此可能矛盾；Agent 不再写坐标后
+ * 顺序还会退化到创建时间，而批量创建的时间戳可能相同。
  *
- * 已知副作用：Agent 不再写坐标后，x 坐标一档会退化为常量，顺序由创建时间决定。
- * 结果依然确定。等到需要支持用户手动拖拽调整同级顺序时，再引入独立字段。
+ * id 只作为并列时的 tie-breaker，保证两次排序结果一致。
  */
 
-const EXPLICIT_ORDER_FIELDS = ["chapter_number", "chapter_index", "order", "sequence"];
-
-const CHAPTER_TITLE_PATTERN = /第\s*(\d+)\s*章/;
-
-function explicitOrder(extraData) {
-  for (const field of EXPLICIT_ORDER_FIELDS) {
-    const value = extraData?.[field];
-    if (typeof value === "number" && Number.isFinite(value)) return value;
-    if (typeof value === "string" && /^\d+$/.test(value.trim())) {
-      return Number(value.trim());
-    }
-  }
-  return null;
-}
-
-function titleOrder(title) {
-  const match = CHAPTER_TITLE_PATTERN.exec(title || "");
-  return match ? Number(match[1]) : null;
-}
-
-function createdAtMillis(data) {
-  const raw = data?.created_at;
-  if (!raw) return 0;
-  const parsed = Date.parse(raw);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
-/**
- * 返回定长排序键 [bucket, primary, layer, x, createdAt, id]。
- * bucket 0 表示存在明确编号，排在 bucket 1 之前。
- */
 export function siblingOrderKey(node) {
   const data = node?.data || {};
-  const numbered = explicitOrder(data.extra_data) ?? titleOrder(data.label);
-  return [
-    numbered === null ? 1 : 0,
-    numbered === null ? 0 : numbered,
-    data.layer ?? 0,
-    node?.position?.x ?? 0,
-    createdAtMillis(data),
-    node?.id ?? "",
-  ];
+  return [data.sort_order ?? 0, node?.id ?? ""];
 }
 
 export function compareSiblings(a, b) {
@@ -69,4 +30,22 @@ export function compareSiblings(a, b) {
 
 export function sortSiblings(nodes) {
   return [...nodes].sort(compareSiblings);
+}
+
+/**
+ * 用户手动新增节点时的 sort_order：排在同类型节点末尾。
+ *
+ * 手动新增的节点此刻还没有父连线，无法按"同父下最大值 + 1"计算，
+ * 因此以类型为范围取最大值递增。
+ */
+export function nextSortOrder(nodes, nodeType) {
+  let max = 0;
+  for (const node of nodes ?? []) {
+    if (node?.data?.type !== nodeType) continue;
+    const value = node.data.sort_order;
+    if (typeof value === "number" && Number.isFinite(value) && value > max) {
+      max = value;
+    }
+  }
+  return max + 1;
 }

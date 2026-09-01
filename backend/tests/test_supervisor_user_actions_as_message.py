@@ -137,7 +137,7 @@ def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
         db.commit()
         db.refresh(work)
         work_id = work.id
-        node = Node(work_id=work.id, type="chapter", title="第6章", content="碎片")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第6章", content="碎片")
         db.add(node)
         db.commit()
         db.refresh(node)
@@ -225,7 +225,7 @@ def test_resume_streams_actions_message_before_user_text(mock_auth, monkeypatch)
             user_id=mock_auth.id,
             work_id=work.id,
         )
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第7章",

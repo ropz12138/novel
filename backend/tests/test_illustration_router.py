@@ -35,7 +35,7 @@ def test_get_illustration_returns_png(tmp_path, monkeypatch):
         work = CanvasWork(user_id=user.id, title="w")
         db.add(work)
         db.commit()
-        node = Node(work_id=work.id, type="chapter", title="章", content="正文", layer=3)
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="章", content="正文", layer=3)
         db.add(node)
         db.commit()
 

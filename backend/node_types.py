@@ -131,20 +131,32 @@ NODE_TYPES_RULES_TEXT = (
 
 EDGE_ENDPOINT_RULES_TEXT = (
     "端点限制（违反会报错）："
-    "scope=global 的节点（worldbuilding/note + 主角 character）禁止任何连线。"
+    "scope=global 的节点（worldbuilding/note + 主角 character）禁止任何连线；"
+    "同级节点之间禁止连线（chapter↔chapter、volume↔volume、plot↔plot），"
+    "同级顺序由节点的 sort_order 字段表达，不要用连线表示顺序。"
 )
 
 EDGE_CONNECTION_RULES_TEXT = (
     "连接点由程序自动计算，无需指定方向："
-    "chapter↔chapter 固定源节点右边界→目标节点左边界；"
     "outline/volume/plot/chapter 之间固定源下边界→目标上边界；"
     "其它节点按相对位置自动选择。"
 )
 
 NODE_LAYOUT_RULES_TEXT = (
     "节点位置由前端根据当前展开状态自动布局，不需要提供 position_x/position_y："
-    "父子层级决定纵向位置，同级顺序决定横向位置。"
+    "父子层级决定纵向位置，sort_order 决定同级横向顺序。"
     "传入坐标不会影响画布呈现，请把精力放在节点内容与父子关系上。"
+)
+
+NODE_SORT_ORDER_RULES_TEXT = (
+    "sort_order 是必填项：同一父节点下的兄弟节点按它从小到大排列，"
+    "章节顺序、卷顺序、情节顺序都由它决定。请按叙事先后依次给出 1、2、3……"
+    "同级之间不要创建连线来表示顺序。"
+)
+
+MISSING_SORT_ORDER_ERROR = (
+    "创建节点必须提供 sort_order（同级显示顺序，整数）。"
+    "同一父节点下的兄弟节点按它从小到大排列，请按叙事先后依次给出 1、2、3……"
 )
 
 

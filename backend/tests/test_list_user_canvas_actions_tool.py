@@ -30,7 +30,7 @@ def test_list_user_canvas_actions_returns_actions_newest_first(monkeypatch):
         from datetime import datetime, timedelta
         base = datetime(2025, 1, 1, 12, 0, 0)
         for i in range(3):
-            n = Node(work_id=work.id, type="chapter", title=f"节点{i}", content="内容")
+            n = Node(sort_order=0, work_id=work.id, type="chapter", title=f"节点{i}", content="内容")
             db.add(n)
             db.commit()
             db.refresh(n)

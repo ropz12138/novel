@@ -26,10 +26,11 @@ def _make_work(monkeypatch, db):
     return work
 
 
-def _make_node(db, work_id, title="n", x=0.0, y=0.0):
+def _make_node(db, work_id, title="n", x=0.0, y=0.0, node_type="outline"):
     node = Node(
+        sort_order=0,
         work_id=work_id,
-        type="outline",
+        type=node_type,
         title=title,
         layer=0,
         position_x=x,
@@ -62,7 +63,7 @@ def test_create_edge_always_empty_label(monkeypatch):
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
         a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0)
+        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
 
         result = __import__("json").loads(
             nt._create_edge_sync(a.id, b.id, edge_type="包含"),
@@ -82,7 +83,7 @@ def test_batch_create_edges_ignores_label_in_data(monkeypatch):
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
         a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0)
+        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
 
         result = __import__("json").loads(nt._batch_create_edges_sync([
             {
@@ -106,7 +107,7 @@ def test_update_edge_can_set_deep_relation_label(monkeypatch):
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
         a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0)
+        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
         nt._create_edge_sync(a.id, b.id, edge_type="包含")
         edge = db.query(Edge).filter(Edge.source_id == a.id).first()
         assert edge.label == ""

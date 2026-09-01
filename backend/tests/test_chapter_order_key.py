@@ -1,4 +1,8 @@
-"""章节排序键：从废弃 context 模块迁入 chapter_history_service。"""
+"""章节排序键：顺序只认 sort_order。
+
+此前从 extra_data 序号、标题「第N章」正则与坐标逐级推断，同一份顺序有多个
+来源，彼此可能矛盾。改为创建时必填的 sort_order 之后，推断链全部移除。
+"""
 from types import SimpleNamespace
 
 from services.chapter_history_service import chapter_order_key, list_ordered_chapters
@@ -10,6 +14,7 @@ def _node(**kwargs):
         "title": "",
         "extra_data": {},
         "layer": 0,
+        "sort_order": 0,
         "position_x": 0,
         "created_at": 0,
         "type": "chapter",
@@ -19,18 +24,28 @@ def _node(**kwargs):
     return SimpleNamespace(**defaults)
 
 
-def test_chapter_order_key_uses_chapter_number():
-    node = _node(extra_data={"chapter_number": 3}, title="随便")
-    assert chapter_order_key(node)[0] == 0
-    assert chapter_order_key(node)[1] == 3.0
+def test_chapter_order_key_uses_sort_order():
+    assert chapter_order_key(_node(sort_order=3))[0] == 3
 
 
-def test_chapter_order_key_parses_title_when_extra_missing():
-    node = _node(title="第 12 章 决战")
-    assert chapter_order_key(node)[1] == 12.0
+def test_chapter_order_key_ignores_title_number():
+    """标题文字不再参与排序：改标题不应改变章节顺序。"""
+    node = _node(sort_order=1, title="第 12 章 决战")
+    assert chapter_order_key(node)[0] == 1
 
 
-def test_list_ordered_chapters_sorts_by_number(db_session):
+def test_chapter_order_key_ignores_extra_data_number():
+    node = _node(sort_order=1, extra_data={"chapter_number": 42})
+    assert chapter_order_key(node)[0] == 1
+
+
+def test_chapter_order_key_breaks_ties_deterministically():
+    a = _node(sort_order=1, id="a")
+    b = _node(sort_order=1, id="b")
+    assert chapter_order_key(a) < chapter_order_key(b)
+
+
+def test_list_ordered_chapters_sorts_by_sort_order(db_session):
     from models.node import Node
     from models.user import User
     from models.work import CanvasWork
@@ -41,10 +56,13 @@ def test_list_ordered_chapters_sorts_by_number(db_session):
     work = CanvasWork(user_id=user.id, title="t")
     db_session.add(work)
     db_session.commit()
-    later = Node(work_id=work.id, type="chapter", title="第 2 章", extra_data={"chapter_number": 2})
-    earlier = Node(work_id=work.id, type="chapter", title="第 1 章", extra_data={"chapter_number": 1})
+
+    # 标题与 sort_order 故意相反，确认排序只认 sort_order
+    later = Node(work_id=work.id, type="chapter", title="第 1 章", sort_order=2)
+    earlier = Node(work_id=work.id, type="chapter", title="第 2 章", sort_order=1)
     db_session.add_all([later, earlier])
     db_session.commit()
 
     ordered = list_ordered_chapters(db_session, work.id)
-    assert [c.extra_data["chapter_number"] for c in ordered] == [1, 2]
+    assert [c.sort_order for c in ordered] == [1, 2]
+    assert [c.title for c in ordered] == ["第 2 章", "第 1 章"]

@@ -46,7 +46,7 @@ def _make_work(db, user_id):
 
 
 def _make_node(db, work_id, title="n", layer=0, x=0.0, y=0.0):
-    node = Node(work_id=work_id, type="outline", title=title, layer=layer,
+    node = Node(sort_order=0, work_id=work_id, type="outline", title=title, layer=layer,
                 position_x=x, position_y=y)
     db.add(node)
     db.commit()

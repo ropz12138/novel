@@ -36,6 +36,7 @@ def create_node(
         content=data.content,
         extra_data=data.extra_data,
         layer=data.layer,
+        sort_order=data.sort_order,
         scope=final_scope,
         position_x=data.position_x,
         position_y=data.position_y,

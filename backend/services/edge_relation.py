@@ -7,12 +7,15 @@
 判定必须使用"严格降一级"，不能只判断两端是否都属于层级链类型：
 chapter → chapter 的边两端都是层级链类型，若按后者判定会把前一章当成
 后一章的父节点，导致树深度错乱。
+
+同级连线（两端类型相同）一律非法：同级顺序由 Node.sort_order 字段表达。
+用连线表示顺序会让同一件事有两个来源——连线的走向与 sort_order 的大小
+可能互相矛盾，且顺序信息散落在边上无法直接排序。
 """
 from models.edge import Edge
 from models.node import Node
 
 RELATION_HIERARCHY = "hierarchy"
-RELATION_SEQUENCE = "sequence"
 RELATION_REFERENCE = "reference"
 
 # 层级链顺序，索引即层级序号
@@ -33,8 +36,6 @@ def derive_relation_kind(source_type: str, target_type: str) -> str | None:
     if source_level is None or target_level is None:
         return RELATION_REFERENCE
 
-    if target_level == source_level:
-        return RELATION_SEQUENCE
     if target_level == source_level + 1:
         return RELATION_HIERARCHY
     return None
@@ -47,11 +48,17 @@ def validate_relation_types(source_type: str, target_type: str) -> str | None:
 
     source_level = hierarchy_level(source_type)
     target_level = hierarchy_level(target_type)
+
+    if target_level == source_level:
+        return (
+            f"同级节点之间不需要连线：{source_type} → {target_type}。"
+            f"同级顺序由节点的 sort_order 字段表达，"
+            f"请用 update_node 调整 sort_order，不要创建连线。"
+        )
     if target_level < source_level:
         return (
             f"层级链连线方向错误：{source_type} → {target_type}。"
-            f"父子连线必须自上而下（{' → '.join(HIERARCHY_CHAIN)}），"
-            f"同级顺序关系请让两端为同一类型。"
+            f"父子连线必须自上而下（{' → '.join(HIERARCHY_CHAIN)}）。"
         )
     return (
         f"层级链不允许跨级连接：{source_type} → {target_type}。"

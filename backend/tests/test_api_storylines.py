@@ -38,7 +38,7 @@ def _make_character(db, user_id, extra_data=None):
     db.add(work)
     db.commit()
     db.refresh(work)
-    node = Node(
+    node = Node(sort_order=0, 
         work_id=work.id,
         type="character",
         title="林川",
@@ -93,7 +93,7 @@ def test_put_storylines_rejects_non_character_node(mock_auth):
         db.add(work)
         db.commit()
         db.refresh(work)
-        node = Node(work_id=work.id, type="chapter", title="第一章")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章")
         db.add(node)
         db.commit()
         db.refresh(node)

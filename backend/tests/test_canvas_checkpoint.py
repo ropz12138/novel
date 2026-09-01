@@ -73,7 +73,7 @@ def test_capture_and_restore_canvas_checkpoint(db_session, mock_auth):
     work = _make_work(db_session, mock_auth.id)
     session = _make_session(db_session, mock_auth.id, work.id)
 
-    n1 = Node(work_id=work.id, type="outline", title="N1", layer=0)
+    n1 = Node(sort_order=0, work_id=work.id, type="outline", title="N1", layer=0)
     db_session.add(n1)
     db_session.commit()
     db_session.refresh(n1)
@@ -88,7 +88,7 @@ def test_capture_and_restore_canvas_checkpoint(db_session, mock_auth):
     )
     assert cp.node_count == 1
 
-    n2 = Node(work_id=work.id, type="chapter", title="N2", layer=3)
+    n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="N2", layer=3)
     db_session.add(n2)
     db_session.commit()
 
@@ -104,7 +104,7 @@ def test_prepare_edit_resend_restores_and_truncates(db_session, mock_auth):
     work = _make_work(db_session, mock_auth.id)
     session = _make_session(db_session, mock_auth.id, work.id)
 
-    n1 = Node(work_id=work.id, type="outline", title="keep", layer=0)
+    n1 = Node(sort_order=0, work_id=work.id, type="outline", title="keep", layer=0)
     db_session.add(n1)
     db_session.commit()
     db_session.refresh(n1)
@@ -130,7 +130,7 @@ def test_prepare_edit_resend_restores_and_truncates(db_session, mock_auth):
         sort_order=m2.sort_order,
     )
 
-    n2 = Node(work_id=work.id, type="chapter", title="added", layer=3)
+    n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="added", layer=3)
     db_session.add(n2)
     db_session.commit()
 

@@ -89,6 +89,7 @@ describe("toCanvasSnapshot", () => {
           content: "正文",
           extra_data: { a: 1 },
           layer: 2,
+          sort_order: 3,
           scope: "global",
         },
       }],
@@ -107,6 +108,7 @@ describe("toCanvasSnapshot", () => {
         content: "正文",
         extra_data: { a: 1 },
         layer: 2,
+        sort_order: 3,
         scope: "global",
         position_x: 12,
         position_y: 34,
@@ -457,6 +459,43 @@ describe("Canvas forwardRef", () => {
     mocks.edgesStateCall = 0;
     mocks.lastReactFlowProps = null;
     fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
+  });
+
+  it("rejects same-level connections before they reach the server", async () => {
+    // 同级顺序由 sort_order 表达，同级连线会被后端拒绝，画布应提前挡住
+    const chapters = [
+      { id: "c1", type: "chapter", title: "第一章", content: "", extra_data: {}, layer: 3, sort_order: 1, scope: "local", position_x: 0, position_y: 0, locked: false },
+      { id: "c2", type: "chapter", title: "第二章", content: "", extra_data: {}, layer: 3, sort_order: 2, scope: "local", position_x: 0, position_y: 0, locked: false },
+      { id: "p1", type: "plot", title: "情节", content: "", extra_data: {}, layer: 2, sort_order: 1, scope: "local", position_x: 0, position_y: 0, locked: false },
+    ];
+    fetchNodes.mockResolvedValue({ nodes: chapters });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-conn" />);
+    await waitFor(() => {
+      expect(mocks.lastReactFlowProps).not.toBeNull();
+      expect(mocks.setNodes).toHaveBeenCalled();
+    });
+
+    const { isValidConnection } = mocks.lastReactFlowProps;
+    expect(isValidConnection({ source: "c1", target: "c2" })).toBe(false);
+    expect(isValidConnection({ source: "p1", target: "c1" })).toBe(true);
+  });
+
+  it("carries sort_order from the server into node data", async () => {
+    fetchNodes.mockResolvedValue({
+      nodes: [
+        { id: "n1", type: "chapter", title: "第一章", content: "", extra_data: {}, layer: 3, sort_order: 7, scope: "local", position_x: 0, position_y: 0, locked: false },
+      ],
+    });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-order" />);
+    await waitFor(() => {
+      expect(mocks.setNodes).toHaveBeenCalled();
+    });
+    const loaded = mocks.setNodes.mock.calls[0][0];
+    expect(loaded[0].data.sort_order).toBe(7);
   });
 
   it("enables Ctrl+drag marquee selection on ReactFlow", async () => {

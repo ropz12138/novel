@@ -28,7 +28,7 @@ def _make_work(monkeypatch, db):
 
 
 def _make_node(db, work_id, title="n", x=0.0, y=0.0, node_type="outline"):
-    node = Node(
+    node = Node(sort_order=0, 
         work_id=work_id,
         type=node_type,
         title=title,
@@ -43,8 +43,8 @@ def _make_node(db, work_id, title="n", x=0.0, y=0.0, node_type="outline"):
 
 
 def test_resolve_optimal_sides_vertical():
-    source = Node(position_x=0, position_y=0)
-    target = Node(position_x=0, position_y=300)
+    source = Node(sort_order=0, position_x=0, position_y=0)
+    target = Node(sort_order=0, position_x=0, position_y=300)
     assert resolve_optimal_sides(source, target) == {
         "source_side": "bottom",
         "target_side": "top",
@@ -52,8 +52,8 @@ def test_resolve_optimal_sides_vertical():
 
 
 def test_resolve_optimal_sides_vertical_reverse():
-    source = Node(position_x=0, position_y=300)
-    target = Node(position_x=0, position_y=0)
+    source = Node(sort_order=0, position_x=0, position_y=300)
+    target = Node(sort_order=0, position_x=0, position_y=0)
     assert resolve_optimal_sides(source, target) == {
         "source_side": "top",
         "target_side": "bottom",
@@ -61,8 +61,8 @@ def test_resolve_optimal_sides_vertical_reverse():
 
 
 def test_resolve_optimal_sides_horizontal():
-    source = Node(position_x=0, position_y=0)
-    target = Node(position_x=400, position_y=0)
+    source = Node(sort_order=0, position_x=0, position_y=0)
+    target = Node(sort_order=0, position_x=400, position_y=0)
     assert resolve_optimal_sides(source, target) == {
         "source_side": "right",
         "target_side": "left",
@@ -70,8 +70,8 @@ def test_resolve_optimal_sides_horizontal():
 
 
 def test_resolve_optimal_sides_horizontal_reverse():
-    source = Node(position_x=400, position_y=0)
-    target = Node(position_x=0, position_y=0)
+    source = Node(sort_order=0, position_x=400, position_y=0)
+    target = Node(sort_order=0, position_x=0, position_y=0)
     assert resolve_optimal_sides(source, target) == {
         "source_side": "left",
         "target_side": "right",
@@ -79,8 +79,8 @@ def test_resolve_optimal_sides_horizontal_reverse():
 
 
 def test_hierarchy_chain_forces_bottom_to_top_even_when_horizontal():
-    source = Node(type="outline", position_x=0, position_y=0)
-    target = Node(type="volume", position_x=500, position_y=0)
+    source = Node(sort_order=0, type="outline", position_x=0, position_y=0)
+    target = Node(sort_order=0, type="volume", position_x=500, position_y=0)
     assert is_hierarchy_chain_edge(source, target) is True
     assert resolve_optimal_sides(source, target) == {
         "source_side": "bottom",
@@ -89,44 +89,17 @@ def test_hierarchy_chain_forces_bottom_to_top_even_when_horizontal():
 
 
 def test_hierarchy_chain_plot_to_chapter():
-    source = Node(type="plot", position_x=100, position_y=200)
-    target = Node(type="chapter", position_x=100, position_y=500)
+    source = Node(sort_order=0, type="plot", position_x=100, position_y=200)
+    target = Node(sort_order=0, type="chapter", position_x=100, position_y=500)
     assert resolve_optimal_sides(source, target) == {
         "source_side": "bottom",
         "target_side": "top",
     }
 
 
-def test_chapter_to_chapter_forces_right_to_left():
-    source = Node(type="chapter", position_x=640, position_y=817)
-    target = Node(type="chapter", position_x=992, position_y=824)
-    assert resolve_optimal_sides(source, target) == {
-        "source_side": "right",
-        "target_side": "left",
-    }
-
-
-def test_create_edge_chapter_sequence_layout_right_left(monkeypatch):
-    db = database.SessionLocal()
-    try:
-        _make_work(monkeypatch, db)
-        wid = nt._get_current_work_id()
-        ch1 = _make_node(db, wid, "第一章", x=640, y=817, node_type="chapter")
-        ch2 = _make_node(db, wid, "第二章", x=992, y=824, node_type="chapter")
-
-        result = json.loads(nt._create_edge_sync(ch1.id, ch2.id, edge_type="next_chapter"))
-
-        assert result["success"] is True
-        edge = db.query(Edge).filter(Edge.source_id == ch1.id).first()
-        assert edge.extra_data["layout"]["source_side"] == "right"
-        assert edge.extra_data["layout"]["target_side"] == "left"
-    finally:
-        db.close()
-
-
 def test_mixed_chain_and_element_uses_position():
-    source = Node(type="element", position_x=0, position_y=0)
-    target = Node(type="chapter", position_x=400, position_y=0)
+    source = Node(sort_order=0, type="element", position_x=0, position_y=0)
+    target = Node(sort_order=0, type="chapter", position_x=400, position_y=0)
     assert is_hierarchy_chain_edge(source, target) is False
     assert resolve_optimal_sides(source, target) == {
         "source_side": "right",
@@ -136,8 +109,8 @@ def test_mixed_chain_and_element_uses_position():
 
 def test_element_uses_smaller_dimensions_for_side_choice():
     """element 90×90 时中心偏移；若仍按 250×120 算，近对角会误判为纵向连接"""
-    elem = Node(type="element", position_x=0, position_y=0)
-    ch = Node(type="chapter", position_x=50, position_y=100)
+    elem = Node(sort_order=0, type="element", position_x=0, position_y=0)
+    ch = Node(sort_order=0, type="chapter", position_x=50, position_y=100)
     assert resolve_optimal_sides(elem, ch) == {
         "source_side": "right",
         "target_side": "left",
@@ -186,7 +159,7 @@ def test_create_edge_auto_layout_vertical(monkeypatch):
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
         a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=0, y=300)
+        b = _make_node(db, wid, "B", x=0, y=300, node_type="volume")
 
         result = json.loads(nt._create_edge_sync(a.id, b.id, edge_type="包含"))
 

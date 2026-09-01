@@ -30,7 +30,7 @@ def test_create_node_accepts_layer_no_position(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync("outline", "主线", content="x", layer=1))
+        result = json.loads(nt._create_node_sync("outline", "主线", content="x", layer=1, sort_order=1))
         assert result["success"] is True
         assert result["node"]["layer"] == 1
         assert result["node"]["type"] == "outline"
@@ -43,8 +43,8 @@ def test_update_node_returns_all_neighbors(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
         db.add(Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="包含"))
@@ -58,7 +58,7 @@ def test_update_node_returns_all_neighbors(monkeypatch):
         assert b.id in neighbor_ids
         nb_b = next(nb for nb in result["neighbors"] if nb["node"]["id"] == b.id)
         assert set(nb_b["node"].keys()) == {
-            "id", "type", "title", "layer", "scope", "locked",
+            "id", "type", "title", "layer", "sort_order", "scope", "locked",
         }
         assert nb_b["edge"]["direction"] == "out"
         assert nb_b["edge"]["edge_type"] == "包含"
@@ -70,9 +70,9 @@ def test_delete_node_returns_orphaned_neighbors(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="idea", title="A")
-        b = Node(work_id=work.id, type="idea", title="B")
-        c = Node(work_id=work.id, type="idea", title="C")
+        a = Node(sort_order=0, work_id=work.id, type="idea", title="A")
+        b = Node(sort_order=0, work_id=work.id, type="idea", title="B")
+        c = Node(sort_order=0, work_id=work.id, type="idea", title="C")
         db.add_all([a, b, c])
         db.commit()
         db.add(Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="x"))
@@ -92,8 +92,8 @@ def test_create_edge_returns_endpoints_as_neighbors(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="volume", title="B", layer=2)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="volume", title="B", layer=2)
         db.add_all([a, b])
         db.commit()
 
@@ -109,8 +109,8 @@ def test_neighbor_incoming_direction(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
         # a -> b：对 b 而言是 incoming
@@ -129,8 +129,8 @@ def test_batch_create_nodes_returns_layer(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
-            {"node_type": "outline", "title": "A", "layer": 1, "position_x": 100, "position_y": 200},
-            {"node_type": "chapter", "title": "B", "layer": 3, "position_x": 300, "position_y": 600},
+            {"sort_order": 1, "node_type": "outline", "title": "A", "layer": 1, "position_x": 100, "position_y": 200},
+            {"sort_order": 1, "node_type": "chapter", "title": "B", "layer": 3, "position_x": 300, "position_y": 600},
         ]))
         assert result["success"] is True
         assert len(result["nodes"]) == 2
@@ -145,8 +145,8 @@ def test_batch_create_edges_returns_endpoints(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="volume", title="B", layer=2)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="volume", title="B", layer=2)
         db.add_all([a, b])
         db.commit()
 
@@ -164,8 +164,8 @@ def test_update_edge_returns_endpoints(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
         e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="包含", label="旧标签")
@@ -186,8 +186,8 @@ def test_update_edge_rejects_invalid_type(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="idea", title="A", layer=0)
-        b = Node(work_id=work.id, type="idea", title="B", layer=0)
+        a = Node(sort_order=0, work_id=work.id, type="idea", title="A", layer=0)
+        b = Node(sort_order=0, work_id=work.id, type="idea", title="B", layer=0)
         db.add_all([a, b])
         db.commit()
         e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="x")
@@ -208,8 +208,8 @@ def test_update_edge_nonexistent(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(work_id=work.id, type="chapter", title="B", layer=3)
+        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
         e = Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="包含")

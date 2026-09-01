@@ -39,7 +39,7 @@ def _make_chapter(db, user_id, extra_data=None):
     db.add(work)
     db.commit()
     db.refresh(work)
-    node = Node(
+    node = Node(sort_order=0, 
         work_id=work.id,
         type="chapter",
         title="第一章",
@@ -101,7 +101,7 @@ def test_put_chapter_elements_rejects_non_chapter_node(mock_auth):
         db.add(work)
         db.commit()
         db.refresh(work)
-        node = Node(work_id=work.id, type="plot", title="情节节点")
+        node = Node(sort_order=0, work_id=work.id, type="plot", title="情节节点")
         db.add(node)
         db.commit()
         db.refresh(node)

@@ -67,6 +67,7 @@ class CanvasCheckpointNode(Base):
     node_id = Column(String(36), nullable=False)
     type = Column(String(30), nullable=False)
     layer = Column(Integer, nullable=False, default=0)
+    sort_order = Column(Integer, nullable=False, default=0)
     scope = Column(String(20), nullable=False, default="local")
     title = Column(String(200), nullable=False)
     content = Column(Text, default="")

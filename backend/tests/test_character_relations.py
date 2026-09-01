@@ -49,7 +49,7 @@ def _make_work(db, user_id):
 
 
 def _make_character(db, work_id, title, scope="minor"):
-    node = Node(work_id=work_id, type="character", title=title, scope=scope)
+    node = Node(sort_order=0, work_id=work_id, type="character", title=title, scope=scope)
     db.add(node)
     db.commit()
     db.refresh(node)
@@ -156,7 +156,7 @@ def test_create_character_relation_rejects_non_character_endpoint(mock_auth):
     try:
         work = _make_work(db, mock_auth.id)
         a = _make_character(db, work.id, "张三")
-        ch = Node(work_id=work.id, type="chapter", title="第一章")
+        ch = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章")
         db.add(ch)
         db.commit()
         resp = client.post(

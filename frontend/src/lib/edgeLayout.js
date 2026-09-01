@@ -22,14 +22,6 @@ export function resolveHierarchyChainSides() {
   return { source_side: "bottom", target_side: "top" };
 }
 
-export function isChapterSequenceEdge(sourceNode, targetNode) {
-  return sourceNode?.data?.type === "chapter" && targetNode?.data?.type === "chapter";
-}
-
-export function resolveChapterSequenceSides() {
-  return { source_side: "right", target_side: "left" };
-}
-
 export function normalizeEdgeLayout(extraData = {}) {
   const layout = extraData?.layout || {};
   return {
@@ -49,9 +41,6 @@ function nodeBounds(node) {
 }
 
 export function resolveOptimalSides(sourceNode, targetNode) {
-  if (isChapterSequenceEdge(sourceNode, targetNode)) {
-    return resolveChapterSequenceSides();
-  }
   if (isHierarchyChainEdge(sourceNode, targetNode)) {
     return resolveHierarchyChainSides();
   }

@@ -10,6 +10,7 @@ class SnapshotNode(BaseModel):
     content: str = ""
     extra_data: dict = Field(default_factory=dict)
     layer: int = 0
+    sort_order: int = 0
     scope: str = "local"
     position_x: float = 0.0
     position_y: float = 0.0

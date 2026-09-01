@@ -29,7 +29,7 @@ def test_create_compaction_and_resolve_node_source():
     db = database.SessionLocal()
     try:
         _, work, session = _make_user_work_session(db)
-        node = Node(work_id=work.id, type="chapter", title="第二章", content="男主在仓库醒来，暗金瞳一闪。")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第二章", content="男主在仓库醒来，暗金瞳一闪。")
         db.add(node)
         db.commit()
         supervisor_mod.set_context({"session_id": session["id"], "work_id": work.id})
@@ -90,7 +90,7 @@ def test_read_node_content_blocks_compacted_node_by_default():
     db = database.SessionLocal()
     try:
         _, work, session = _make_user_work_session(db)
-        node = Node(work_id=work.id, type="chapter", title="第一章", content="很长的原文")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章", content="很长的原文")
         db.add(node)
         db.commit()
         supervisor_mod.set_context({"session_id": session["id"], "work_id": work.id})

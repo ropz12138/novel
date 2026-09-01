@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   RELATION_HIERARCHY,
-  RELATION_SEQUENCE,
   RELATION_REFERENCE,
   HIERARCHY_CHAIN,
   hierarchyLevel,
@@ -43,17 +42,17 @@ describe("deriveRelationKind", () => {
     expect(deriveRelationKind("plot", "chapter")).toBe(RELATION_HIERARCHY);
   });
 
-  it("chapter → chapter 是 sequence 而不是 hierarchy", () => {
+  it("chapter → chapter 非法：同级顺序由 sort_order 表达", () => {
     // 若判据只看"两端都是层级链类型"，前一章会被当成后一章的父节点，树深度错乱
     const kind = deriveRelationKind("chapter", "chapter");
-    expect(kind).toBe(RELATION_SEQUENCE);
+    expect(kind).toBeNull();
     expect(kind).not.toBe(RELATION_HIERARCHY);
   });
 
-  it("同类型层级链节点之间是 sequence", () => {
-    expect(deriveRelationKind("volume", "volume")).toBe(RELATION_SEQUENCE);
-    expect(deriveRelationKind("plot", "plot")).toBe(RELATION_SEQUENCE);
-    expect(deriveRelationKind("outline", "outline")).toBe(RELATION_SEQUENCE);
+  it("同类型层级链节点之间一律非法", () => {
+    expect(deriveRelationKind("volume", "volume")).toBeNull();
+    expect(deriveRelationKind("plot", "plot")).toBeNull();
+    expect(deriveRelationKind("outline", "outline")).toBeNull();
   });
 
   it("非层级链参与的边是 reference", () => {
@@ -83,10 +82,8 @@ describe("edgeRelationKind / isHierarchyEdge", () => {
   ]);
 
   it("自然语言 edge_type 不影响判定", () => {
-    // edge_type 写"包含"，但 chapter → chapter 仍是 sequence
-    expect(edgeRelationKind(flowEdge("c1", "c2", "包含"), nodeTypeById)).toBe(
-      RELATION_SEQUENCE,
-    );
+    // edge_type 写"包含"，但 chapter → chapter 仍是非法的同级组合
+    expect(edgeRelationKind(flowEdge("c1", "c2", "包含"), nodeTypeById)).toBeNull();
     // edge_type 写"参与"，但 volume → plot 仍是 hierarchy
     expect(edgeRelationKind(flowEdge("v1", "p1", "参与"), nodeTypeById)).toBe(
       RELATION_HIERARCHY,

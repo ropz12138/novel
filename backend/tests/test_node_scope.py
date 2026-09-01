@@ -120,7 +120,7 @@ def test_node_scope_default_local_at_orm_level():
         work = CanvasWork(user_id=user.id, title="w")
         db.add(work)
         db.commit()
-        node = Node(work_id=work.id, type="outline", title="主线")
+        node = Node(sort_order=0, work_id=work.id, type="outline", title="主线")
         db.add(node)
         db.commit()
         db.refresh(node)
@@ -136,17 +136,17 @@ def test_create_node_defaults_scope_by_type(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         # outline 默认 local
-        r = json.loads(nt._create_node_sync("outline", "主线", layer=1))
+        r = json.loads(nt._create_node_sync("outline", "主线", layer=1, sort_order=1))
         assert r["success"] is True
         assert r["node"]["scope"] == "local"
 
         # worldbuilding 默认 global
-        r2 = json.loads(nt._create_node_sync("worldbuilding", "世界观", layer=0))
+        r2 = json.loads(nt._create_node_sync("worldbuilding", "世界观", layer=0, sort_order=1))
         assert r2["success"] is True
         assert r2["node"]["scope"] == "global"
 
         # character 默认 minor
-        r3 = json.loads(nt._create_node_sync("character", "配角A", layer=0))
+        r3 = json.loads(nt._create_node_sync("character", "配角A", layer=0, sort_order=1))
         assert r3["success"] is True
         assert r3["node"]["scope"] == "minor"
     finally:
@@ -158,7 +158,7 @@ def test_create_node_accepts_global_for_protagonist(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         r = json.loads(
-            nt._create_node_sync("character", "主角", scope="global", layer=0)
+            nt._create_node_sync("character", "主角", scope="global", layer=0, sort_order=1)
         )
         assert r["success"] is True
         assert r["node"]["scope"] == "global"
@@ -171,7 +171,7 @@ def test_create_node_character_rejects_local(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         r = json.loads(
-            nt._create_node_sync("character", "X", scope="local", layer=0)
+            nt._create_node_sync("character", "X", scope="local", layer=0, sort_order=1)
         )
         assert "error" in r
     finally:
@@ -183,7 +183,7 @@ def test_create_node_rejects_invalid_scope(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         r = json.loads(
-            nt._create_node_sync("character", "X", scope="universal", layer=0)
+            nt._create_node_sync("character", "X", scope="universal", layer=0, sort_order=1)
         )
         assert "error" in r
     finally:
@@ -196,7 +196,7 @@ def test_update_node_changes_scope_minor_to_global(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        c = Node(work_id=work.id, type="character", title="主角", scope="minor", layer=0)
+        c = Node(sort_order=0, work_id=work.id, type="character", title="主角", scope="minor", layer=0)
         db.add(c)
         db.commit()
 
@@ -211,7 +211,7 @@ def test_update_node_character_rejects_local(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        c = Node(work_id=work.id, type="character", title="X", scope="minor", layer=0)
+        c = Node(sort_order=0, work_id=work.id, type="character", title="X", scope="minor", layer=0)
         db.add(c)
         db.commit()
 
@@ -225,7 +225,7 @@ def test_update_node_keeps_scope_when_untouched(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        c = Node(work_id=work.id, type="character", title="主角",
+        c = Node(sort_order=0, work_id=work.id, type="character", title="主角",
                  scope="global", layer=0)
         db.add(c)
         db.commit()
@@ -241,7 +241,7 @@ def test_update_node_resets_scope_when_type_changes_to_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        c = Node(work_id=work.id, type="character", title="X",
+        c = Node(sort_order=0, work_id=work.id, type="character", title="X",
                  scope="minor", layer=0)
         db.add(c)
         db.commit()
@@ -264,7 +264,7 @@ def test_compact_includes_scope():
         work = CanvasWork(user_id=user.id, title="cw")
         db.add(work)
         db.commit()
-        node = Node(work_id=work.id, type="character", title="主角",
+        node = Node(sort_order=0, work_id=work.id, type="character", title="主角",
                     scope="global", layer=0)
         db.add(node)
         db.commit()
@@ -272,7 +272,7 @@ def test_compact_includes_scope():
 
         compact = nt._compact(node)
         assert compact["scope"] == "global"
-        assert set(compact.keys()) == {"id", "type", "title", "layer", "scope", "locked"}
+        assert set(compact.keys()) == {"id", "type", "title", "layer", "sort_order", "scope", "locked"}
     finally:
         db.close()
 
@@ -284,9 +284,9 @@ def test_batch_create_nodes_resolves_scope_per_node(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         r = json.loads(nt._batch_create_nodes_sync(nodes_data=[
-            {"node_type": "character", "title": "主角", "scope": "global", "layer": 0},
-            {"node_type": "character", "title": "配角", "layer": 0},  # 默认 minor
-            {"node_type": "worldbuilding", "title": "世界观", "layer": 0},
+            {"sort_order": 1, "node_type": "character", "title": "主角", "scope": "global", "layer": 0},
+            {"sort_order": 1, "node_type": "character", "title": "配角", "layer": 0},  # 默认 minor
+            {"sort_order": 1, "node_type": "worldbuilding", "title": "世界观", "layer": 0},
         ]))
         assert r["success"] is True
         scopes = [n["scope"] for n in r["nodes"]]

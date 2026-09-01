@@ -36,7 +36,7 @@ def test_count_chapter_words_returns_word_count():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第一章",
@@ -58,7 +58,7 @@ def test_count_chapter_words_with_expected_advice():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="chapter", title="第一章", content="abcde")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章", content="abcde")
         db.add(node)
         db.commit()
 
@@ -78,7 +78,7 @@ def test_count_chapter_words_rejects_invalid_expected():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="chapter", title="第一章", content="正文")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章", content="正文")
         db.add(node)
         db.commit()
 
@@ -96,11 +96,11 @@ def test_count_chapter_words_picks_latest_when_node_id_omitted():
         work = _make_work(db)
         old = Node(
             work_id=work.id, type="chapter", title="第一章",
-            content="旧章", extra_data={"chapter_order": 1},
+            content="旧章", sort_order=1,
         )
         latest = Node(
             work_id=work.id, type="chapter", title="第二章",
-            content="最新章节正文", extra_data={"chapter_order": 2},
+            content="最新章节正文", sort_order=2,
         )
         db.add_all([old, latest])
         db.commit()

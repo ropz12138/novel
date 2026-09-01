@@ -39,7 +39,7 @@ def test_insert_chapter_illustration_persists_and_updates_content(monkeypatch, t
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第1章",
@@ -80,7 +80,7 @@ def test_insert_chapter_illustration_rejects_non_chapter(monkeypatch, tmp_path):
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="plot", title="情节", content="x", layer=2)
+        node = Node(sort_order=0, work_id=work.id, type="plot", title="情节", content="x", layer=2)
         db.add(node)
         db.commit()
 
@@ -103,7 +103,7 @@ def test_insert_chapter_illustration_rejects_empty_content(monkeypatch, tmp_path
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(work_id=work.id, type="chapter", title="空章", content="", layer=3)
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="空章", content="", layer=3)
         db.add(node)
         db.commit()
 
@@ -125,7 +125,7 @@ def test_insert_chapter_illustration_rejects_position_zero(monkeypatch, tmp_path
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第1章",
@@ -154,7 +154,7 @@ def test_insert_chapter_illustration_rejects_english_prompt(monkeypatch, tmp_pat
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第1章",

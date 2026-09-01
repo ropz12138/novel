@@ -44,6 +44,20 @@ export function hasHierarchyChildren(index, nodeId) {
   return childIdsOf(index, nodeId).length > 0;
 }
 
+/** 结构节点是否有关联的非结构邻居（如章节连到的配角）。 */
+export function hasRelatedCharacters(index, nodeId) {
+  const node = index.nodeById.get(nodeId);
+  if (!node || !isCanvasStructuralType(node.data?.type)) return false;
+  for (const edge of index.edges) {
+    if (edge.source !== nodeId && edge.target !== nodeId) continue;
+    const otherId = edge.source === nodeId ? edge.target : edge.source;
+    const otherNode = index.nodeById.get(otherId);
+    if (!otherNode) continue;
+    if (!isCanvasStructuralType(otherNode.data?.type)) return true;
+  }
+  return false;
+}
+
 /** 没有 hierarchy 父边的层级链节点，构成树或森林的根。 */
 export function hierarchyRootIds(index) {
   return index.nodes

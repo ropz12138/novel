@@ -30,7 +30,7 @@ def test_create_chapter_without_character_edge_returns_relation_warning(monkeypa
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db, "无连线")
-        db.add(Node(
+        db.add(Node(sort_order=0, 
             work_id=work.id,
             type="character",
             title="沈夜",
@@ -45,7 +45,7 @@ def test_create_chapter_without_character_edge_returns_relation_warning(monkeypa
             content="正文内容",
             position_x=500,
             position_y=0,
-        ))
+         sort_order=1,))
 
         assert result["success"] is True
         assert result["relation_warnings"]
@@ -67,7 +67,7 @@ def test_create_non_chapter_node_has_empty_relation_warnings(monkeypatch):
             "秦昭",
             position_x=0,
             position_y=200,
-        ))
+         sort_order=1,))
 
         assert result["success"] is True
         assert result.get("relation_warnings", []) == []
@@ -86,7 +86,7 @@ def test_create_chapter_warns_when_no_character_nodes_exist(monkeypatch):
             "第一章",
             position_x=500,
             position_y=0,
-        ))
+         sort_order=1,))
 
         assert result["success"] is True
         assert any("角色节点" in w for w in result["relation_warnings"])
@@ -99,7 +99,7 @@ def test_batch_create_chapters_returns_relation_warnings(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db, "批量")
-        db.add(Node(
+        db.add(Node(sort_order=0, 
             work_id=work.id,
             type="character",
             title="温杏",
@@ -109,8 +109,8 @@ def test_batch_create_chapters_returns_relation_warnings(monkeypatch):
         db.commit()
 
         result = json.loads(nt._batch_create_nodes_sync(nodes_data=[
-            {"node_type": "chapter", "title": "第四章", "position_x": 500, "position_y": 0},
-            {"node_type": "outline", "title": "总纲", "position_x": 0, "position_y": 400},
+            {"sort_order": 1, "node_type": "chapter", "title": "第四章", "position_x": 500, "position_y": 0},
+            {"sort_order": 1, "node_type": "outline", "title": "总纲", "position_x": 0, "position_y": 400},
         ]))
 
         assert result["success"] is True
@@ -132,14 +132,14 @@ def test_relation_warning_helpers_skip_when_chapter_already_linked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db, "已连线")
-        chapter = Node(
+        chapter = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="已连线章节",
             position_x=500,
             position_y=0,
         )
-        character = Node(
+        character = Node(sort_order=0, 
             work_id=work.id,
             type="character",
             title="沈夜",

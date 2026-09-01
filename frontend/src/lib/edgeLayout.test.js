@@ -88,19 +88,13 @@ describe("edge layout", () => {
     expect(laidOut.targetHandle).toBe("target-top");
   });
 
-  it("chapter-to-chapter edges always use right to left", () => {
+  it("same-type chain nodes no longer get a dedicated right-to-left rule", () => {
+    // 同级连线已非法，chapter↔chapter 不再有专用端点规则，
+    // 落回层级链的下→上，避免为不可能存在的边保留特例
     expect(resolveOptimalSides(
       node("c1", 0, 0, "chapter"),
       node("c2", 400, 0, "chapter"),
-    )).toEqual({ source_side: "right", target_side: "left" });
-    expect(resolveOptimalSides(
-      node("c1", 400, 0, "chapter"),
-      node("c2", 0, 300, "chapter"),
-    )).toEqual({ source_side: "right", target_side: "left" });
-    const nodes = [node("c1", 0, 0, "chapter"), node("c2", 400, 0, "chapter")];
-    const [laidOut] = applyEdgeHandles(nodes, [edge("e1", "c1", "c2")]);
-    expect(laidOut.sourceHandle).toBe("source-right");
-    expect(laidOut.targetHandle).toBe("target-left");
+    )).toEqual({ source_side: "bottom", target_side: "top" });
   });
 
   it("applyEdgeHandles assigns relation handles with rel- prefix", () => {

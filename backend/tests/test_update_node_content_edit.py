@@ -59,7 +59,7 @@ def test_update_node_content_edit_applies_diff_and_emits(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第1章",
@@ -131,7 +131,7 @@ def test_update_node_content_edit_supports_non_chapter_nodes(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="worldbuilding",
             title="世界观",

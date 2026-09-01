@@ -22,11 +22,18 @@ export function toggleExpanded(expandedNodeIds, nodeId) {
   return next;
 }
 
+export function toggleSatelliteExpanded(satelliteExpandedNodeIds, nodeId) {
+  const next = new Set(satelliteExpandedNodeIds);
+  if (next.has(nodeId)) next.delete(nodeId);
+  else next.add(nodeId);
+  return next;
+}
+
 export function projectVisibleGraph({
   index,
   expandedNodeIds,
   focusNodeId = null,
-  selectedNodeId = null,
+  satelliteExpandedNodeIds = new Set(),
   defaultExpandDepth = DEFAULT_EXPAND_DEPTH,
 }) {
   // 聚焦节点的祖先链视为已展开，使目标节点必然落入可见集合
@@ -54,19 +61,20 @@ export function projectVisibleGraph({
     }
   }
 
-  // 卫星节点：不参与树结构的关联节点（如配角），只在选中与之相连的结构节点时出现，
-  // 避免它们长期占用画布，同时保留查看角色与章节关联的能力。
+  // 卫星节点：不参与树结构的关联节点（如配角），只在用户显式展开相关角色时出现。
+  // 与节点详情抽屉解耦：点击节点只打开详情，不会顺带把角色带上画布。
   const satelliteAnchorById = new Map();
-  if (selectedNodeId && visibleNodeIds.has(selectedNodeId)) {
+  for (const anchorId of satelliteExpandedNodeIds) {
+    if (!visibleNodeIds.has(anchorId)) continue;
     for (const edge of index.edges) {
-      if (edge.source !== selectedNodeId && edge.target !== selectedNodeId) continue;
-      const otherId = edge.source === selectedNodeId ? edge.target : edge.source;
+      if (edge.source !== anchorId && edge.target !== anchorId) continue;
+      const otherId = edge.source === anchorId ? edge.target : edge.source;
       const otherNode = index.nodeById.get(otherId);
       if (!otherNode) continue;
       // 非结构节点即卫星候选。worldbuilding 与 note 被禁止连线，
       // 在图中没有边，因此不会走到这里。
       if (isCanvasStructuralType(otherNode.data?.type)) continue;
-      satelliteAnchorById.set(otherId, selectedNodeId);
+      satelliteAnchorById.set(otherId, anchorId);
       visibleNodeIds.add(otherId);
     }
   }
@@ -78,11 +86,11 @@ export function projectVisibleGraph({
       return false;
     }
     if (isHierarchyEdge(edge, index.typeById)) return true;
-    // 非结构关系只在选中其端点时显示
-    return (
-      selectedNodeId !== null &&
-      (edge.source === selectedNodeId || edge.target === selectedNodeId)
-    );
+    // 非结构关系只在展开相关角色时显示
+    for (const anchorId of satelliteExpandedNodeIds) {
+      if (edge.source === anchorId || edge.target === anchorId) return true;
+    }
+    return false;
   });
 
   return {

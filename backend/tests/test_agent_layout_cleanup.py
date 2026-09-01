@@ -29,7 +29,7 @@ def _make_work(monkeypatch, db):
 
 
 def _make_node(db, work_id, title="n", node_type="outline"):
-    node = Node(work_id=work_id, type=node_type, title=title, layer=0)
+    node = Node(sort_order=0, work_id=work_id, type=node_type, title=title, layer=0)
     db.add(node)
     db.commit()
     db.refresh(node)
@@ -48,7 +48,7 @@ def test_create_node_without_coordinates_succeeds(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync("outline", "大纲", content=""))
+        result = json.loads(nt._create_node_sync("outline", "大纲", content="", sort_order=1))
         assert result["success"] is True
     finally:
         db.close()
@@ -59,8 +59,8 @@ def test_batch_create_nodes_without_coordinates_succeeds(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
-            {"node_type": "outline", "title": "大纲"},
-            {"node_type": "volume", "title": "第一卷"},
+            {"sort_order": 1, "node_type": "outline", "title": "大纲"},
+            {"sort_order": 1, "node_type": "volume", "title": "第一卷"},
         ]))
         assert result["success"] is True
         assert len(result["nodes"]) == 2
@@ -74,7 +74,7 @@ def test_create_node_does_not_return_layout_feedback(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync("outline", "大纲"))
+        result = json.loads(nt._create_node_sync("outline", "大纲", sort_order=1))
         assert "layout_warnings" not in result
         assert "layout_hint" not in result
     finally:
@@ -111,7 +111,7 @@ def test_batch_create_nodes_does_not_return_layout_feedback(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
-            {"node_type": "outline", "title": "大纲"},
+            {"sort_order": 1, "node_type": "outline", "title": "大纲"},
         ]))
         assert "layout_warnings" not in result
         assert "layout_hint" not in result

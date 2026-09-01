@@ -18,6 +18,8 @@ from node_types import (
     STANDARD_NODE_TYPES,
     NODE_TYPES_RULES_TEXT,
     NODE_LAYOUT_RULES_TEXT,
+    NODE_SORT_ORDER_RULES_TEXT,
+    MISSING_SORT_ORDER_ERROR,
     EDGE_ENDPOINT_RULES_TEXT,
     EDGE_CONNECTION_RULES_TEXT,
     resolve_scope,
@@ -77,6 +79,7 @@ class CreateNodeInput(BaseModel):
             "description 为该线的说明文字。"
         ),
     )
+    sort_order: int = Field(description=NODE_SORT_ORDER_RULES_TEXT)
     layer: int = Field(
         default=0,
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
@@ -91,6 +94,10 @@ class UpdateNodeInput(BaseModel):
     node_id: str = Field(description="节点ID")
     title: Optional[str] = Field(default=None, description="新标题")
     content: Optional[str] = Field(default=None, description="新内容")
+    sort_order: Optional[int] = Field(
+        default=None,
+        description=f"调整同级显示顺序。{NODE_SORT_ORDER_RULES_TEXT}",
+    )
     chapter_elements: Optional[list[dict]] = Field(
         default=None,
         description=(
@@ -176,9 +183,9 @@ class UpdateEdgeInput(BaseModel):
 class BatchCreateNodesInput(BaseModel):
     nodes_data: list[dict] = Field(
         description=(
-            "节点数据列表，每项含 node_type、title、position_x、position_y、layer 等。"
+            "节点数据列表，每项必须含 node_type、title、sort_order。"
             "创建 chapter 时可带 chapter_elements；创建 character 时可带 storylines；不要创建 element 节点。"
-            f"{NODE_LAYOUT_RULES_TEXT}"
+            f"{NODE_SORT_ORDER_RULES_TEXT}{NODE_LAYOUT_RULES_TEXT}"
         ),
     )
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -198,6 +205,7 @@ def _compact(node):
         "type": node.type,
         "title": node.title,
         "layer": node.layer,
+        "sort_order": node.sort_order,
         "scope": node.scope,
         "locked": bool(node.locked),
     }
@@ -384,7 +392,9 @@ def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] |
 
 
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None):
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None):
+    if sort_order is None:
+        return json.dumps({"error": MISSING_SORT_ORDER_ERROR}, ensure_ascii=False)
     try:
         final_scope = resolve_scope(node_type, scope)
     except ValueError as e:
@@ -427,6 +437,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             title=title,
             content=content,
             layer=layer,
+            sort_order=sort_order,
             scope=final_scope,
             extra_data=_merge_extra_data_fields(
                 {},
@@ -468,6 +479,7 @@ def _update_node_sync(
     prev_chapter_node_id=None,
     chapter_elements=None,
     storylines=None,
+    sort_order=None,
 ):
     if content_edit_instruction:
         return json.dumps({
@@ -526,6 +538,8 @@ def _update_node_sync(
             node.type = node_type
         if layer is not None:
             node.layer = layer
+        if sort_order is not None:
+            node.sort_order = sort_order
         if position_x is not None:
             node.position_x = position_x
         if position_y is not None:
@@ -705,6 +719,11 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
         node_type = data.get("node_type") or data.get("type")
         if not node_type:
             return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
+        if data.get("sort_order") is None:
+            return json.dumps(
+                {"error": f"{data.get('title', '未命名')}：{MISSING_SORT_ORDER_ERROR}"},
+                ensure_ascii=False,
+            )
         try:
             resolve_scope(node_type, data.get("scope"))
         except ValueError as e:
@@ -751,6 +770,7 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                     storylines=normalized_storylines,
                 ),
                 layer=layer,
+                sort_order=data["sort_order"],
                 scope=scope,
                 position_x=position_x if position_x is not None else 0.0,
                 position_y=position_y if position_y is not None else 0.0,
@@ -840,9 +860,9 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 
 # 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None):
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines))
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -870,6 +890,7 @@ async def _update_node_content_edit_async(
     prev_chapter_node_id=None,
     chapter_elements=None,
     storylines=None,
+    sort_order=None,
 ):
     from services.agents.llm import get_llm, context_model_pref_kwargs
     from services.chapter_edit_agent import (
@@ -976,6 +997,8 @@ async def _update_node_content_edit_async(
             node.type = node_type
         if layer is not None:
             node.layer = layer
+        if sort_order is not None:
+            node.sort_order = sort_order
         if position_x is not None:
             node.position_x = position_x
         if position_y is not None:
@@ -1078,6 +1101,7 @@ async def _update_node_async(
     prev_chapter_node_id=None,
     chapter_elements=None,
     storylines=None,
+    sort_order=None,
 ):
     if content is not None and content_edit_instruction:
         return json.dumps({
@@ -1100,10 +1124,11 @@ async def _update_node_async(
             prev_chapter_node_id=prev_chapter_node_id,
             chapter_elements=chapter_elements,
             storylines=storylines,
+            sort_order=sort_order,
         )
 
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements, storylines))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements, storylines, sort_order))
     # 触发画布更新事件
     try:
         data = json.loads(result)

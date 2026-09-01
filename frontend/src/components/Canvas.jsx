@@ -47,12 +47,16 @@ import {
   buildGraphIndex,
   hasHierarchyChildren,
   hiddenDescendantSummary,
+  hasRelatedCharacters,
 } from "../lib/canvasGraph";
 import {
   projectVisibleGraph,
   toggleExpanded,
+  toggleSatelliteExpanded,
 } from "../lib/canvasVisibility";
 import { layoutVisibleGraph } from "../lib/canvasLayout";
+import { deriveRelationKind } from "../lib/canvasRelation";
+import { nextSortOrder } from "../lib/canvasOrder";
 import {
   CANVAS_MARQUEE_KEY_CODE,
   shouldClearDrawerOnSelection,
@@ -89,6 +93,9 @@ const createNodeTypes = (
   expandableNodeIds = new Set(),
   hiddenSummaryById = new Map(),
   onCollapseToggle,
+  satelliteExpandedNodeIds = new Set(),
+  relatedCharacterNodeIds = new Set(),
+  onSatelliteToggle,
 ) => ({
   custom: (props) => {
     const summary = hiddenSummaryById.get(props.id);
@@ -103,6 +110,9 @@ const createNodeTypes = (
         hiddenDescendantCount={summary?.total || 0}
         hiddenDescendantText={summary?.text || ""}
         onCollapseToggle={onCollapseToggle}
+        hasRelatedCharacters={relatedCharacterNodeIds.has(props.id)}
+        isSatellitesExpanded={satelliteExpandedNodeIds.has(props.id)}
+        onSatelliteToggle={onSatelliteToggle}
       />
     );
   },
@@ -146,6 +156,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
   const [expandedNodeIds, setExpandedNodeIds] = useState(
     () => initialViewState?.expandedNodeIds ?? new Set(),
   );
+  const [satelliteExpandedNodeIds, setSatelliteExpandedNodeIds] = useState(() => new Set());
   // 展开/收起时记录操作节点与操作前的坐标，用于布局后的整体平移补偿
   const [layoutAnchor, setLayoutAnchor] = useState(null);
   const contextMenuRef = useRef(null);
@@ -197,6 +208,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
 
     const restored = loadViewState(workId, localViewStorage());
     setExpandedNodeIds(restored?.expandedNodeIds ?? new Set());
+    setSatelliteExpandedNodeIds(new Set());
     // viewport 只能在挂载时经 defaultViewport 恢复，此处仅接管后续保存的基准
     viewportRef.current = restored?.viewport ?? null;
   }, [workId]);
@@ -515,7 +527,8 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     if (srcNode?.data?.type === "character" && tgtNode?.data?.type === "character") {
       return false;
     }
-    return true;
+    // 同级、跨级与反向的层级链组合都会被后端拒绝，这里提前挡住，避免拖出连线后再失败
+    return deriveRelationKind(srcNode?.data?.type, tgtNode?.data?.type) !== null;
   }, []);
 
   const onCombinedEdgesChange = useCallback(
@@ -602,11 +615,12 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     try {
       pushUndoSnapshot();
 
-      // 位置由布局推导，不再计算坐标
+      // 位置由布局推导，不再计算坐标；顺序排在同类型节点末尾
       const created = await createNode(workId, {
         type,
         title: `新${type}节点`,
         content: "",
+        sort_order: nextSortOrder(nodesRef.current, type),
       });
 
       setNodes((nds) => {
@@ -622,6 +636,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
               content: created.content,
               extra_data: created.extra_data,
               layer: created.layer ?? 0,
+              sort_order: created.sort_order ?? 0,
               scope: created.scope ?? "local",
               locked: created.locked ?? false,
               created_at: created.created_at,
@@ -705,9 +720,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       index: graphIndex,
       expandedNodeIds,
       focusNodeId: focusedNodeId,
-      selectedNodeId: selectedNode?.id ?? null,
+      satelliteExpandedNodeIds,
     }),
-    [graphIndex, expandedNodeIds, focusedNodeId, selectedNode?.id],
+    [graphIndex, expandedNodeIds, focusedNodeId, satelliteExpandedNodeIds],
   );
 
   const layoutPositions = useMemo(
@@ -752,6 +767,22 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     });
     setExpandedNodeIds((prev) => toggleExpanded(prev, nodeId));
   }, []);
+
+  const handleSatelliteToggle = useCallback((nodeId) => {
+    setLayoutAnchor({
+      nodeId,
+      positions: new Map(layoutPositionsRef.current),
+    });
+    setSatelliteExpandedNodeIds((prev) => toggleSatelliteExpanded(prev, nodeId));
+  }, []);
+
+  const relatedCharacterNodeIds = useMemo(() => {
+    const ids = new Set();
+    for (const node of graphIndex.nodes) {
+      if (hasRelatedCharacters(graphIndex, node.id)) ids.add(node.id);
+    }
+    return ids;
+  }, [graphIndex]);
 
   const persistViewState = useCallback(
     (expanded) => {
@@ -853,6 +884,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
+      satelliteExpandedNodeIds,
+      relatedCharacterNodeIds,
+      handleSatelliteToggle,
     ),
     [
       handleNodeClick,
@@ -862,6 +896,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
+      satelliteExpandedNodeIds,
+      relatedCharacterNodeIds,
+      handleSatelliteToggle,
     ],
   );
 

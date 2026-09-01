@@ -24,7 +24,7 @@ def _make_work(db):
 
 def test_clear_chapter_summary_clears_existing_summary(db_session):
     work = _make_work(db_session)
-    node = Node(work_id=work.id, type="chapter", title="第1章", content="旧正文")
+    node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="旧正文")
     db_session.add(node)
     db_session.commit()
     row = Chapter(work_id=work.id, node_id=node.id, title=node.title, summary="旧评估摘要")
@@ -40,7 +40,7 @@ def test_clear_chapter_summary_clears_existing_summary(db_session):
 
 def test_clear_chapter_summary_noop_for_non_chapter(db_session):
     work = _make_work(db_session)
-    node = Node(work_id=work.id, type="outline", title="大纲", content="内容")
+    node = Node(sort_order=0, work_id=work.id, type="outline", title="大纲", content="内容")
     db_session.add(node)
     db_session.commit()
 
@@ -52,7 +52,7 @@ def test_clear_chapter_summary_noop_for_non_chapter(db_session):
 
 def test_update_node_content_clears_chapter_summary(db_session):
     work = _make_work(db_session)
-    node = Node(work_id=work.id, type="chapter", title="第1章", content="旧正文")
+    node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="旧正文")
     db_session.add(node)
     db_session.commit()
     row = Chapter(work_id=work.id, node_id=node.id, title=node.title, summary="旧摘要")
@@ -68,7 +68,7 @@ def test_update_node_content_clears_chapter_summary(db_session):
 
 def test_update_node_title_only_keeps_summary(db_session):
     work = _make_work(db_session)
-    node = Node(work_id=work.id, type="chapter", title="第1章", content="正文")
+    node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="正文")
     db_session.add(node)
     db_session.commit()
     row = Chapter(work_id=work.id, node_id=node.id, title=node.title, summary="保留摘要")
@@ -84,7 +84,7 @@ def test_update_node_title_only_keeps_summary(db_session):
 
 def test_update_node_rejects_long_chapter_with_insufficient_highlights(db_session):
     work = _make_work(db_session)
-    node = Node(work_id=work.id, type="chapter", title="第1章", content="短草稿")
+    node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="短草稿")
     db_session.add(node)
     db_session.commit()
 

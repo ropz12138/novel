@@ -6,6 +6,7 @@ import {
   descendantIds,
   hiddenDescendantSummary,
   hasHierarchyChildren,
+  hasRelatedCharacters,
 } from "./canvasGraph";
 
 /**
@@ -17,7 +18,7 @@ import {
  *     └─ v2 (volume)
  *   孤立：w1 (worldbuilding/global), n1 (note/global), hero (character/global)
  *   关联：npc (character/minor) ── reference → c1
- *   顺序：c1 → c2 为 sequence
+ *   同级之间没有连线：c1 与 c2 的先后由各自的 sort_order 决定
  */
 const nodes = [
   { id: "o1", data: { type: "outline", label: "大纲", scope: "local" } },
@@ -49,7 +50,6 @@ const edges = [
   edge("p1", "c1"),
   edge("p1", "c2"),
   edge("p2", "c3"),
-  edge("c1", "c2", "接续"),
   edge("npc", "c1", "登场"),
 ];
 
@@ -61,9 +61,9 @@ describe("buildGraphIndex", () => {
     expect(index.parentById.get("c1")).toBe("p1");
   });
 
-  it("sequence 边不产生父子关系", () => {
+  it("同级节点各自挂在共同父节点下", () => {
     const index = buildGraphIndex(nodes, edges);
-    // c1 → c2 是 sequence，c2 的父节点仍是 p1
+    expect(index.parentById.get("c1")).toBe("p1");
     expect(index.parentById.get("c2")).toBe("p1");
   });
 
@@ -76,6 +76,16 @@ describe("buildGraphIndex", () => {
     const index = buildGraphIndex(nodes, edges);
     expect(index.childIdsById.get("p1")).toEqual(["c1", "c2"]);
     expect(index.childIdsById.get("v1")).toEqual(["p1", "p2"]);
+  });
+
+  it("同级顺序取自 sort_order，而不是 id 或标题", () => {
+    const orderedNodes = [
+      { id: "p", data: { type: "plot", label: "情节", sort_order: 1 } },
+      { id: "a", data: { type: "chapter", label: "第1章", sort_order: 2 } },
+      { id: "b", data: { type: "chapter", label: "第2章", sort_order: 1 } },
+    ];
+    const index = buildGraphIndex(orderedNodes, [edge("p", "a"), edge("p", "b")]);
+    expect(index.childIdsById.get("p")).toEqual(["b", "a"]);
   });
 
   it("没有子节点的节点返回空列表", () => {
@@ -151,10 +161,28 @@ describe("hasHierarchyChildren", () => {
     expect(hasHierarchyChildren(index, "v1")).toBe(true);
   });
 
-  it("只有 sequence 或 reference 邻居时为假", () => {
+  it("只有 reference 邻居时为假", () => {
     const index = buildGraphIndex(nodes, edges);
-    // c1 只有 sequence 出边 c1→c2 与 reference 入边 npc→c1
+    // c1 只有 reference 入边 npc→c1，没有层级子节点
     expect(hasHierarchyChildren(index, "c1")).toBe(false);
+  });
+});
+
+describe("hasRelatedCharacters", () => {
+  it("章节连到配角时为真", () => {
+    const index = buildGraphIndex(nodes, edges);
+    expect(hasRelatedCharacters(index, "c1")).toBe(true);
+  });
+
+  it("没有关联角色的结构节点为假", () => {
+    const index = buildGraphIndex(nodes, edges);
+    expect(hasRelatedCharacters(index, "v1")).toBe(false);
+    expect(hasRelatedCharacters(index, "c2")).toBe(false);
+  });
+
+  it("非结构节点为假", () => {
+    const index = buildGraphIndex(nodes, edges);
+    expect(hasRelatedCharacters(index, "npc")).toBe(false);
   });
 });
 

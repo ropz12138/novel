@@ -29,7 +29,7 @@ def test_create_element_node_is_rejected(monkeypatch):
             "旧元素节点",
             position_x=0,
             position_y=0,
-        ))
+         sort_order=1,))
         assert "不支持的节点类型" in result["error"]
     finally:
         db.close()
@@ -48,7 +48,7 @@ def test_create_chapter_accepts_chapter_elements(monkeypatch):
             chapter_elements=[
                 {"title": "主角觉醒", "content": "林远第一次感知时间异常", "priority": "high"},
             ],
-        ))
+         sort_order=1,))
         assert result["success"] is True
         node = db.query(Node).filter(Node.work_id == work.id, Node.type == "chapter").first()
         assert node.extra_data["chapter_elements"][0]["title"] == "主角觉醒"
@@ -67,7 +67,7 @@ def test_create_non_chapter_rejects_chapter_elements(monkeypatch):
             position_x=0,
             position_y=0,
             chapter_elements=[{"title": "不该出现"}],
-        ))
+         sort_order=1,))
         assert result["error"] == "chapter_elements 只能用于 chapter 节点"
     finally:
         db.close()
@@ -77,7 +77,7 @@ def test_update_chapter_elements_preserves_other_extra_data(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="chapter",
             title="第一章",
@@ -105,7 +105,7 @@ def test_batch_create_chapter_accepts_chapter_elements(monkeypatch):
         work = _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
             {
-                "node_type": "chapter",
+                "sort_order": 1, "node_type": "chapter",
                 "title": "第二章",
                 "position_x": 0,
                 "position_y": 0,

@@ -41,6 +41,7 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
         if existing:
             existing.type = snap_node.type
             existing.layer = snap_node.layer
+            existing.sort_order = snap_node.sort_order
             existing.scope = snap_node.scope
             existing.title = snap_node.title
             existing.content = snap_node.content
@@ -53,6 +54,7 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
                 work_id=work_id,
                 type=snap_node.type,
                 layer=snap_node.layer,
+                sort_order=snap_node.sort_order,
                 scope=snap_node.scope,
                 title=snap_node.title,
                 content=snap_node.content,

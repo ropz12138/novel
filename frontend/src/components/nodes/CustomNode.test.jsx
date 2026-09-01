@@ -174,6 +174,56 @@ describe("CustomNode 展开控件", () => {
   });
 });
 
+describe("CustomNode 相关角色展开控件", () => {
+  const chapterData = { type: "chapter", label: "第一章", content: "", extra_data: {} };
+
+  it("没有关联角色时不显示展开按钮", () => {
+    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters={false} />);
+    expect(screen.queryByRole("button", { name: "展开相关角色" })).toBeNull();
+  });
+
+  it("有关联角色时提供展开入口", () => {
+    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters isSatellitesExpanded={false} />);
+    expect(screen.getByRole("button", { name: "展开相关角色" })).toBeDefined();
+  });
+
+  it("已展开相关角色时提供收起入口", () => {
+    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters isSatellitesExpanded />);
+    expect(screen.getByRole("button", { name: "收起相关角色" })).toBeDefined();
+  });
+
+  it("点击相关角色控件回调节点 id", () => {
+    const onSatelliteToggle = vi.fn();
+    render(
+      <CustomNode
+        id="c1"
+        data={chapterData}
+        hasRelatedCharacters
+        isSatellitesExpanded={false}
+        onSatelliteToggle={onSatelliteToggle}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "展开相关角色" }));
+    expect(onSatelliteToggle).toHaveBeenCalledWith("c1");
+  });
+
+  it("相关角色控件不触发打开节点详情", () => {
+    const onNodeClick = vi.fn();
+    render(
+      <CustomNode
+        id="c1"
+        data={chapterData}
+        hasRelatedCharacters
+        isSatellitesExpanded={false}
+        onNodeClick={onNodeClick}
+        onSatelliteToggle={vi.fn()}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "展开相关角色" }));
+    expect(onNodeClick).not.toHaveBeenCalled();
+  });
+});
+
 describe("CustomNode element 节点", () => {
   it("uses 90x90 outer boundary for element nodes", () => {
     const { container } = render(

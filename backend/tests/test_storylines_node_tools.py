@@ -39,7 +39,7 @@ def test_create_character_accepts_storylines(monkeypatch):
             position_y=0,
             scope="global",
             storylines=[SAMPLE_LINE],
-        ))
+         sort_order=1,))
         assert result["success"] is True
         node = db.query(Node).filter(Node.work_id == work.id, Node.type == "character").first()
         assert node.extra_data["storylines"] == [SAMPLE_LINE]
@@ -57,7 +57,7 @@ def test_create_non_character_rejects_storylines(monkeypatch):
             position_x=0,
             position_y=0,
             storylines=[SAMPLE_LINE],
-        ))
+         sort_order=1,))
         assert result["error"] == "storylines 只能用于 character 节点"
     finally:
         db.close()
@@ -67,7 +67,7 @@ def test_update_storylines_preserves_other_extra_data(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(
+        node = Node(sort_order=0, 
             work_id=work.id,
             type="character",
             title="林川",
@@ -118,7 +118,7 @@ def test_batch_create_character_accepts_storylines(monkeypatch):
         work = _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
             {
-                "node_type": "character",
+                "sort_order": 1, "node_type": "character",
                 "title": "林晚",
                 "position_x": 0,
                 "position_y": 0,

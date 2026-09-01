@@ -34,7 +34,7 @@ def test_update_node_sync_sets_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="outline", title="n1", layer=0,
+        node = Node(sort_order=0, work_id=work.id, type="outline", title="n1", layer=0,
                     position_x=10, position_y=20, locked=False)
         db.add(node)
         db.commit()
@@ -52,7 +52,7 @@ def test_update_node_sync_blocks_position_when_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="chapter", title="locked", layer=3,
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="locked", layer=3,
                     position_x=100, position_y=200, locked=True)
         db.add(node)
         db.commit()
@@ -76,7 +76,7 @@ def test_update_node_sync_position_when_only_x_and_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="chapter", title="lx", layer=3,
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="lx", layer=3,
                     position_x=50, position_y=60, locked=True)
         db.add(node)
         db.commit()
@@ -94,7 +94,7 @@ def test_update_node_sync_allows_other_fields_when_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="outline", title="orig", layer=1,
+        node = Node(sort_order=0, work_id=work.id, type="outline", title="orig", layer=1,
                     position_x=10, position_y=20, content="old", locked=True)
         db.add(node)
         db.commit()
@@ -119,7 +119,7 @@ def test_update_node_sync_unblocked_when_not_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="chapter", title="free", layer=3,
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="free", layer=3,
                     position_x=0, position_y=0, locked=False)
         db.add(node)
         db.commit()
@@ -140,7 +140,7 @@ def test_compact_includes_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="idea", title="n1", layer=0,
+        node = Node(sort_order=0, work_id=work.id, type="idea", title="n1", layer=0,
                     position_x=10, position_y=20, locked=True)
         db.add(node)
         db.commit()
@@ -155,7 +155,7 @@ def test_update_node_async_accepts_locked_kwarg(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(work_id=work.id, type="character", title="角色", layer=2,
+        node = Node(sort_order=0, work_id=work.id, type="character", title="角色", layer=2,
                     position_x=10, position_y=20, content="旧设定", locked=False)
         db.add(node)
         db.commit()

@@ -31,10 +31,10 @@ def test_get_global_nodes_returns_only_global_types():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        note = Node(work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
-        theme = Node(work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
-        world = Node(work_id=work.id, type="worldbuilding", title="魔法体系", content="魔力来源")
-        chapter = Node(work_id=work.id, type="chapter", title="第1章", content="正文")
+        note = Node(sort_order=0, work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
+        theme = Node(sort_order=0, work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
+        world = Node(sort_order=0, work_id=work.id, type="worldbuilding", title="魔法体系", content="魔力来源")
+        chapter = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="正文")
         db.add_all([note, theme, world, chapter])
         db.commit()
 
@@ -50,7 +50,7 @@ def test_get_global_nodes_empty_when_no_global_types():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        ch = Node(work_id=work.id, type="chapter", title="第1章", content="正文")
+        ch = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="正文")
         db.add(ch)
         db.commit()
 
@@ -67,8 +67,8 @@ def test_format_global_context_with_nodes():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        note = Node(work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
-        theme = Node(work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
+        note = Node(sort_order=0, work_id=work.id, type="note", title="暗黑风格", content="使用阴暗笔调")
+        theme = Node(sort_order=0, work_id=work.id, type="theme", title="救赎", content="主角寻求救赎")
         db.add_all([note, theme])
         db.commit()
 
@@ -94,8 +94,8 @@ def test_supervisor_prompt_excludes_global_context():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        note = Node(work_id=work.id, type="note", title="硬汉派", content="简洁有力的对白")
-        world = Node(work_id=work.id, type="worldbuilding", title="赛博朋克", content="高科技低生活")
+        note = Node(sort_order=0, work_id=work.id, type="note", title="硬汉派", content="简洁有力的对白")
+        world = Node(sort_order=0, work_id=work.id, type="worldbuilding", title="赛博朋克", content="高科技低生活")
         db.add_all([note, world])
         db.commit()
 

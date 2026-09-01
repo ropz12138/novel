@@ -48,9 +48,9 @@ def test_canvas_index_returns_compact_directory(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(work_id=work.id, type="outline", title="主线",
+        n1 = Node(sort_order=0, work_id=work.id, type="outline", title="主线",
                   content="很长的正文不应该出现在索引里", layer=1)
-        n2 = Node(work_id=work.id, type="chapter", title="第1章", layer=3)
+        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", layer=3)
         db.add_all([n1, n2])
         db.commit()
         db.add(Edge(work_id=work.id, source_id=n1.id, target_id=n2.id,
@@ -82,8 +82,8 @@ def test_canvas_index_scoped_to_current_work(monkeypatch):
         work2 = CanvasWork(user_id=work1.user_id, title="w2")
         db.add(work2)
         db.commit()
-        db.add(Node(work_id=work1.id, type="idea", title="w1节点"))
-        db.add(Node(work_id=work2.id, type="idea", title="w2节点"))
+        db.add(Node(sort_order=0, work_id=work1.id, type="idea", title="w1节点"))
+        db.add(Node(sort_order=0, work_id=work2.id, type="idea", title="w2节点"))
         db.commit()
 
         _patch_work(monkeypatch, work1.id)

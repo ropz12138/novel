@@ -38,7 +38,7 @@ def work_and_user():
 
 
 def _make_chapter(db, work, title="第一章", content="正文"):
-    node = Node(work_id=work.id, type="chapter", title=title, content=content)
+    node = Node(sort_order=0, work_id=work.id, type="chapter", title=title, content=content)
     db.add(node)
     db.commit()
     db.refresh(node)

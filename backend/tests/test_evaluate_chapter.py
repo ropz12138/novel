@@ -42,7 +42,7 @@ def _add_chapter(db, work_id, title, content, order):
         type="chapter",
         title=title,
         content=content,
-        extra_data={"chapter_order": order},
+        sort_order=order,
     )
     db.add(node)
     db.commit()
@@ -79,7 +79,7 @@ def test_build_evaluate_chapter_messages_structure():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        db.add(Node(
+        db.add(Node(sort_order=0, 
             work_id=work.id, type="character", title="林川",
             content="谨慎的调查员", scope="global",
         ))

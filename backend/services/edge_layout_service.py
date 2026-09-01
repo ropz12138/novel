@@ -19,15 +19,6 @@ def resolve_hierarchy_chain_sides() -> dict[str, str]:
     return {"source_side": "bottom", "target_side": "top"}
 
 
-def is_chapter_sequence_edge(source: Node, target: Node) -> bool:
-    return source.type == "chapter" and target.type == "chapter"
-
-
-def resolve_chapter_sequence_sides() -> dict[str, str]:
-    """章节顺序连线固定：源右边界 → 目标左边界。"""
-    return {"source_side": "right", "target_side": "left"}
-
-
 def _node_dimensions(node: Node) -> tuple[float, float]:
     if node.type == "element":
         return float(ELEMENT_WIDTH), float(ELEMENT_HEIGHT)
@@ -43,8 +34,6 @@ def _node_center(node: Node) -> tuple[float, float]:
 
 def resolve_optimal_sides(source: Node, target: Node) -> dict[str, str]:
     """根据两节点相对位置选择最自然的连接方向。"""
-    if is_chapter_sequence_edge(source, target):
-        return resolve_chapter_sequence_sides()
     if is_hierarchy_chain_edge(source, target):
         return resolve_hierarchy_chain_sides()
 

@@ -2,11 +2,12 @@
 
 关系类别由节点类型派生，不存储字段：
   - 两端为层级链类型且 target 层级 = source 层级 + 1  → hierarchy
-  - 两端为同一种层级链类型                            → sequence
   - 其余合法组合                                      → reference
-  - 两端为层级链类型但跨级或反向                      → 非法，创建时拒绝
+  - 两端为层级链类型但同级、跨级或反向                → 非法，创建时拒绝
 
-结构校验：自环、跨级、单父。
+同级连线非法：同级顺序由 Node.sort_order 表达，不需要也不允许用连线表示。
+
+结构校验：自环、同级、跨级、单父。
 """
 import importlib
 import json
@@ -17,7 +18,6 @@ from models.work import CanvasWork
 from models.node import Node
 from services.edge_relation import (
     RELATION_HIERARCHY,
-    RELATION_SEQUENCE,
     RELATION_REFERENCE,
     hierarchy_level,
     derive_relation_kind,
@@ -40,7 +40,7 @@ def _make_work(monkeypatch, db):
 
 
 def _make_node(db, work_id, title="n", node_type="outline"):
-    node = Node(work_id=work_id, type=node_type, title=title, layer=0)
+    node = Node(sort_order=0, work_id=work_id, type=node_type, title=title, layer=0)
     db.add(node)
     db.commit()
     db.refresh(node)
@@ -76,22 +76,31 @@ def test_plot_to_chapter_is_hierarchy():
     assert derive_relation_kind("plot", "chapter") == RELATION_HIERARCHY
 
 
-# ---------- 关系类别派生：sequence ----------
+# ---------- 关系类别派生：同级非法 ----------
 
-def test_chapter_to_chapter_is_sequence_not_hierarchy():
-    """核心回归：若判据只看"两端都是层级链类型"，前一章会被误判为后一章的父节点，
-    导致树深度错乱。同类型之间必须归为 sequence。"""
+def test_chapter_to_chapter_is_illegal():
+    """同级顺序由 sort_order 字段表达，同级连线不再合法。
+
+    这里也是"严格降一级"判据的回归点：若判据只看"两端都是层级链类型"，
+    前一章会被误判为后一章的父节点，导致树深度错乱。"""
     kind = derive_relation_kind("chapter", "chapter")
-    assert kind == RELATION_SEQUENCE
+    assert kind is None
     assert kind != RELATION_HIERARCHY
 
 
-def test_volume_to_volume_is_sequence():
-    assert derive_relation_kind("volume", "volume") == RELATION_SEQUENCE
+def test_volume_to_volume_is_illegal():
+    assert derive_relation_kind("volume", "volume") is None
 
 
-def test_plot_to_plot_is_sequence():
-    assert derive_relation_kind("plot", "plot") == RELATION_SEQUENCE
+def test_plot_to_plot_is_illegal():
+    assert derive_relation_kind("plot", "plot") is None
+
+
+def test_same_level_error_points_to_sort_order():
+    """错误消息必须告诉 Agent 顺序该怎么表达，否则它只会换个 edge_type 重试。"""
+    err = validate_relation_types("chapter", "chapter")
+    assert err is not None
+    assert "sort_order" in err
 
 
 # ---------- 关系类别派生：reference ----------
@@ -136,7 +145,6 @@ def test_validate_relation_types_reports_error_for_skipped_level():
 
 def test_validate_relation_types_passes_for_legal_pairs():
     assert validate_relation_types("volume", "plot") is None
-    assert validate_relation_types("chapter", "chapter") is None
     assert validate_relation_types("character", "chapter") is None
 
 
@@ -144,7 +152,7 @@ def test_validate_relation_types_passes_for_legal_pairs():
 
 def test_natural_language_edge_type_does_not_create_hierarchy():
     """edge_type 写"包含"但两端类型不构成降级时，仍不是 hierarchy。"""
-    assert derive_relation_kind("chapter", "chapter") == RELATION_SEQUENCE
+    assert derive_relation_kind("chapter", "chapter") is None
     assert derive_relation_kind("character", "chapter") == RELATION_REFERENCE
 
 
@@ -202,19 +210,17 @@ def test_same_parent_twice_rejected(monkeypatch):
         db.close()
 
 
-def test_sequence_edge_does_not_occupy_parent_slot(monkeypatch):
-    """chapter → chapter 是 sequence，不占用父节点名额；
-    章节仍可以挂在 plot 下。"""
+def test_same_level_edge_rejected_by_structure_check(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
         wid = work.id
-        plot = _make_node(db, wid, "情节", "plot")
         ch1 = _make_node(db, wid, "第一章", "chapter")
         ch2 = _make_node(db, wid, "第二章", "chapter")
 
-        json.loads(nt._create_edge_sync(ch1.id, ch2.id, edge_type="接续"))
-        assert validate_hierarchy_structure(db, wid, plot, ch2) is None
+        err = validate_hierarchy_structure(db, wid, ch1, ch2)
+        assert err is not None
+        assert "sort_order" in err
     finally:
         db.close()
 
@@ -295,7 +301,7 @@ def test_create_edge_tool_rejects_second_parent(monkeypatch):
         db.close()
 
 
-def test_create_edge_tool_allows_chapter_sequence(monkeypatch):
+def test_create_edge_tool_rejects_chapter_sequence(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
@@ -304,7 +310,8 @@ def test_create_edge_tool_allows_chapter_sequence(monkeypatch):
         ch2 = _make_node(db, wid, "第二章", "chapter")
 
         result = json.loads(nt._create_edge_sync(ch1.id, ch2.id, edge_type="接续"))
-        assert result["success"] is True
+        assert "error" in result
+        assert "sort_order" in result["error"]
     finally:
         db.close()
 
