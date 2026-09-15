@@ -35,8 +35,18 @@ function shouldHideAssistantEllipsisBubble(item) {
 
 const CTX_MARKER_RE = /(\[\[ctx\|[^|]+\|[^|]+\|[^\]]+\]\])/g;
 
+function hideQuotedContextAfterMarkers(parts) {
+  return parts.map((part, index) => {
+    if (index === 0 || !CTX_MARKER_RE.test(parts[index - 1])) return part;
+    CTX_MARKER_RE.lastIndex = 0;
+    const quoted = part.match(/^\s*“[\s\S]*?”(?:\r?\n|$)/);
+    return quoted ? part.slice(quoted[0].length) : part;
+  });
+}
+
 function renderContextualContent(text) {
-  const parts = text.split(CTX_MARKER_RE);
+  CTX_MARKER_RE.lastIndex = 0;
+  const parts = hideQuotedContextAfterMarkers(text.split(CTX_MARKER_RE));
   return parts.map((part, i) => {
     const m = part.match(/^\[\[ctx\|([^|]+)\|([^|]+)\|([^\]]+)\]\]$/);
     if (m) {

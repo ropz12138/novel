@@ -174,53 +174,38 @@ describe("CustomNode 展开控件", () => {
   });
 });
 
-describe("CustomNode 相关角色展开控件", () => {
-  const chapterData = { type: "chapter", label: "第一章", content: "", extra_data: {} };
-
-  it("没有关联角色时不显示展开按钮", () => {
-    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters={false} />);
-    expect(screen.queryByRole("button", { name: "展开相关角色" })).toBeNull();
-  });
-
-  it("有关联角色时提供展开入口", () => {
-    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters isSatellitesExpanded={false} />);
-    expect(screen.getByRole("button", { name: "展开相关角色" })).toBeDefined();
-  });
-
-  it("已展开相关角色时提供收起入口", () => {
-    render(<CustomNode id="c1" data={chapterData} hasRelatedCharacters isSatellitesExpanded />);
-    expect(screen.getByRole("button", { name: "收起相关角色" })).toBeDefined();
-  });
-
-  it("点击相关角色控件回调节点 id", () => {
-    const onSatelliteToggle = vi.fn();
+describe("CustomNode 章节出场角色", () => {
+  it("没有 characters 时不显示角色名", () => {
     render(
       <CustomNode
         id="c1"
-        data={chapterData}
-        hasRelatedCharacters
-        isSatellitesExpanded={false}
-        onSatelliteToggle={onSatelliteToggle}
+        data={{ type: "chapter", label: "第一章", content: "", extra_data: {} }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "展开相关角色" }));
-    expect(onSatelliteToggle).toHaveBeenCalledWith("c1");
+    expect(screen.queryByText("林川")).toBeNull();
   });
 
-  it("相关角色控件不触发打开节点详情", () => {
-    const onNodeClick = vi.fn();
+  it("卡片上只显示角色名，不显示角色 id", () => {
     render(
       <CustomNode
         id="c1"
-        data={chapterData}
-        hasRelatedCharacters
-        isSatellitesExpanded={false}
-        onNodeClick={onNodeClick}
-        onSatelliteToggle={vi.fn()}
+        data={{
+          type: "chapter",
+          label: "第一章",
+          content: "",
+          extra_data: {
+            characters: [
+              { id: "char-uuid-1", name: "林川" },
+              { id: "char-uuid-2", name: "苏婉" },
+            ],
+          },
+        }}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "展开相关角色" }));
-    expect(onNodeClick).not.toHaveBeenCalled();
+    expect(screen.getByText("林川")).toBeDefined();
+    expect(screen.getByText("苏婉")).toBeDefined();
+    expect(screen.queryByText("char-uuid-1")).toBeNull();
+    expect(screen.queryByText(/展开相关角色/)).toBeNull();
   });
 });
 

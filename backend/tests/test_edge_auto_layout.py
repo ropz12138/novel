@@ -135,7 +135,8 @@ def test_create_edge_hierarchy_chain_layout_bottom_top(monkeypatch):
         db.close()
 
 
-def test_create_edge_auto_layout_horizontal(monkeypatch):
+def test_create_edge_rejects_character_to_chapter(monkeypatch):
+    """角色登场不再用画布连线；horizontal 布局用 resolve_optimal_sides 单测覆盖。"""
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
@@ -144,11 +145,8 @@ def test_create_edge_auto_layout_horizontal(monkeypatch):
         ch = _make_node(db, wid, "章", x=400, y=0, node_type="chapter")
 
         result = json.loads(nt._create_edge_sync(character.id, ch.id, edge_type="参与"))
-
-        assert result["success"] is True
-        edge = db.query(Edge).filter(Edge.source_id == character.id).first()
-        assert edge.extra_data["layout"]["source_side"] == "right"
-        assert edge.extra_data["layout"]["target_side"] == "left"
+        assert "error" in result
+        assert "characters" in result["error"]
     finally:
         db.close()
 
@@ -176,17 +174,17 @@ def test_batch_create_edges_auto_layout(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
-        character = _make_node(db, wid, "角色", x=0, y=0, node_type="character")
-        ch = _make_node(db, wid, "章", x=400, y=0, node_type="chapter")
+        outline = _make_node(db, wid, "大纲", x=0, y=0, node_type="outline")
+        volume = _make_node(db, wid, "卷一", x=0, y=300, node_type="volume")
 
         result = json.loads(nt._batch_create_edges_sync([
-            {"source_id": character.id, "target_id": ch.id, "edge_type": "参与"},
+            {"source_id": outline.id, "target_id": volume.id, "edge_type": "包含"},
         ]))
 
         assert result["success"] is True
-        edge = db.query(Edge).filter(Edge.source_id == character.id).first()
-        assert edge.extra_data["layout"]["source_side"] == "right"
-        assert edge.extra_data["layout"]["target_side"] == "left"
+        edge = db.query(Edge).filter(Edge.source_id == outline.id).first()
+        assert edge.extra_data["layout"]["source_side"] == "bottom"
+        assert edge.extra_data["layout"]["target_side"] == "top"
     finally:
         db.close()
 
@@ -196,18 +194,18 @@ def test_update_edge_preserves_auto_layout(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
-        character = _make_node(db, wid, "角色", x=0, y=0, node_type="character")
-        ch = _make_node(db, wid, "章", x=400, y=0, node_type="chapter")
+        outline = _make_node(db, wid, "大纲", x=0, y=0, node_type="outline")
+        volume = _make_node(db, wid, "卷一", x=0, y=300, node_type="volume")
 
-        nt._create_edge_sync(character.id, ch.id, edge_type="参与")
-        edge = db.query(Edge).filter(Edge.source_id == character.id).first()
+        nt._create_edge_sync(outline.id, volume.id, edge_type="包含")
+        edge = db.query(Edge).filter(Edge.source_id == outline.id).first()
 
         result = json.loads(nt._update_edge_sync(edge.id, label="新标签"))
 
         assert result["success"] is True
         db.refresh(edge)
         assert edge.label == "新标签"
-        assert edge.extra_data["layout"]["source_side"] == "right"
-        assert edge.extra_data["layout"]["target_side"] == "left"
+        assert edge.extra_data["layout"]["source_side"] == "bottom"
+        assert edge.extra_data["layout"]["target_side"] == "top"
     finally:
         db.close()

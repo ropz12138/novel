@@ -31,6 +31,7 @@ const {
   buildTimelineFromHistoryMessages,
   useSupervisorChat,
 } = await import("./useSupervisorChat.js");
+const { sessionApi } = await import("../lib/api");
 
 
 describe("useSupervisorChat", () => {
@@ -212,10 +213,11 @@ describe("useSupervisorChat", () => {
   it("handles chapter edit diffs and node refresh events", () => {
     const onChapterUpdated = vi.fn();
     const onNodesUpdate = vi.fn();
+    const onNodeContentDiff = vi.fn();
     const { result } = renderHook(() =>
       useSupervisorChat({
         workId: "w1",
-        callbacks: { onChapterUpdated, onNodesUpdate },
+        callbacks: { onChapterUpdated, onNodesUpdate, onNodeContentDiff },
       }),
     );
 
@@ -240,6 +242,10 @@ describe("useSupervisorChat", () => {
     });
     expect(onChapterUpdated).toHaveBeenCalledWith("chapter-1");
     expect(onNodesUpdate).toHaveBeenCalledOnce();
+    expect(onNodeContentDiff).toHaveBeenCalledWith("chapter-1", expect.objectContaining({
+      title: "第一章",
+      hunks: [{ type: "replace" }],
+    }));
   });
 
   it("applies current todolist events", () => {
@@ -276,6 +282,22 @@ describe("useSupervisorChat", () => {
     expect(result.current.timeline[0].todoCard.todolist).toHaveLength(1);
   });
 
+  it("removes the edited message and abandoned todo branch immediately", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+
+    act(() => {
+      result.current.addMessage("user", "保留消息", { dbMessageId: "m1" });
+      result.current.addMessage("user", "待编辑消息", { dbMessageId: "m2" });
+      result.current._testOnSSE("todolist_generated", {
+        todolist: [{ db_id: "old-todo", task_id: "T1", task: "废弃任务" }],
+      });
+      result.current._testOnSSE("messages_truncated", { from_message_id: "m2" });
+    });
+
+    expect(result.current.timeline).toHaveLength(1);
+    expect(result.current.timeline[0]).toMatchObject({ dbMessageId: "m1" });
+  });
+
   it("rebuilds tool calls and current cards from history", () => {
     const idRef = { current: 0 };
     const timeline = buildTimelineFromHistoryMessages([
@@ -305,6 +327,45 @@ describe("useSupervisorChat", () => {
       status: "done",
     });
     expect(timeline[2].chapterContentDiffCard.chapter_node_id).toBe("chapter-1");
+  });
+
+  it("restores node body diffs when loading a persisted conversation", async () => {
+    const onNodeContentDiff = vi.fn();
+    const onNodeContentDiffsReset = vi.fn();
+    sessionApi.getSupervisorMessages.mockResolvedValueOnce([{
+      role: "assistant",
+      content: "",
+      id: "diff-message-1",
+      meta: {
+        type: "chapter_content_diff_card",
+        chapterContentDiffCard: {
+          node_id: "plot-1",
+          node_type: "plot",
+          title: "废墟相遇",
+          hunks: [{
+            type: "replace",
+            paragraph_index: 1,
+            old_text: "旧正文",
+            new_text: "新正文",
+          }],
+          summary: { paragraphs_changed: 1 },
+        },
+      },
+    }]);
+    const { result } = renderHook(() => useSupervisorChat({
+      workId: "w1",
+      callbacks: { onNodeContentDiff, onNodeContentDiffsReset },
+    }));
+
+    await act(async () => {
+      await result.current.handleSelectSession({ id: "session-1" });
+    });
+
+    expect(onNodeContentDiffsReset).toHaveBeenCalledOnce();
+    expect(onNodeContentDiff).toHaveBeenCalledWith("plot-1", expect.objectContaining({
+      node_type: "plot",
+      hunks: [expect.objectContaining({ new_text: "新正文" })],
+    }));
   });
 
   it("skips assistant bubbles whose content is only ellipsis placeholder", () => {

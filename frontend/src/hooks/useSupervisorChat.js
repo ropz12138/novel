@@ -18,6 +18,8 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
   const {
     onChapterUpdated,
     onNodesUpdate,
+    onNodeContentDiff,
+    onNodeContentDiffsReset,
   } = callbacks;
 
   // ── State ──
@@ -123,14 +125,21 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
       const msgs = await sessionApi.getSupervisorMessages(sessionKey);
       if (msgs && msgs.length > 0) {
         const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
-        setTimeline(suppressSupersededChapterEditCards(loaded));
+        const visibleTimeline = suppressSupersededChapterEditCards(loaded);
+        setTimeline(visibleTimeline);
+        restoreNodeContentDiffsFromTimeline(
+          visibleTimeline,
+          onNodeContentDiffsReset,
+          onNodeContentDiff,
+        );
       } else {
         setTimeline([]);
+        onNodeContentDiffsReset?.();
       }
     } catch {
       // ignore
     }
-  }, []);
+  }, [onNodeContentDiff, onNodeContentDiffsReset]);
 
   // ── SSE event handler ──
 
@@ -192,6 +201,12 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         break;
 
       case "messages_truncated":
+        setTimeline((prev) => {
+          const i = prev.findIndex(
+            (item) => item.kind === "message" && item.dbMessageId === d.from_message_id,
+          );
+          return i >= 0 ? prev.slice(0, i) : prev;
+        });
         break;
 
       case "user_message_edited":
@@ -273,6 +288,8 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
             title: d.title,
             hunks: d.diff?.hunks ?? [],
             summary: d.diff?.summary ?? {},
+            original_content: d.original_content,
+            current_content: d.current_content,
             text_count: d.text_count,
             text_count_delta: d.text_count_delta,
             word_count: d.word_count,
@@ -281,6 +298,21 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         });
         if (nodeType === "chapter" && onChapterUpdated) onChapterUpdated(nodeId);
         if (nodeType !== "chapter" && onNodesUpdate) onNodesUpdate();
+        if (nodeId && onNodeContentDiff) {
+          onNodeContentDiff(nodeId, {
+            node_id: nodeId,
+            node_type: nodeType,
+            title: d.title,
+            hunks: d.diff?.hunks ?? [],
+            summary: d.diff?.summary ?? {},
+            original_content: d.original_content,
+            current_content: d.current_content,
+            text_count: d.text_count,
+            text_count_delta: d.text_count_delta,
+            word_count: d.word_count,
+            word_count_delta: d.word_count_delta,
+          });
+        }
         break;
       }
 
@@ -401,7 +433,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
   }, [
     syncSessionId, freezeDraft, pushExecStep,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
-    onChapterUpdated, onNodesUpdate, reloadTimelineFromSession,
+    onChapterUpdated, onNodesUpdate, onNodeContentDiff, reloadTimelineFromSession,
   ]);
 
   // ── SSE connection ──
@@ -556,14 +588,22 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
       const msgs = await sessionApi.getSupervisorMessages(session.id);
       if (msgs && msgs.length > 0) {
         const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
-        setTimeline(suppressSupersededChapterEditCards(loaded));
+        const visibleTimeline = suppressSupersededChapterEditCards(loaded);
+        setTimeline(visibleTimeline);
+        restoreNodeContentDiffsFromTimeline(
+          visibleTimeline,
+          onNodeContentDiffsReset,
+          onNodeContentDiff,
+        );
+      } else {
+        onNodeContentDiffsReset?.();
       }
     } catch (error) {
       addMessage("system", `加载对话失败: ${error?.message || "未知错误"}`, {
         type: "error",
       });
     }
-  }, [running, syncSessionId, addMessage]);
+  }, [running, syncSessionId, addMessage, onNodeContentDiff, onNodeContentDiffsReset]);
 
   const resetState = useCallback(() => {
     setTimeline([]);
@@ -575,11 +615,12 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
+    onNodeContentDiffsReset?.();
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
     }
-  }, [syncSessionId]);
+  }, [syncSessionId, onNodeContentDiffsReset]);
 
   // ── Return ──
 
@@ -616,6 +657,35 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 }
 
 // ── Helpers ──
+
+export function restoreNodeContentDiffsFromTimeline(
+  timeline,
+  onReset,
+  onNodeContentDiff,
+) {
+  onReset?.();
+  if (!onNodeContentDiff) return;
+
+  for (const item of timeline || []) {
+    if (item?.type !== "chapter_content_diff_card") continue;
+    const card = item.chapterContentDiffCard;
+    const nodeId = card?.node_id || card?.chapter_node_id;
+    if (!nodeId || !card?.hunks?.length) continue;
+    onNodeContentDiff(nodeId, {
+      node_id: nodeId,
+      node_type: card.node_type,
+      title: card.title,
+      hunks: card.hunks,
+      summary: card.summary || {},
+      original_content: card.original_content,
+      current_content: card.current_content,
+      text_count: card.text_count,
+      text_count_delta: card.text_count_delta,
+      word_count: card.word_count,
+      word_count_delta: card.word_count_delta,
+    });
+  }
+}
 
 /** op-4.8 等模型在连续 tool_call 时常用 "..." / "…" 作为无意义正文占位。 */
 export function isPlaceholderEllipsisContent(content) {

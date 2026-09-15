@@ -6,7 +6,6 @@ import {
   descendantIds,
   hiddenDescendantSummary,
   hasHierarchyChildren,
-  hasRelatedCharacters,
 } from "./canvasGraph";
 
 /**
@@ -165,24 +164,6 @@ describe("hasHierarchyChildren", () => {
     const index = buildGraphIndex(nodes, edges);
     // c1 只有 reference 入边 npc→c1，没有层级子节点
     expect(hasHierarchyChildren(index, "c1")).toBe(false);
-  });
-});
-
-describe("hasRelatedCharacters", () => {
-  it("章节连到配角时为真", () => {
-    const index = buildGraphIndex(nodes, edges);
-    expect(hasRelatedCharacters(index, "c1")).toBe(true);
-  });
-
-  it("没有关联角色的结构节点为假", () => {
-    const index = buildGraphIndex(nodes, edges);
-    expect(hasRelatedCharacters(index, "v1")).toBe(false);
-    expect(hasRelatedCharacters(index, "c2")).toBe(false);
-  });
-
-  it("非结构节点为假", () => {
-    const index = buildGraphIndex(nodes, edges);
-    expect(hasRelatedCharacters(index, "npc")).toBe(false);
   });
 });
 

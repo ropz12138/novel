@@ -1,14 +1,13 @@
-import { memo, useMemo } from "react";
+import { memo, useMemo, useState } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { isIsolatedNode } from "../../lib/canvasRelation";
 import { compareSiblings } from "../../lib/canvasOrder";
 
 /**
  * 非层级链节点的侧栏入口。
  *
- * character、worldbuilding、note 不参与树布局。worldbuilding 与 note 被后端
- * 禁止连线，在图中没有任何边；若让它们以"根节点"身份进入画布，数十条设定
- * 会占满画布，主干的紧凑性就没有意义了。配角虽有关联边，但只在选中关联结构
- * 节点时作为卫星出现，因此同样需要一个常驻入口，否则默认视图下无处可寻。
+ * character、worldbuilding、note 不参与树布局，也不渲染到画布主干。
+ * 右侧「角色与设定」提供常驻入口：角色按 scope 分组，另加世界观与笔记。
  *
  * character 按 scope 细分：后端强校验其取值只能是以下四种。
  */
@@ -41,6 +40,7 @@ const GROUPS = [
 ];
 
 const IsolatedNodePanel = memo(({ nodes = [], onSelect }) => {
+  const [collapsed, setCollapsed] = useState(false);
   const grouped = useMemo(() => {
     const isolated = nodes.filter(isIsolatedNode);
     return GROUPS.map((group) => ({
@@ -49,10 +49,38 @@ const IsolatedNodePanel = memo(({ nodes = [], onSelect }) => {
     })).filter((group) => group.items.length > 0);
   }, [nodes]);
 
+  if (collapsed) {
+    return (
+      <aside className="flex w-10 shrink-0 flex-col items-center border-l border-slate-200 bg-slate-50/80 py-2">
+        <button
+          type="button"
+          onClick={() => setCollapsed(false)}
+          className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-white hover:text-slate-700"
+          title="展开角色与设定侧栏"
+          aria-label="展开角色与设定侧栏"
+        >
+          <ChevronLeft className="h-4 w-4" />
+        </button>
+        <span className="mt-2 select-none text-[11px] text-slate-400 [writing-mode:vertical-rl]">
+          角色与设定
+        </span>
+      </aside>
+    );
+  }
+
   return (
     <aside className="w-52 shrink-0 border-l border-slate-200 bg-slate-50/80 overflow-y-auto">
-      <div className="px-3 py-2 text-xs font-medium text-slate-400 border-b border-slate-200">
-        角色与设定
+      <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-400">
+        <span>角色与设定</span>
+        <button
+          type="button"
+          onClick={() => setCollapsed(true)}
+          className="rounded p-0.5 text-slate-400 transition-colors hover:bg-white hover:text-slate-600"
+          title="收起角色与设定侧栏"
+          aria-label="收起角色与设定侧栏"
+        >
+          <ChevronRight className="h-3.5 w-3.5" />
+        </button>
       </div>
       {grouped.length === 0 ? (
         <p className="px-3 py-3 text-xs text-slate-400">暂无角色或设定</p>

@@ -217,8 +217,9 @@ class SupervisorAgent:
         from services.agents.tools.todo_tools import todo_tools
         from services.agents.tools.context_tools import context_tools
         from services.agents.tools.research_tools import research_tools
+        from services.agents.tools.humanizer_tools import humanizer_tools
 
-        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + todo_tools + context_tools + research_tools
+        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + todo_tools + context_tools + research_tools + humanizer_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""

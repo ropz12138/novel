@@ -20,6 +20,12 @@ export function applyNodeUpdateToData(previous, update) {
       chapter_elements: update.chapter_elements,
     };
   }
+  if (update.characters !== undefined) {
+    next.extra_data = {
+      ...(next.extra_data || previous.extra_data || {}),
+      characters: update.characters,
+    };
+  }
   if (update.storylines !== undefined) {
     next.extra_data = {
       ...(next.extra_data || previous.extra_data || {}),

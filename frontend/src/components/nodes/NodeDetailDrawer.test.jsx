@@ -83,6 +83,29 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("仓库逃亡")).toBeDefined();
   });
 
+  it("renders chapter character names without exposing character ids", () => {
+    const node = {
+      id: "node-1",
+      type: "chapter",
+      label: "第一章",
+      content: "正文",
+      extra_data: {
+        characters: [
+          { id: "char-uuid-1", name: "林川" },
+          { id: "char-uuid-2", name: "苏婉" },
+        ],
+      },
+    };
+
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+
+    expect(screen.getByText("出场角色")).toBeDefined();
+    expect(screen.getByText("2 人")).toBeDefined();
+    expect(screen.getByText("林川")).toBeDefined();
+    expect(screen.getByText("苏婉")).toBeDefined();
+    expect(screen.queryByText("char-uuid-1")).toBeNull();
+  });
+
   it("keeps Markdown double-star syntax as ordinary bold text", () => {
     const node = {
       id: "node-1",
@@ -97,6 +120,200 @@ describe("NodeDetailDrawer", () => {
     const boldText = screen.getByText("谨慎、克制，但会冒险。");
     expect(boldText.tagName).toBe("STRONG");
     expect(boldText.className).not.toContain("bg-amber-100");
+  });
+
+  it("allows selected plot text to be added to conversation context", () => {
+    const node = {
+      id: "plot-1",
+      type: "plot",
+      label: "废墟相遇",
+      content: "林川在废墟中遇见苏婉。",
+      extra_data: {},
+    };
+    const onAddContext = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={node}
+        onClose={vi.fn()}
+        onAddContext={onAddContext}
+      />,
+    );
+
+    const selectedNode = screen.getByText("林川在废墟中遇见苏婉。").firstChild;
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      getRangeAt: () => ({ commonAncestorContainer: selectedNode }),
+      toString: () => "废墟中遇见苏婉",
+    });
+
+    fireEvent.mouseUp(screen.getByTestId("node-detail-scroll"));
+    fireEvent.click(screen.getByRole("button", { name: "加入选中文本到对话上下文" }));
+
+    expect(onAddContext).toHaveBeenCalledWith(node, "废墟中遇见苏婉");
+  });
+
+  it("does not rebuild the rendered content when text selection is captured", () => {
+    const node = {
+      id: "plot-1",
+      type: "plot",
+      label: "废墟相遇",
+      content: "林川在废墟中遇见苏婉。",
+      extra_data: {},
+    };
+    render(
+      <NodeDetailDrawer
+        node={node}
+        onClose={vi.fn()}
+        onAddContext={vi.fn()}
+      />,
+    );
+
+    const contentBeforeSelection = screen.getByText("林川在废墟中遇见苏婉。");
+    const selectedNode = contentBeforeSelection.firstChild;
+    vi.spyOn(window, "getSelection").mockReturnValue({
+      rangeCount: 1,
+      getRangeAt: () => ({ commonAncestorContainer: selectedNode }),
+      toString: () => "废墟中遇见苏婉",
+    });
+
+    fireEvent.mouseUp(screen.getByTestId("node-detail-scroll"));
+
+    expect(screen.getByText("林川在废墟中遇见苏婉。")).toBe(contentBeforeSelection);
+    expect(screen.getByRole("button", { name: "加入选中文本到对话上下文" })).toBeDefined();
+  });
+
+  it("shows agent content diffs inline in the body with apply and revert actions", async () => {
+    const node = {
+      id: "plot-1",
+      type: "plot",
+      label: "废墟相遇",
+      content: "开场。\n\n林川在雨中遇见苏婉。",
+      extra_data: {},
+    };
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={node}
+        contentDiff={{
+          hunks: [{
+            type: "replace",
+            paragraph_index: 2,
+            old_text: "林川在废墟中遇见苏婉。",
+            new_text: "林川在雨中遇见苏婉。",
+          }],
+          summary: { paragraphs_changed: 1, chars_added: 1, chars_removed: 2 },
+        }}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+        onContentDiffChange={onContentDiffChange}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "更改 1" })).toBeNull();
+    expect(screen.queryByTestId("node-content-diff")).toBeNull();
+    expect(screen.getByRole("button", { name: "全部保留修改" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "全部撤回修改" })).toBeDefined();
+    expect(screen.getByText("开场。")).toBeDefined();
+    expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
+    expect(screen.getByText("林川在废墟中遇见苏婉。")).toBeDefined();
+    expect(screen.getByText("林川在雨中遇见苏婉。")).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "保留修改" }));
+    expect(onUpdate).not.toHaveBeenCalled();
+    expect(onContentDiffChange).toHaveBeenCalledWith(null);
+  });
+
+  it("reverts a single pending hunk back to the original paragraph", async () => {
+    const node = {
+      id: "plot-2",
+      type: "plot",
+      label: "废墟相遇",
+      content: "开场。\n\n林川在雨中遇见苏婉。",
+      extra_data: {},
+    };
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={node}
+        contentDiff={{
+          hunks: [{
+            type: "replace",
+            paragraph_index: 2,
+            old_text: "林川在废墟中遇见苏婉。",
+            new_text: "林川在雨中遇见苏婉。",
+          }],
+        }}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+        onContentDiffChange={onContentDiffChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+    await waitFor(() => {
+      expect(onUpdate).toHaveBeenCalledWith("plot-2", { content: "开场。\n\n林川在废墟中遇见苏婉。" });
+    });
+    expect(onContentDiffChange).toHaveBeenCalledWith(null);
+  });
+
+  it("hydrates inline diffs from node content when the stored diff has no original_content", () => {
+    const node = {
+      id: "plot-4",
+      type: "plot",
+      label: "废墟相遇",
+      content: "开场改。\n\n林川在废墟中遇见苏婉。",
+      extra_data: {},
+    };
+    render(
+      <NodeDetailDrawer
+        node={node}
+        contentDiff={{
+          hunks: [{
+            type: "replace",
+            paragraph_index: 1,
+            old_text: "开场。",
+            new_text: "开场改。",
+          }],
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
+    expect(screen.getByText("开场。")).toBeDefined();
+    expect(screen.getByText("开场改。")).toBeDefined();
+  });
+
+  it("shows only the net diff from the original baseline to current content", () => {
+    const node = {
+      id: "plot-3",
+      type: "plot",
+      label: "废墟相遇",
+      content: "开场改。\n\n林川在雨中遇见苏婉。",
+      extra_data: {},
+    };
+    render(
+      <NodeDetailDrawer
+        node={node}
+        contentDiff={{
+          original_content: "开场。\n\n林川在废墟中遇见苏婉。",
+          current_content: "开场改。\n\n林川在雨中遇见苏婉。",
+          hunks: [
+            { type: "replace", paragraph_index: 1, old_text: "开场。", new_text: "开场改。" },
+            { type: "replace", paragraph_index: 2, old_text: "林川在废墟中遇见苏婉。", new_text: "林川在雨中遇见苏婉。" },
+          ],
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByTestId("inline-diff-hunk")).toHaveLength(2);
+    expect(screen.getByText("开场。")).toBeDefined();
+    expect(screen.getByText("开场改。")).toBeDefined();
+    expect(screen.getByText("林川在废墟中遇见苏婉。")).toBeDefined();
+    expect(screen.getByText("林川在雨中遇见苏婉。")).toBeDefined();
   });
 
   it("renders character storylines as named tracks with step list", () => {

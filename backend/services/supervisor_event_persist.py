@@ -85,6 +85,8 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                         "title": data.get("title", ""),
                         "hunks": diff.get("hunks", []),
                         "summary": diff.get("summary", {}),
+                        "original_content": data.get("original_content"),
+                        "current_content": data.get("current_content"),
                         "text_count": data.get("text_count"),
                         "text_count_delta": data.get("text_count_delta"),
                         "word_count": data.get("word_count", 0),

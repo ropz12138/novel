@@ -4,6 +4,8 @@ import pytest
 from services.chapter_edit_service import (
     apply_edits,
     build_chapter_edit_diff,
+    build_content_diff,
+    edits_from_contents,
     split_paragraphs,
     validate_edits,
 )
@@ -124,3 +126,22 @@ def test_apply_multiple_edits_reverse_order():
     parts = split_paragraphs(new_content)
     assert parts[0] == "第一段新。"
     assert parts[2] == "第三段新。"
+
+
+def test_edits_from_contents_replace_keeps_unrelated_paragraphs():
+    new_content = "第一段内容。\n\n第二段改写了。\n\n第三段内容。"
+    edits = edits_from_contents(SAMPLE, new_content)
+    assert edits == [{
+        "type": "replace",
+        "paragraph_index": 2,
+        "old_text": "第二段内容。",
+        "new_text": "第二段改写了。",
+    }]
+    assert apply_edits(SAMPLE, edits) == new_content
+
+
+def test_build_content_diff_from_full_rewrite():
+    new_content = "第一段内容。\n\n第二段改写了。\n\n第三段内容。"
+    diff = build_content_diff(SAMPLE, new_content)
+    assert diff["hunks"][0]["type"] == "replace"
+    assert diff["summary"]["content_changed"] is True

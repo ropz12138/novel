@@ -24,10 +24,12 @@ def test_global_scope_cannot_be_edge_endpoint():
     assert validate_edge_endpoints("character", "chapter", "global", "minor")  # 主角 global 禁
 
 
-def test_non_global_character_allowed():
-    # character 非全局（major/minor/temp）允许连线
-    assert validate_edge_endpoints("character", "chapter", "minor", "local") is None
-    assert validate_edge_endpoints("chapter", "character", "local", "major") is None
+def test_character_cannot_be_canvas_edge_endpoint():
+    """角色登场改由章节 characters 字段表达，画布上禁止任何 character 连线。"""
+    err = validate_edge_endpoints("character", "chapter", "minor", "local")
+    assert err is not None
+    assert "characters" in err
+    assert validate_edge_endpoints("chapter", "character", "local", "major") is not None
 
 
 def test_element_is_no_longer_allowed_as_edge_endpoint():
@@ -40,13 +42,12 @@ def test_element_is_no_longer_allowed_as_edge_endpoint():
 def test_normal_edges_allowed():
     assert validate_edge_endpoints("outline", "volume", "local", "local") is None
     assert validate_edge_endpoints("volume", "plot", "local", "local") is None
-    assert validate_edge_endpoints("chapter", "character", "local", "minor") is None
 
 
 def test_character_to_character_edge_forbidden():
     err = validate_edge_endpoints("character", "character", "minor", "major")
     assert err is not None
-    assert "character_relations" in err
+    assert "characters" in err
 
 
 # ---------- create_edge 工具集成 ----------

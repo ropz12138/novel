@@ -44,9 +44,6 @@ const CustomNode = memo(({
   hiddenDescendantCount = 0,
   hiddenDescendantText = "",
   onCollapseToggle,
-  hasRelatedCharacters = false,
-  isSatellitesExpanded = false,
-  onSatelliteToggle,
 }) => {
   const style = nodeStyles[data.type] || DEFAULT_STYLE;
   const isCharacter = data.type === "character";
@@ -54,11 +51,13 @@ const CustomNode = memo(({
   const isChapter = data.type === "chapter";
   const isLocked = !!data.locked;
   const collapseLabel = isExpanded ? "收起子节点" : "展开子节点";
-  const satelliteLabel = isSatellitesExpanded ? "收起相关角色" : "展开相关角色";
   const wordCount = isChapter
     ? (data.content || "").replace(/\s+/g, "").length
     : 0;
   const lastEvaluation = data.extra_data?.last_generation?.sync_evaluations?.at?.(-1);
+  const chapterCharacters = isChapter
+    ? (Array.isArray(data.extra_data?.characters) ? data.extra_data.characters : [])
+    : [];
 
   const handleClick = useCallback((e) => {
     e.stopPropagation();
@@ -74,11 +73,6 @@ const CustomNode = memo(({
     e.stopPropagation();
     onCollapseToggle?.(id);
   }, [id, onCollapseToggle]);
-
-  const handleSatelliteToggle = useCallback((e) => {
-    e.stopPropagation();
-    onSatelliteToggle?.(id);
-  }, [id, onSatelliteToggle]);
 
   // element 节点：圆形小尺寸，只显示图标 + 标题
   if (data.type === "element") {
@@ -181,26 +175,11 @@ const CustomNode = memo(({
             {isExpanded ? "▾" : "▸"}
           </button>
         )}
-        {hasRelatedCharacters && (
-          <button
-            type="button"
-            aria-label={satelliteLabel}
-            title={satelliteLabel}
-            className={`nodrag rounded px-1.5 py-0.5 text-xs transition-colors ${
-              isSatellitesExpanded
-                ? "bg-pink-600 text-white"
-                : "bg-white/70 text-pink-600 hover:bg-white"
-            } ${!hasChildren ? "ml-auto" : ""}`}
-            onClick={handleSatelliteToggle}
-          >
-            👤
-          </button>
-        )}
         <button
           type="button"
           aria-label={isEdgesFocused ? "显示全部连线" : "只显示相关连线"}
           title={isEdgesFocused ? "显示全部连线" : "只显示相关连线"}
-          className={`nodrag ${!hasChildren && !hasRelatedCharacters ? "ml-auto" : ""} rounded px-1.5 py-0.5 text-xs transition-colors ${
+          className={`nodrag ${!hasChildren ? "ml-auto" : ""} rounded px-1.5 py-0.5 text-xs transition-colors ${
             isEdgesFocused
               ? "bg-slate-700 text-white"
               : "bg-white/70 text-slate-500 hover:bg-white"
@@ -216,6 +195,23 @@ const CustomNode = memo(({
           {data.content.substring(0, 60)}
           {data.content.length > 60 ? "..." : ""}
         </p>
+      )}
+
+      {chapterCharacters.length > 0 && (
+        <div className="mt-1 flex flex-wrap gap-1">
+          {chapterCharacters.map((character, index) => {
+            const name = character?.name;
+            if (!name) return null;
+            return (
+              <span
+                key={character?.id || `${name}-${index}`}
+                className="text-[10px] px-1.5 py-0.5 rounded-full bg-pink-50 text-pink-700"
+              >
+                {name}
+              </span>
+            );
+          })}
+        </div>
       )}
 
       <div className="mt-2">

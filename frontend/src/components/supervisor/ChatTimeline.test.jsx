@@ -64,6 +64,21 @@ describe("ChatTimeline", () => {
     expect(screen.getByText("林远")).toBeDefined();
   });
 
+  it("hides quoted node text from user bubbles but keeps the following instruction", () => {
+    renderTimeline({
+      timeline: [{
+        kind: "message",
+        id: 1,
+        role: "user",
+        content: "[[ctx|node-1|plot|废墟相遇]]\n“废墟中遇见苏婉”\n请强化这一处伏笔",
+      }],
+    });
+
+    expect(screen.getByText("废墟相遇")).toBeDefined();
+    expect(screen.queryByText("废墟中遇见苏婉")).toBeNull();
+    expect(screen.getByText(/请强化这一处伏笔/)).toBeDefined();
+  });
+
   it("renders and toggles a tool execution step", () => {
     const onToggleStep = vi.fn();
     renderTimeline({

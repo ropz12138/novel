@@ -52,6 +52,12 @@ class CanvasCheckpoint(Base):
         back_populates="checkpoint",
         cascade="all, delete-orphan",
     )
+    todo_items = relationship(
+        "CanvasCheckpointTodoItem",
+        back_populates="checkpoint",
+        cascade="all, delete-orphan",
+        order_by="CanvasCheckpointTodoItem.sort_order",
+    )
 
 
 class CanvasCheckpointNode(Base):
@@ -115,3 +121,24 @@ class CanvasCheckpointRelation(Base):
     label = Column(String(100), default="")
 
     checkpoint = relationship("CanvasCheckpoint", back_populates="character_relations")
+
+
+class CanvasCheckpointTodoItem(Base):
+    """A session todolist item as it existed immediately before an Agent run."""
+
+    __tablename__ = "canvas_checkpoint_todo_items"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    checkpoint_id = Column(
+        String(36),
+        ForeignKey("canvas_checkpoints.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    todo_item_id = Column(String(36), nullable=False)
+    task_id = Column(String(20), nullable=False)
+    task = Column(Text, nullable=False, default="")
+    status = Column(String(20), nullable=False, default="pending")
+    sort_order = Column(Integer, nullable=False, default=0)
+
+    checkpoint = relationship("CanvasCheckpoint", back_populates="todo_items")

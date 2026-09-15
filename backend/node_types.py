@@ -2,7 +2,7 @@
 
 节点类型（仅以下 7 种合法，创建/更新节点时强制校验，不允许 agent 自创）：
   层级链：outline(大纲) → volume(卷) → plot(情节) → chapter(章节)
-  关联节点：character(角色) — 需与相关章节/情节等节点连接
+  关联节点：character(角色) — 完整实体，不在画布上显示；章节通过 extra_data.characters 引用
   情节元素：不再作为独立节点创建，存放在 chapter.extra_data.chapter_elements
   全局节点：worldbuilding(世界观)、note(笔记)
 
@@ -132,6 +132,7 @@ NODE_TYPES_RULES_TEXT = (
 EDGE_ENDPOINT_RULES_TEXT = (
     "端点限制（违反会报错）："
     "scope=global 的节点（worldbuilding/note + 主角 character）禁止任何连线；"
+    "character 禁止任何画布连线，章节出场角色请写入 chapter.extra_data.characters（每项含 id 与 name）；"
     "同级节点之间禁止连线（chapter↔chapter、volume↔volume、plot↔plot），"
     "同级顺序由节点的 sort_order 字段表达，不要用连线表示顺序。"
 )
@@ -162,8 +163,11 @@ MISSING_SORT_ORDER_ERROR = (
 
 def validate_edge_endpoints(source_type: str, target_type: str, source_scope: str = "", target_scope: str = "") -> str | None:
     """校验连线端点限制。返回错误消息或 None（合法）。规则见 EDGE_ENDPOINT_RULES_TEXT。"""
-    if source_type == "character" and target_type == "character":
-        return "角色之间的关系请使用 character_relations，不要用画布关联线"
+    if source_type == "character" or target_type == "character":
+        return (
+            "角色不是画布连线端点。章节出场角色请写入 extra_data.characters，"
+            "每项必须含角色节点 id 与 name。"
+        )
     if source_scope == "global" or target_scope == "global":
         return "全局节点(scope=global：主角/worldbuilding/note)禁止创建关联线"
     if source_type == "element" or target_type == "element":

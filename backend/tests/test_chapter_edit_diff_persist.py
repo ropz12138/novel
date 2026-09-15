@@ -74,6 +74,8 @@ def test_persist_chapter_edit_diff(db_session, sample_session):
                 "chars_removed": 8,
             },
         },
+        "original_content": "旧正文",
+        "current_content": "新正文",
     }
 
     result = persist_supervisor_event(db_session, session_id, "chapter_edit_diff", data)
@@ -93,6 +95,8 @@ def test_persist_chapter_edit_diff(db_session, sample_session):
     assert msg.meta["type"] == "chapter_content_diff_card"
 
     card = msg.meta["chapterContentDiffCard"]
+    assert card["original_content"] == "旧正文"
+    assert card["current_content"] == "新正文"
     assert card["chapter_node_id"] == "node-123"
     assert card["title"] == "第一章 初遇"
     assert card["word_count"] == 3200

@@ -8,11 +8,13 @@ from models.edge import Edge
 from models.character_relation import CharacterRelation
 from models.session import SupervisorMessage
 from models.user_canvas_action import UserCanvasAction
+from models.todo_item import TodoItem
 from models.canvas_checkpoint import (
     CanvasCheckpoint,
     CanvasCheckpointNode,
     CanvasCheckpointEdge,
     CanvasCheckpointRelation,
+    CanvasCheckpointTodoItem,
 )
 from schemas.canvas_snapshot import (
     CanvasSnapshot,
@@ -126,6 +128,22 @@ def capture_canvas_checkpoint(
             label=r.label,
         ))
 
+    todo_items = (
+        db.query(TodoItem)
+        .filter_by(session_id=session_id)
+        .order_by(TodoItem.sort_order, TodoItem.created_at)
+        .all()
+    )
+    for item in todo_items:
+        db.add(CanvasCheckpointTodoItem(
+            checkpoint_id=checkpoint.id,
+            todo_item_id=item.id,
+            task_id=item.task_id,
+            task=item.task,
+            status=item.status,
+            sort_order=item.sort_order,
+        ))
+
     db.commit()
     db.refresh(checkpoint)
     return checkpoint
@@ -181,6 +199,28 @@ def restore_canvas_from_checkpoint(db: Session, work_id: str, checkpoint_id: str
     return apply_canvas_snapshot(db, work_id, snapshot)
 
 
+def restore_todolist_from_checkpoint(
+    db: Session,
+    session_id: str,
+    checkpoint: CanvasCheckpoint,
+) -> None:
+    """Restore the session todolist to its pre-run checkpoint state."""
+    db.query(TodoItem).filter_by(session_id=session_id).delete(
+        synchronize_session=False
+    )
+    db.flush()
+    for item in checkpoint.todo_items:
+        db.add(TodoItem(
+            id=item.todo_item_id,
+            session_id=session_id,
+            task_id=item.task_id,
+            task=item.task,
+            status=item.status,
+            sort_order=item.sort_order,
+        ))
+    db.flush()
+
+
 def get_checkpoint_for_message(db: Session, trigger_message_id: str) -> CanvasCheckpoint | None:
     return (
         db.query(CanvasCheckpoint)
@@ -232,6 +272,7 @@ def prepare_edit_resend(
         raise ValueError("checkpoint not found for message")
 
     restore_canvas_from_checkpoint(db, work_id, checkpoint.id)
+    restore_todolist_from_checkpoint(db, session_id, checkpoint)
     truncate_from_order = msg.sort_order
     previous = (
         db.query(SupervisorMessage)

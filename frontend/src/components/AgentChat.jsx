@@ -17,12 +17,14 @@ const NODE_PILL_COLORS = {
   element: "#d97706",
 };
 
-export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
+export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, insertPillRef }) {
   const chat = useSupervisorChat({
     workId,
     callbacks: {
       onChapterUpdated: () => onNodesUpdate?.(),
       onNodesUpdate: () => onNodesUpdate?.(),
+      onNodeContentDiff,
+      onNodeContentDiffsReset,
     },
   });
 
@@ -37,6 +39,8 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
       } else if (node.nodeType === Node.ELEMENT_NODE) {
         if (node.dataset.uuid) {
           result += `[[ctx|${node.dataset.uuid}|${node.dataset.type}|${node.dataset.title}]]`;
+        } else if (node.dataset.contextQuote) {
+          result += `\n“${node.dataset.contextQuote}”`;
         } else if (node.tagName === "BR") {
           result += "\n";
         } else {
@@ -44,7 +48,7 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
         }
       }
     });
-    return result;
+    return result.replaceAll("\u200B", "");
   }, []);
 
   const insertPill = useCallback((uuid, type, title, selectedText = "") => {
@@ -56,10 +60,46 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
     pill.contentEditable = false;
     pill.className = "inline-flex items-center rounded-full px-2 py-0.5 text-xs text-white mx-0.5 align-middle";
     pill.style.backgroundColor = NODE_PILL_COLORS[type] || "#6b7280";
-    pill.textContent = title;
+    const pillTitle = document.createElement("span");
+    pillTitle.textContent = title;
+    pill.appendChild(pillTitle);
     pill.dataset.uuid = uuid;
     pill.dataset.type = type;
     pill.dataset.title = title;
+
+    let quoteNode = null;
+    if (quote) {
+      quoteNode = document.createElement("span");
+      quoteNode.contentEditable = false;
+      quoteNode.dataset.contextQuote = quote;
+      quoteNode.className = "my-1 block rounded-r-md border-l-2 border-amber-400 bg-amber-50 px-2 py-1 text-xs leading-relaxed text-slate-700";
+      quoteNode.textContent = quote;
+      quoteNode.title = "选中的节点原文";
+    }
+    const trailingBreak = quoteNode ? document.createElement("br") : null;
+    const caretNode = document.createTextNode("\u200B");
+
+    const removeContext = () => {
+      pill.remove();
+      quoteNode?.remove();
+      trailingBreak?.remove();
+      const hasVisibleContent = el.textContent.replaceAll("\u200B", "").trim().length > 0
+        || el.querySelector("[data-uuid]");
+      if (!hasVisibleContent) el.setAttribute("data-empty", "");
+      setHasInput(Boolean(hasVisibleContent));
+      el.focus();
+    };
+
+    const removeButton = document.createElement("span");
+    removeButton.contentEditable = false;
+    removeButton.setAttribute("role", "button");
+    removeButton.setAttribute("aria-label", `移除上下文 ${title}`);
+    removeButton.dataset.contextRemove = "";
+    removeButton.className = "ml-1 inline-flex h-3.5 w-3.5 cursor-pointer items-center justify-center rounded-full text-[11px] leading-none hover:bg-black/20";
+    removeButton.textContent = "×";
+    removeButton.addEventListener("mousedown", (event) => event.preventDefault());
+    removeButton.addEventListener("click", removeContext);
+    pill.appendChild(removeButton);
 
     const sel = window.getSelection();
     if (sel && sel.rangeCount > 0 && el.contains(sel.anchorNode)) {
@@ -67,23 +107,26 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
       range.deleteContents();
       range.insertNode(pill);
       range.setStartAfter(pill);
-      if (quote) {
-        const quoteNode = document.createTextNode(`\n“${quote}”`);
+      if (quoteNode) {
         range.insertNode(quoteNode);
         range.setStartAfter(quoteNode);
+        range.insertNode(trailingBreak);
+        range.setStartAfter(trailingBreak);
       }
+      range.insertNode(caretNode);
+      range.setStart(caretNode, caretNode.length);
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
     } else {
       el.appendChild(pill);
-      let quoteNode = null;
-      if (quote) {
-        quoteNode = document.createTextNode(`\n“${quote}”`);
+      if (quoteNode) {
         el.appendChild(quoteNode);
+        el.appendChild(trailingBreak);
       }
+      el.appendChild(caretNode);
       const range = document.createRange();
-      range.setStartAfter(quoteNode || pill);
+      range.setStart(caretNode, caretNode.length);
       range.collapse(true);
       sel.removeAllRanges();
       sel.addRange(range);
@@ -361,6 +404,28 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
             contentEditable={!chat.running}
             onInput={onInput}
             onKeyDown={(e) => {
+              if (e.key === "Backspace") {
+                const selection = window.getSelection();
+                if (selection?.isCollapsed && selection.rangeCount > 0) {
+                  const range = selection.getRangeAt(0);
+                  const anchor = range.startContainer;
+                  const textBeforeCaret = anchor.nodeType === Node.TEXT_NODE
+                    ? anchor.textContent.slice(0, range.startOffset).replaceAll("\u200B", "")
+                    : "";
+                  if (!textBeforeCaret) {
+                    let previous = anchor.nodeType === Node.TEXT_NODE
+                      ? anchor.previousSibling
+                      : inputRef.current?.childNodes[range.startOffset - 1];
+                    if (previous?.nodeName === "BR") previous = previous.previousSibling;
+                    if (previous?.dataset?.contextQuote) previous = previous.previousSibling;
+                    if (previous?.dataset?.uuid) {
+                      e.preventDefault();
+                      previous.querySelector("[data-context-remove]")?.click();
+                      return;
+                    }
+                  }
+                }
+              }
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleContentEditableSend();
@@ -379,6 +444,7 @@ export default function AgentChat({ workId, onNodesUpdate, insertPillRef }) {
           <button
             onClick={handleContentEditableSend}
             disabled={chat.running || !hasInput}
+            aria-label="发送"
             className="h-10 w-10 shrink-0 rounded-full flex items-center justify-center bg-blue-500 text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300"
           >
             <Send className="h-4 w-4" />

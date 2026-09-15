@@ -152,3 +152,79 @@ def build_chapter_edit_diff(old_content: str, new_content: str, edits: list[dict
             "content_changed": old_content != new_content,
         },
     }
+
+
+def edits_from_contents(old_content: str, new_content: str) -> list[dict]:
+    """把两份完整正文转成相对原文的段落级 edits。"""
+    from difflib import SequenceMatcher
+
+    old_ps = split_paragraphs(old_content)
+    new_ps = split_paragraphs(new_content)
+    if old_ps == new_ps:
+        return []
+
+    edits: list[dict] = []
+    matcher = SequenceMatcher(a=old_ps, b=new_ps, autojunk=False)
+    for tag, i1, i2, j1, j2 in matcher.get_opcodes():
+        if tag == "equal":
+            continue
+        if tag == "replace":
+            n_old = i2 - i1
+            n_new = j2 - j1
+            paired = min(n_old, n_new)
+            for offset in range(paired):
+                old_text = old_ps[i1 + offset]
+                new_text = new_ps[j1 + offset]
+                if old_text == new_text:
+                    continue
+                edits.append({
+                    "type": "replace",
+                    "paragraph_index": i1 + offset + 1,
+                    "old_text": old_text,
+                    "new_text": new_text,
+                })
+            for offset in range(paired, n_old):
+                edits.append({
+                    "type": "delete",
+                    "paragraph_index": i1 + offset + 1,
+                    "old_text": old_ps[i1 + offset],
+                })
+            extra_new = new_ps[j1 + paired:j2]
+            if extra_new:
+                edits.append({
+                    "type": "insert_after",
+                    "paragraph_index": i2,
+                    "new_text": "\n\n".join(extra_new),
+                })
+            continue
+        if tag == "delete":
+            for offset in range(i1, i2):
+                edits.append({
+                    "type": "delete",
+                    "paragraph_index": offset + 1,
+                    "old_text": old_ps[offset],
+                })
+            continue
+        if tag == "insert":
+            edits.append({
+                "type": "insert_after",
+                "paragraph_index": i1,
+                "new_text": "\n\n".join(new_ps[j1:j2]),
+            })
+    return edits
+
+
+def build_content_diff(old_content: str, new_content: str) -> dict:
+    """比较两份完整正文，生成 canvas 原生段落 diff。"""
+    edits = edits_from_contents(old_content, new_content)
+    if not edits:
+        return {
+            "hunks": [],
+            "summary": {
+                "paragraphs_changed": 0,
+                "chars_added": 0,
+                "chars_removed": 0,
+                "content_changed": old_content != new_content,
+            },
+        }
+    return build_chapter_edit_diff(old_content, new_content, edits)

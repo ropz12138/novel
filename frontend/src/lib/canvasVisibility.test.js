@@ -158,79 +158,23 @@ describe("可见边", () => {
     expect(ids).not.toContain("v1->p1");
   });
 
-  it("默认不显示非层级关系边", () => {
+  it("永远不显示非层级关系边（含角色参考边）", () => {
     const result = project({ expandedNodeIds: new Set(["v1", "p1"]) });
-    expect(result.visibleEdges.map((e) => e.id)).not.toContain("npc->c1");
-  });
-
-  it("展开相关角色时显示与它相关的关系边", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c1"]),
-    });
-    expect(result.visibleEdges.map((e) => e.id)).toContain("npc->c1");
-  });
-
-  it("与展开节点无关的关系边不绘制", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c2"]),
-    });
     expect(result.visibleEdges.map((e) => e.id)).not.toContain("npc->c1");
   });
 });
 
-describe("卫星节点", () => {
-  it("默认不出现在画布上", () => {
-    expect(new Set(idsOf(project())).has("npc")).toBe(false);
-  });
-
-  it("点击节点不会带出相关角色，需显式展开", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-    });
+describe("角色与设定不上画布", () => {
+  it("角色节点永不出现在可见子图", () => {
+    const result = project({ expandedNodeIds: new Set(["v1", "p1"]) });
     expect(result.visibleNodeIds.has("npc")).toBe(false);
-  });
-
-  it("展开相关角色时带出与之关联的配角", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c1"]),
-    });
-    expect(result.visibleNodeIds.has("npc")).toBe(true);
-    expect(result.satelliteAnchorById.get("npc")).toBe("c1");
-    expect(result.visibleEdges.map((e) => e.id)).toContain("npc->c1");
-  });
-
-  it("卫星节点不参与树深度", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c1"]),
-    });
-    expect(result.depthById.has("npc")).toBe(false);
-  });
-
-  it("收起相关角色后卫星节点消失", () => {
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c2"]),
-    });
-    expect(result.visibleNodeIds.has("npc")).toBe(false);
-  });
-
-  it("孤立节点不会作为卫星节点被带出", () => {
-    // worldbuilding / note / 主角禁止任何连线，不存在把它们带上画布的路径
-    const result = project({
-      expandedNodeIds: new Set(["v1", "p1"]),
-      satelliteExpandedNodeIds: new Set(["c1"]),
-    });
-    expect(result.visibleNodeIds.has("w1")).toBe(false);
     expect(result.visibleNodeIds.has("hero")).toBe(false);
   });
 
-  it("锚点自身不可见时不带出卫星", () => {
-    const result = project({ satelliteExpandedNodeIds: new Set(["c1"]) });
-    expect(result.visibleNodeIds.has("npc")).toBe(false);
+  it("世界观与笔记永不出现在可见子图", () => {
+    const result = project({ expandedNodeIds: new Set(["v1", "p1"]) });
+    expect(result.visibleNodeIds.has("w1")).toBe(false);
+    expect(result.visibleNodeIds.has("n1")).toBe(false);
   });
 });
 

@@ -33,7 +33,7 @@ frontend/*.log
 
 # === Config with secrets ===
 config.json
-
+refs/
 # === Runtime ===
 logs/
 data/

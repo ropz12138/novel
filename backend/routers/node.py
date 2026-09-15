@@ -9,6 +9,7 @@ from schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from routers.auth import get_current_user
 from services.agents.tools.node_tools import (
     _normalize_chapter_elements,
+    _normalize_chapter_characters,
     _normalize_storylines,
     _merge_extra_data_fields,
 )
@@ -76,6 +77,7 @@ def update_node(
     update_data = data.model_dump(exclude_unset=True)
     proposed_scope = update_data.pop("scope", None)
     chapter_elements = update_data.pop("chapter_elements", None)
+    characters = update_data.pop("characters", None)
     storylines = update_data.pop("storylines", None)
     new_type = update_data.get("type")
     try:
@@ -94,6 +96,15 @@ def update_node(
         if err:
             raise HTTPException(status_code=400, detail=err)
         node.extra_data = _merge_extra_data_fields(node.extra_data, chapter_elements=normalized)
+
+    if characters is not None:
+        effective_type = new_type or node.type
+        if effective_type != "chapter":
+            raise HTTPException(status_code=400, detail="characters 只能用于 chapter 节点")
+        normalized, err = _normalize_chapter_characters(characters, db, node.work_id)
+        if err:
+            raise HTTPException(status_code=400, detail=err)
+        node.extra_data = _merge_extra_data_fields(node.extra_data, characters=normalized)
 
     if storylines is not None:
         effective_type = new_type or node.type

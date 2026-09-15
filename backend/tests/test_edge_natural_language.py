@@ -54,14 +54,14 @@ def test_arbitrary_natural_language_edge(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(sort_order=0, work_id=work.id, type="character", title="主角", layer=2)
-        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", layer=3)
+        n1 = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=1)
+        n2 = Node(sort_order=0, work_id=work.id, type="volume", title="第一卷", layer=2)
         db.add_all([n1, n2])
         db.commit()
 
-        result = json.loads(nt._create_edge_sync(n1.id, n2.id, edge_type="角色登场"))
+        result = json.loads(nt._create_edge_sync(n1.id, n2.id, edge_type="推动剧情"))
         assert result["success"] is True
-        assert result["edge"]["edge_type"] == "角色登场"
+        assert result["edge"]["edge_type"] == "推动剧情"
     finally:
         db.close()
 

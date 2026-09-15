@@ -14,6 +14,7 @@ from models.node import Node
 from models.edge import Edge
 from models.session import SupervisorSession, SupervisorMessage
 from models.user_canvas_action import UserCanvasAction
+from models.todo_item import TodoItem
 from services.canvas_checkpoint_service import (
     capture_canvas_checkpoint,
     restore_canvas_from_checkpoint,
@@ -166,6 +167,60 @@ def test_prepare_edit_resend_restores_and_truncates(db_session, mock_auth):
     ]
     assert new_msg["role"] == "user"
     assert new_msg["content"] == "第二轮-编辑后"
+
+
+def test_prepare_edit_resend_restores_todolist_checkpoint(db_session, mock_auth):
+    work = _make_work(db_session, mock_auth.id)
+    session = _make_session(db_session, mock_auth.id, work.id)
+
+    existing = TodoItem(
+        session_id=session.id,
+        task_id="T1",
+        task="第一轮已有任务",
+        status="completed",
+        sort_order=1,
+    )
+    db_session.add(existing)
+    db_session.commit()
+    existing_id = existing.id
+
+    message = _add_user_message(db_session, session.id, "第二轮", work.id, 0)
+    capture_canvas_checkpoint(
+        db_session,
+        session_id=session.id,
+        work_id=work.id,
+        trigger_message_id=message.id,
+        sort_order=message.sort_order,
+    )
+
+    existing.status = "pending"
+    db_session.add(TodoItem(
+        session_id=session.id,
+        task_id="T2",
+        task="废弃分支新增任务",
+        status="pending",
+        sort_order=2,
+    ))
+    db_session.commit()
+
+    prepare_edit_resend(
+        db_session,
+        session_id=session.id,
+        work_id=work.id,
+        message_id=message.id,
+        new_content="第二轮（编辑后）",
+    )
+
+    restored = (
+        db_session.query(TodoItem)
+        .filter_by(session_id=session.id)
+        .order_by(TodoItem.sort_order)
+        .all()
+    )
+    assert [(item.task_id, item.task, item.status) for item in restored] == [
+        ("T1", "第一轮已有任务", "completed"),
+    ]
+    assert restored[0].id == existing_id
 
 
 def test_prepare_edit_resend_keeps_attached_actions_as_excluded_history(

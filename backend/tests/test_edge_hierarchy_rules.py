@@ -225,8 +225,8 @@ def test_same_level_edge_rejected_by_structure_check(monkeypatch):
         db.close()
 
 
-def test_reference_edge_does_not_occupy_parent_slot(monkeypatch):
-    """character → chapter 是 reference，不占用父节点名额。"""
+def test_reference_edge_via_character_is_rejected(monkeypatch):
+    """character → chapter 不再可创建画布连线。"""
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
@@ -235,7 +235,8 @@ def test_reference_edge_does_not_occupy_parent_slot(monkeypatch):
         ch = _make_node(db, wid, "第一章", "chapter")
         char = _make_node(db, wid, "角色", "character")
 
-        json.loads(nt._create_edge_sync(char.id, ch.id, edge_type="登场"))
+        result = json.loads(nt._create_edge_sync(char.id, ch.id, edge_type="登场"))
+        assert "error" in result
         assert validate_hierarchy_structure(db, wid, plot, ch) is None
     finally:
         db.close()

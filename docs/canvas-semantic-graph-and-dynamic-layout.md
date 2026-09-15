@@ -167,9 +167,9 @@ viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultVi
 - `character`、`worldbuilding`、`note` 默认不渲染到画布主干；
 - 侧边栏提供分组聚合入口，显示各分组条目数量，点开为列表；
 - 从列表点击条目时打开详情抽屉，不改变画布布局；
-- 配角另有 6.6 的卫星显示策略，但侧栏入口不因此省略。
+- 角色完整信息只在侧栏/详情中查看，不上画布；章节出场角色见 6.6。
 
-**侧栏收录判据只看节点类型，不看 scope。** 这一点曾被实现错：早期版本把"孤立"定义为"非层级链类型且 `scope === global`"，理由是 global 节点禁止连线、在图中真正孤立。但 `scope` 对 `character` 有四种取值（`global` 主角、`major` / `minor` / `temp` 配角），于是配角既不在树里（非层级链类型），也不在侧栏里（scope 不是 global），仅在用户显式展开相关角色时作为卫星闪现——默认视图下没有任何入口。实测一部含 4 个 `major` 配角的作品，这 4 个节点在画布和侧栏中都无处可寻。
+**侧栏收录判据只看节点类型，不看 scope。** 这一点曾被实现错：早期版本把"孤立"定义为"非层级链类型且 `scope === global`"，理由是 global 节点禁止连线、在图中真正孤立。但 `scope` 对 `character` 有四种取值（`global` 主角、`major` / `minor` / `temp` 配角），于是配角既不在树里（非层级链类型），也不在侧栏里（scope 不是 global）——默认视图下没有任何入口。实测一部含 4 个 `major` 配角的作品，这 4 个节点在画布和侧栏中都无处可寻。
 
 因此判据改为"非层级链类型即收录"，`scope` 只用于侧栏内部的分组与标签（主角 / 主要配角 / 次要配角 / 临时角色）。分组键穷举了后端强校验的四种 `character` scope，不存在归类不到的取值。
 
@@ -210,18 +210,25 @@ viewport 恢复与 `fitView` 互斥：存在已保存 viewport 时用 `defaultVi
 
 隐藏数量必须以**可见集合**为判据统计（后代是否在 `visibleNodeIds` 中），而不是从 `expandedNodeIds` 反推。默认展开深度会让根节点的直接子节点可见却不出现在 `expandedNodeIds` 里，从展开集合推导会把它们误判为隐藏。
 
-### 6.6 非结构关系与卫星节点
+### 6.6 章节出场角色（非画布连线）
 
-默认主视图只持续显示 `hierarchy` 边。其他关系按需显示：
+角色节点**永不渲染到画布**；完整人设在右侧「角色与设定」侧栏打开详情查看。
 
-- 用户点击节点上的「展开相关角色」时，显示与该节点直接相关的 `reference` 边（同级边已非法，不存在此类边）；
-- 本期不实现聚合代理边。
+章节出场角色写入 `chapter.extra_data.characters`，每项为：
 
-**卫星节点**：非主角 `character`（`major` / `minor` / `temp`）不属于层级链，因此不会作为结构根节点进入画布。但它们通过 `reference` 边与章节、情节关联，若一律不显示，画布上查看角色与章节关系的能力就丢失了。
+```json
+{ "id": "<character 节点 ID>", "name": "林川" }
+```
 
-处理方式：节点卡片上提供独立的 👤 展开按钮。点击节点只打开详情抽屉，不会顺带把相关角色带上画布；用户显式展开后，与该结构节点直接相连的非层级链节点作为卫星节点临时出现，挂在该节点右侧纵向排列；再次点击收起即消失。卫星节点不参与树的宽度计算，也不占用树深度，因此不会影响主干的紧凑性。
+约束：
 
-卫星资格只排除层级链类型，不再额外排除侧栏节点：`worldbuilding`、`note` 与主角被后端 `validate_edge_endpoints` 硬性拒绝作为连线端点，在图中没有边，因此不存在把它们带上画布的路径，无需在投影里重复判断。卫星显示与侧栏入口是并存的两条路径，不是二选一。
+- 仅 `chapter` 可写；`id` 必须是同作品已有 `character` 节点；禁止重复 `id`、缺 `name`；
+- 前端章节卡片与详情**只展示 `name`，不展示 `id`**；
+- **禁止**任何以 `character` 为端点的画布连线；登场关系不再用 `create_edge`；
+- Agent：先 `create_node(type=character)`，再把 `id`/`name` 写入章节 `characters`；
+- 角色之间的关系（`character_relations`）后端可保留，本期画布 UI **暂不绘制**。
+
+主视图只持续显示 `hierarchy` 边。本期不实现聚合代理边，也不再提供「展开相关角色」卫星节点。
 
 ### 6.7 动态布局
 
@@ -354,7 +361,7 @@ const displayEdges = routeVisibleEdges(...);
 frontend/src/lib/canvasRelation.js         关系类别派生、层级序号、侧栏节点判定
 frontend/src/lib/canvasOrder.js            同级排序键（对应 chapter_order_key）
 frontend/src/lib/canvasGraph.js            父子索引、根节点、祖先链、子树统计
-frontend/src/lib/canvasVisibility.js       可见子图投影、展开状态、卫星节点
+frontend/src/lib/canvasVisibility.js       可见子图投影、展开状态
 frontend/src/lib/canvasLayout.js           树布局与 anchor 补偿
 frontend/src/lib/canvasViewState.js        展开集合与 viewport 的本地持久化
 frontend/src/components/nodes/IsolatedNodePanel.jsx  角色与设定侧边入口
@@ -544,7 +551,7 @@ Agent 创建或更新节点后：
 - 单父与无环校验是树布局的前提，当前后端完全缺失，必须补齐；
 - 非层级链节点（character / worldbuilding / note）默认不进画布主干，改由侧边栏聚合入口访问，否则紧凑目标无法达成；
 - 侧栏收录判据只看类型不看 scope：按 scope 筛选会让配角在画布与侧栏中都不可见；
-- 配角在侧栏之外，还以卫星节点形式在用户显式展开相关角色时临时出现，两条路径并存；
+- 角色不上画布；章节出场角色写入 `chapter.extra_data.characters`（id+name，前端只显示 name）；角色关系线本期不画；
 - 隐藏数量以可见集合为判据统计，不从展开集合反推；
 - Agent 输出语义结构，不输出像素坐标；
 - 展开状态属于用户视图，不属于小说语义，因此持久化在 localStorage 而非数据库，且必须带版本号；

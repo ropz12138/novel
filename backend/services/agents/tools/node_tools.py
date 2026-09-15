@@ -7,7 +7,7 @@ from typing import Optional
 from functools import partial
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 
 from models.node import Node
@@ -55,6 +55,34 @@ def _get_emit():
         return None
 
 
+def _visible_text_len(text: str) -> int:
+    return len("".join((text or "").split()))
+
+
+def _content_diff_event(node: dict, content_diff: dict) -> tuple[str, dict]:
+    old_content = content_diff.get("old_content") or ""
+    new_content = content_diff.get("new_content") or ""
+    node_type = node.get("type")
+    new_len = _visible_text_len(new_content)
+    old_len = _visible_text_len(old_content)
+    payload = {
+        "node_id": node["id"],
+        "node_type": node_type,
+        "title": node.get("title") or "",
+        "diff": content_diff.get("diff") or {},
+        "original_content": old_content,
+        "current_content": new_content,
+    }
+    if node_type == "chapter":
+        payload["chapter_node_id"] = node["id"]
+        payload["word_count"] = new_len
+        payload["word_count_delta"] = new_len - old_len
+        return "chapter_edit_diff", payload
+    payload["text_count"] = new_len
+    payload["text_count_delta"] = new_len - old_len
+    return "node_content_diff", payload
+
+
 # 节点类型白名单，创建/更新时强制校验，禁止 agent 自创
 VALID_NODE_TYPES = list(STANDARD_NODE_TYPES)
 
@@ -69,6 +97,14 @@ class CreateNodeInput(BaseModel):
         description=(
             "chapter 专用：本章情节元素列表，每项建议包含 title 和 content。"
             "元素不是节点类型，不要创建 element 节点；创建章节时把本章元素放在这里。"
+        ),
+    )
+    characters: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "chapter 专用：本章出场角色列表，写入 extra_data.characters。"
+            "每项必须含 id（已有 character 节点的 ID）与 name（角色名，供前端展示）。"
+            "不要用画布连线表达角色登场；先 create_node(type=character) 再把 id 写进这里。"
         ),
     )
     storylines: Optional[list[dict]] = Field(
@@ -91,9 +127,17 @@ class CreateNodeInput(BaseModel):
 
 
 class UpdateNodeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     node_id: str = Field(description="节点ID")
     title: Optional[str] = Field(default=None, description="新标题")
-    content: Optional[str] = Field(default=None, description="新内容")
+    content: Optional[str] = Field(
+        default=None,
+        description=(
+            "agent 完成编辑后的完整正文，直接覆盖现有 content。"
+            "局部修改时也提交包含全部保留段落和修改段落的完整正文。"
+        ),
+    )
     sort_order: Optional[int] = Field(
         default=None,
         description=f"调整同级显示顺序。{NODE_SORT_ORDER_RULES_TEXT}",
@@ -105,28 +149,19 @@ class UpdateNodeInput(BaseModel):
             "只更新 extra_data.chapter_elements，不覆盖 extra_data 中的其它字段。"
         ),
     )
+    characters: Optional[list[dict]] = Field(
+        default=None,
+        description=(
+            "chapter 专用：更新本章出场角色列表，每项必须含 id（character 节点 ID）与 name。"
+            "只更新 extra_data.characters，不覆盖 extra_data 中的其它字段。"
+        ),
+    )
     storylines: Optional[list[dict]] = Field(
         default=None,
         description=(
             "character 专用：更新角色发展线列表，每项必须含 name 和 body（字符串列表）；"
             "description 为该线的说明。只更新 extra_data.storylines，不覆盖 extra_data 中的其它字段。"
         ),
-    )
-    content_edit_instruction: Optional[str] = Field(
-        default=None,
-        description=(
-            "局部编辑节点 content 的用户原话。用于任何节点文本小改（改对话/措辞/删增少量段落/标记高亮）时，"
-            "工具会读取现有 content，生成段落级 edits，校验后应用并返回 diff。"
-            "不要和 content 同时传；content 表示整体覆盖。"
-        ),
-    )
-    content_edit_context: Optional[str] = Field(
-        default=None,
-        description="局部编辑所需上下文（agent 已用查询工具备齐的大纲/角色/伏笔等原文）。仅配合 content_edit_instruction 使用。",
-    )
-    prev_chapter_node_id: Optional[str] = Field(
-        default=None,
-        description="局部编辑章节正文时可传上一章节点ID，工具会注入上一章正文作承接参考；非章节节点会忽略。",
     )
     node_type: Optional[str] = Field(default=None, description="新类型")
     layer: Optional[int] = Field(
@@ -184,7 +219,7 @@ class BatchCreateNodesInput(BaseModel):
     nodes_data: list[dict] = Field(
         description=(
             "节点数据列表，每项必须含 node_type、title、sort_order。"
-            "创建 chapter 时可带 chapter_elements；创建 character 时可带 storylines；不要创建 element 节点。"
+            "创建 chapter 时可带 chapter_elements 与 characters；创建 character 时可带 storylines；不要创建 element 节点。"
             f"{NODE_SORT_ORDER_RULES_TEXT}{NODE_LAYOUT_RULES_TEXT}"
         ),
     )
@@ -243,29 +278,14 @@ def _neighbor_items(db, node_id, work_id):
     return neighbors
 
 
-def _chapter_has_character_edge(db, work_id, chapter_node_id: str) -> bool:
-    """章节是否已与任意 character 节点相连（方向不限）。"""
-    character_ids = [
-        row[0]
-        for row in db.query(Node.id).filter(
-            Node.work_id == work_id,
-            Node.type == "character",
-        ).all()
-    ]
-    if not character_ids:
-        return False
-    linked = db.query(Edge.id).filter(
-        Edge.work_id == work_id,
-        (
-            ((Edge.source_id == chapter_node_id) & (Edge.target_id.in_(character_ids)))
-            | ((Edge.target_id == chapter_node_id) & (Edge.source_id.in_(character_ids)))
-        ),
-    ).first()
-    return linked is not None
+def _chapter_has_characters_field(chapter_node) -> bool:
+    """章节是否已在 extra_data.characters 中声明出场角色。"""
+    characters = (chapter_node.extra_data or {}).get("characters")
+    return isinstance(characters, list) and len(characters) > 0
 
 
 def _collect_chapter_character_relation_warnings(db, work_id, chapter_node) -> list:
-    """章节创建后校验：未连接任何角色节点时返回自然语言警告。"""
+    """章节创建后校验：未写入 characters 字段时返回自然语言警告。"""
     if chapter_node is None or chapter_node.type != "chapter":
         return []
     character_count = db.query(Node.id).filter(
@@ -275,19 +295,20 @@ def _collect_chapter_character_relation_warnings(db, work_id, chapter_node) -> l
     title = chapter_node.title or "未命名章节"
     if character_count == 0:
         return [
-            f"章节「{title}」创建后画布上尚无角色节点，且未建立章节-角色连线。"
-            "请先创建本章出场角色节点，再为章节与角色建立连线（如「登场」「影响」）。"
+            f"章节「{title}」创建后尚无角色节点，且未写入 characters 字段。"
+            "请先 create_node(type=character) 创建本章出场角色，"
+            "再把角色 id 与 name 写入章节的 characters 字段。"
         ]
-    if _chapter_has_character_edge(db, work_id, chapter_node.id):
+    if _chapter_has_characters_field(chapter_node):
         return []
     return [
-        f"章节「{title}」尚未连接任何角色节点。"
-        "请为本章出场角色建立章节-角色连线（如「登场」「影响」）。"
+        f"章节「{title}」尚未写入 characters 字段。"
+        "请把本章出场角色的 id 与 name 写入 characters（不要用画布连线）。"
     ]
 
 
 def _collect_batch_chapter_character_relation_warnings(db, work_id, created_nodes) -> list:
-    """批量创建后，对每个新建 chapter 做角色连线校验。"""
+    """批量创建后，对每个新建 chapter 做角色字段校验。"""
     warnings = []
     for node in created_nodes:
         warnings.extend(_collect_chapter_character_relation_warnings(db, work_id, node))
@@ -301,8 +322,8 @@ def _build_relation_hint(warnings: list) -> str:
     return (
         f"检测到 {len(warnings)} 个章节-角色关系问题。"
         "请直接补全：必要时用 create_node(type=character) 创建角色，"
-        "再用 create_edge / batch_create_edges 连接章节与角色；不要询问用户是否修复。"
-        "连线 edge_type 用简短自然语言（如「登场」「影响」「同行」）。"
+        "再用 create_node / update_node 的 characters 字段把角色 id 与 name 写入章节；"
+        "禁止用画布连线表达角色登场，不要询问用户是否修复。"
     )
 
 
@@ -378,10 +399,51 @@ def _normalize_storylines(storylines) -> tuple[list[dict], str | None]:
     return normalized, None
 
 
-def _merge_extra_data_fields(extra_data, *, chapter_elements=None, storylines=None) -> dict:
+def _normalize_chapter_characters(characters, db, work_id: str) -> tuple[list[dict], str | None]:
+    """校验并规范化章节出场角色列表。
+
+    每项必须含 id（同作品 character 节点 ID）与 name。id 供代码关联，
+    name 供前端展示；不在前端暴露 id。
+    """
+    if characters is None:
+        return [], None
+    if not isinstance(characters, list):
+        return [], "characters 必须是数组"
+    normalized = []
+    seen_ids: set[str] = set()
+    for idx, item in enumerate(characters):
+        if not isinstance(item, dict):
+            return [], f"characters[{idx}] 必须是对象"
+        character_id = str(item.get("id") or "").strip()
+        name = str(item.get("name") or "").strip()
+        if not character_id:
+            return [], f"characters[{idx}] 需要 id（character 节点 ID）"
+        if not name:
+            return [], f"characters[{idx}] 需要 name"
+        if character_id in seen_ids:
+            return [], f"characters[{idx}] 的 id 重复：{character_id}"
+        seen_ids.add(character_id)
+        character = (
+            db.query(Node)
+            .filter(
+                Node.work_id == work_id,
+                Node.id == character_id,
+                Node.type == "character",
+            )
+            .first()
+        )
+        if character is None:
+            return [], f"characters[{idx}] 引用的角色不存在：{character_id}"
+        normalized.append({"id": character_id, "name": name})
+    return normalized, None
+
+
+def _merge_extra_data_fields(extra_data, *, chapter_elements=None, characters=None, storylines=None) -> dict:
     data = dict(extra_data or {})
     if chapter_elements is not None:
         data["chapter_elements"] = chapter_elements
+    if characters is not None:
+        data["characters"] = characters
     if storylines is not None:
         data["storylines"] = storylines
     return data
@@ -392,7 +454,7 @@ def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] |
 
 
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None):
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
     if sort_order is None:
         return json.dumps({"error": MISSING_SORT_ORDER_ERROR}, ensure_ascii=False)
     try:
@@ -406,6 +468,8 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         normalized_elements, err = _normalize_chapter_elements(chapter_elements)
         if err:
             return json.dumps({"error": err}, ensure_ascii=False)
+    if characters is not None and node_type != "chapter":
+        return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
     normalized_storylines = None
     if storylines is not None:
         if node_type != "character":
@@ -430,6 +494,11 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
     
     db = _get_db()
     try:
+        normalized_characters = None
+        if characters is not None:
+            normalized_characters, err = _normalize_chapter_characters(characters, db, work_id)
+            if err:
+                return json.dumps({"error": err}, ensure_ascii=False)
         node = Node(
             id=str(uuid.uuid4()),
             work_id=work_id,
@@ -442,6 +511,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             extra_data=_merge_extra_data_fields(
                 {},
                 chapter_elements=normalized_elements,
+                characters=normalized_characters,
                 storylines=normalized_storylines,
             ),
             position_x=position_x,
@@ -474,18 +544,11 @@ def _update_node_sync(
     scope=None,
     locked=None,
     reason=None,
-    content_edit_instruction=None,
-    content_edit_context=None,
-    prev_chapter_node_id=None,
     chapter_elements=None,
+    characters=None,
     storylines=None,
     sort_order=None,
 ):
-    if content_edit_instruction:
-        return json.dumps({
-            "success": False,
-            "error": "content_edit_instruction 需要通过异步工具调用执行；普通同步更新请使用 content 整体覆盖。",
-        }, ensure_ascii=False)
     if node_type is not None:
         try:
             validate_node_type(node_type)
@@ -506,9 +569,12 @@ def _update_node_sync(
         node = db.query(Node).filter(Node.id == node_id).first()
         if not node:
             return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        old_content = node.content or ""
         final_type_for_elements = node_type or node.type
         if chapter_elements is not None and final_type_for_elements != "chapter":
             return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
+        if characters is not None and final_type_for_elements != "chapter":
+            return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
         if storylines is not None and final_type_for_elements != "character":
             return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
         if content is not None and final_type_for_elements == "chapter":
@@ -546,10 +612,16 @@ def _update_node_sync(
             node.position_y = position_y
         if locked is not None:
             node.locked = locked
-        if chapter_elements is not None or storylines is not None:
+        normalized_characters = None
+        if characters is not None:
+            normalized_characters, err = _normalize_chapter_characters(characters, db, node.work_id)
+            if err:
+                return json.dumps({"error": err}, ensure_ascii=False)
+        if chapter_elements is not None or characters is not None or storylines is not None:
             node.extra_data = _merge_extra_data_fields(
                 node.extra_data,
                 chapter_elements=normalized_elements if chapter_elements is not None else None,
+                characters=normalized_characters if characters is not None else None,
                 storylines=normalized_storylines if storylines is not None else None,
             )
         try:
@@ -560,11 +632,19 @@ def _update_node_sync(
         db.commit()
         db.refresh(node)
         neighbors = _neighbor_items(db, node.id, node.work_id)
-        return json.dumps({
+        payload = {
             "success": True,
             "node": _compact(node),
             "neighbors": neighbors,
-        }, ensure_ascii=False)
+        }
+        if content is not None and content != old_content:
+            from services.chapter_edit_service import build_content_diff
+            payload["content_diff"] = {
+                "diff": build_content_diff(old_content, content),
+                "old_content": old_content,
+                "new_content": content,
+            }
+        return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         db.rollback()
         return json.dumps({"error": str(e)}, ensure_ascii=False)
@@ -734,6 +814,8 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             _, err = _normalize_chapter_elements(data.get("chapter_elements"))
             if err:
                 return json.dumps({"error": err}, ensure_ascii=False)
+        if data.get("characters") is not None and node_type != "chapter":
+            return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
         if data.get("storylines") is not None:
             if node_type != "character":
                 return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
@@ -755,6 +837,14 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             normalized_elements = None
             if data.get("chapter_elements") is not None:
                 normalized_elements, _ = _normalize_chapter_elements(data.get("chapter_elements"))
+            normalized_characters = None
+            if data.get("characters") is not None:
+                normalized_characters, err = _normalize_chapter_characters(
+                    data.get("characters"), db, work_id,
+                )
+                if err:
+                    db.rollback()
+                    return json.dumps({"error": err}, ensure_ascii=False)
             normalized_storylines = None
             if data.get("storylines") is not None:
                 normalized_storylines, _ = _normalize_storylines(data.get("storylines"))
@@ -767,6 +857,7 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 extra_data=_merge_extra_data_fields(
                     {},
                     chapter_elements=normalized_elements,
+                    characters=normalized_characters,
                     storylines=normalized_storylines,
                 ),
                 layer=layer,
@@ -860,9 +951,9 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 
 # 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None):
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order))
+    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -873,216 +964,6 @@ async def _create_node_async(node_type, title, content="", layer=0, position_x=N
     except Exception:
         logger.warning("_create_node_async 触发 nodes_updated 失败", exc_info=True)
     return result
-
-
-async def _update_node_content_edit_async(
-    node_id,
-    edit_instruction,
-    context="",
-    title=None,
-    node_type=None,
-    layer=None,
-    position_x=None,
-    position_y=None,
-    scope=None,
-    locked=None,
-    reason=None,
-    prev_chapter_node_id=None,
-    chapter_elements=None,
-    storylines=None,
-    sort_order=None,
-):
-    from services.agents.llm import get_llm, context_model_pref_kwargs
-    from services.chapter_edit_agent import (
-        build_edit_chapter_messages,
-        collect_chapter_elements,
-        parse_edits_json,
-        read_previous_chapter_content,
-    )
-    from services.chapter_edit_service import (
-        apply_edits,
-        build_chapter_edit_diff,
-        split_paragraphs,
-        validate_edits,
-    )
-    from services.chapter_history_service import clear_chapter_summary_on_content_change
-    from services.chapter_word_count import chapter_body_word_count
-    from services.global_context import get_global_nodes, format_global_context
-    from services.llm_stream import chunk_to_ai_message, emit_llm_stream_deltas
-
-    if node_type is not None:
-        try:
-            validate_node_type(node_type)
-        except ValueError as e:
-            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-    db = _get_db()
-    try:
-        node = db.query(Node).filter(Node.id == node_id).first()
-        if not node:
-            return json.dumps({"success": False, "error": "节点不存在"}, ensure_ascii=False)
-        if not (node.content or "").strip():
-            return json.dumps({
-                "success": False,
-                "error": "节点内容为空，无法局部编辑；请使用 content 整体写入。",
-            }, ensure_ascii=False)
-
-        is_locked = bool(node.locked)
-        trying_move = (position_x is not None) or (position_y is not None)
-        if is_locked and trying_move:
-            return json.dumps({
-                "success": False,
-                "error": f"节点「{node.title}」已被用户锁定，坐标无法移动。请保留该节点当前位置，不要再次尝试调整其 position_x/position_y。",
-            }, ensure_ascii=False)
-
-        old_content = node.content or ""
-        effective_work_id = node.work_id
-        global_nodes = get_global_nodes(db, effective_work_id)
-        global_context = format_global_context(global_nodes)
-        is_chapter_edit = node.type == "chapter"
-        prev_chapter = read_previous_chapter_content(db, prev_chapter_node_id) if is_chapter_edit else ""
-        elements = collect_chapter_elements(db, node_id, effective_work_id) if is_chapter_edit else []
-
-        llm = get_llm(temperature=0.3, streaming=True, **context_model_pref_kwargs())
-        messages = build_edit_chapter_messages(
-            edit_instruction,
-            old_content,
-            context or "",
-            global_context,
-            prev_chapter,
-            elements,
-        )
-
-        emit = _get_emit()
-        aggregated = None
-        async for chunk in llm.astream(messages):
-            aggregated = chunk if aggregated is None else aggregated + chunk
-            if emit:
-                await emit_llm_stream_deltas(emit, "chapter_edit_stream", chunk)
-
-        resp = chunk_to_ai_message(aggregated) if aggregated is not None else None
-        raw = getattr(resp, "content", "") if resp else ""
-        if isinstance(raw, list):
-            raw = "".join(b.get("text", "") for b in raw if isinstance(b, dict))
-
-        try:
-            parsed = parse_edits_json(raw)
-        except (json.JSONDecodeError, ValueError) as e:
-            return json.dumps({
-                "success": False,
-                "error": f"无法解析 LLM 输出的 edits JSON: {e}",
-            }, ensure_ascii=False)
-
-        edits = parsed["edits"]
-        paragraphs = split_paragraphs(old_content)
-        validation_errors = validate_edits(edits, paragraphs)
-        if validation_errors:
-            return json.dumps({
-                "success": False,
-                "error": validation_errors[0],
-                "validation_errors": validation_errors,
-            }, ensure_ascii=False)
-
-        try:
-            new_content = apply_edits(old_content, edits)
-        except ValueError as e:
-            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-        diff = build_chapter_edit_diff(old_content, new_content, edits)
-
-        if title is not None:
-            node.title = title
-        node.content = new_content
-        if node_type is not None:
-            node.type = node_type
-        if layer is not None:
-            node.layer = layer
-        if sort_order is not None:
-            node.sort_order = sort_order
-        if position_x is not None:
-            node.position_x = position_x
-        if position_y is not None:
-            node.position_y = position_y
-        if locked is not None:
-            node.locked = locked
-        if chapter_elements is not None or storylines is not None:
-            if chapter_elements is not None and node.type != "chapter" and node_type != "chapter":
-                return json.dumps({"success": False, "error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
-            if storylines is not None and node.type != "character" and node_type != "character":
-                return json.dumps({"success": False, "error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
-            normalized_elements = None
-            if chapter_elements is not None:
-                normalized_elements, err = _normalize_chapter_elements(chapter_elements)
-                if err:
-                    return json.dumps({"success": False, "error": err}, ensure_ascii=False)
-            normalized_storylines = None
-            if storylines is not None:
-                normalized_storylines, err = _normalize_storylines(storylines)
-                if err:
-                    return json.dumps({"success": False, "error": err}, ensure_ascii=False)
-            node.extra_data = _merge_extra_data_fields(
-                node.extra_data,
-                chapter_elements=normalized_elements if chapter_elements is not None else None,
-                storylines=normalized_storylines if storylines is not None else None,
-            )
-        try:
-            node.scope = _resolve_update_scope(node, node_type, scope)
-        except ValueError as e:
-            db.rollback()
-            return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-
-        clear_chapter_summary_on_content_change(db, node)
-        db.commit()
-        db.refresh(node)
-
-        neighbors = _neighbor_items(db, node.id, node.work_id)
-        word_count = chapter_body_word_count(new_content)
-        old_word_count = chapter_body_word_count(old_content)
-        result = {
-            "success": True,
-            "node": _compact(node),
-            "neighbors": neighbors,
-            "text_count": len(new_content),
-            "text_count_delta": len(new_content) - len(old_content),
-            "word_count": word_count,
-            "word_count_delta": word_count - old_word_count,
-            "diff": diff,
-            "content_edit": {
-                "text_count": len(new_content),
-                "text_count_delta": len(new_content) - len(old_content),
-                "word_count": word_count,
-                "word_count_delta": word_count - old_word_count,
-                "diff": diff,
-            },
-        }
-        if node.type == "chapter":
-            from services.plot_highlight_service import validate_plot_highlights
-            result["plot_highlight_validation"] = validate_plot_highlights(new_content).as_dict()
-
-        if emit:
-            diff_event_data = {
-                "node_id": node_id,
-                "chapter_node_id": node_id,
-                "node_type": node.type,
-                "title": node.title,
-                "text_count": len(new_content),
-                "text_count_delta": len(new_content) - len(old_content),
-                "word_count": word_count,
-                "word_count_delta": word_count - old_word_count,
-                "diff": diff,
-            }
-            if node.type == "chapter":
-                await emit("chapter_edit_diff", diff_event_data)
-            else:
-                await emit("node_content_diff", diff_event_data)
-            await emit("nodes_updated", {"action": "update", "node_id": node_id})
-
-        return json.dumps(result, ensure_ascii=False)
-    except Exception as e:
-        db.rollback()
-        return json.dumps({"success": False, "error": str(e)}, ensure_ascii=False)
-    finally:
-        db.close()
 
 
 async def _update_node_async(
@@ -1096,46 +977,24 @@ async def _update_node_async(
     scope=None,
     locked=None,
     reason=None,
-    content_edit_instruction=None,
-    content_edit_context=None,
-    prev_chapter_node_id=None,
     chapter_elements=None,
+    characters=None,
     storylines=None,
     sort_order=None,
 ):
-    if content is not None and content_edit_instruction:
-        return json.dumps({
-            "success": False,
-            "error": "content 和 content_edit_instruction 不能同时传；content 是整体覆盖，content_edit_instruction 是局部编辑。",
-        }, ensure_ascii=False)
-    if content_edit_instruction:
-        return await _update_node_content_edit_async(
-            node_id,
-            content_edit_instruction,
-            content_edit_context or "",
-            title=title,
-            node_type=node_type,
-            layer=layer,
-            position_x=position_x,
-            position_y=position_y,
-            scope=scope,
-            locked=locked,
-            reason=reason,
-            prev_chapter_node_id=prev_chapter_node_id,
-            chapter_elements=chapter_elements,
-            storylines=storylines,
-            sort_order=sort_order,
-        )
-
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, None, None, None, chapter_elements, storylines, sort_order))
-    # 触发画布更新事件
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order))
     try:
         data = json.loads(result)
         if data.get("success"):
+            content_diff = data.pop("content_diff", None)
+            result = json.dumps(data, ensure_ascii=False)
             emit = _get_emit()
             if emit:
                 await emit("nodes_updated", {"action": "update", "node_id": node_id})
+                if content_diff and (content_diff.get("diff") or {}).get("hunks"):
+                    event_name, event_data = _content_diff_event(data["node"], content_diff)
+                    await emit(event_name, event_data)
     except Exception:
         logger.warning("_update_node_async 触发 nodes_updated 失败", exc_info=True)
     return result
@@ -1240,7 +1099,7 @@ create_node = StructuredTool.from_function(
     description=(
         "创建新节点。"
         "创建 chapter 时返回 relation_warnings 与 relation_hint："
-        "若章节未连接任何角色节点，须按 hint 补建角色并 create_edge 连接。"
+        "若章节未写入 characters 字段，须按 hint 补建角色并把 id/name 写入 characters。"
         f"{NODE_TYPES_RULES_TEXT} {NODE_LAYOUT_RULES_TEXT}"
     ),
     args_schema=CreateNodeInput,
@@ -1252,8 +1111,8 @@ update_node = StructuredTool.from_function(
     name="update_node",
     description=(
         "更新节点属性。"
-        "任何节点文本小改时不要整体重写 content，改传 content_edit_instruction 做段落级局部编辑并返回 diff；"
-        "整篇重写或空节点首次写入才使用 content 全量覆盖。"
+        "文本编辑由 agent 先读取最新正文并自行完成，再通过 content 直接保存完整正文。"
+        "局部修改时保持其余内容完整，保存后重新读取核对。"
         f"{NODE_LAYOUT_RULES_TEXT}"
     ),
     args_schema=UpdateNodeInput,
@@ -1302,7 +1161,7 @@ batch_create_nodes = StructuredTool.from_function(
         "批量创建多个节点。"
         f"{NODE_LAYOUT_RULES_TEXT} "
         "若创建了 chapter，返回 relation_warnings 与 relation_hint："
-        "章节未连角色时须补建角色并 create_edge / batch_create_edges 连接。"
+        "章节未写入 characters 时须补建角色并把 id/name 写入 characters 字段。"
     ),
     args_schema=BatchCreateNodesInput,
 )

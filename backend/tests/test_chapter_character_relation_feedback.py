@@ -1,9 +1,8 @@
-"""章节节点创建后：未连接角色节点时返回自然语言反馈。"""
+"""章节节点创建后：未写入 characters 字段时返回自然语言反馈。"""
 import importlib
 import json
 
 import database
-from models.edge import Edge
 from models.node import Node
 from models.user import User
 from models.work import CanvasWork
@@ -52,7 +51,8 @@ def test_create_chapter_without_character_edge_returns_relation_warning(monkeypa
         assert any("角色" in w for w in result["relation_warnings"])
         assert "第三章 门外的眼睛" in result["relation_warnings"][0]
         assert result["relation_hint"]
-        assert "create_edge" in result["relation_hint"]
+        assert "characters" in result["relation_hint"]
+        assert "create_edge" not in result["relation_hint"]
     finally:
         db.close()
 
@@ -127,33 +127,28 @@ def test_create_chapter_no_warning_if_character_edge_already_present_is_impossib
     assert True
 
 
-def test_relation_warning_helpers_skip_when_chapter_already_linked(monkeypatch):
-    """直接测收集函数：章节若已有到角色的边，则无警告。"""
+def test_relation_warning_helpers_skip_when_chapter_already_has_characters(monkeypatch):
+    """章节 extra_data.characters 已填写则无警告。"""
     db = database.SessionLocal()
     try:
-        work = _make_work(monkeypatch, db, "已连线")
-        chapter = Node(sort_order=0, 
-            work_id=work.id,
-            type="chapter",
-            title="已连线章节",
-            position_x=500,
-            position_y=0,
-        )
-        character = Node(sort_order=0, 
+        work = _make_work(monkeypatch, db, "已填写")
+        character = Node(
             work_id=work.id,
             type="character",
             title="沈夜",
-            position_x=0,
-            position_y=0,
+            sort_order=1,
         )
-        db.add_all([chapter, character])
+        db.add(character)
         db.commit()
-        db.add(Edge(
+        db.refresh(character)
+        chapter = Node(
             work_id=work.id,
-            source_id=chapter.id,
-            target_id=character.id,
-            edge_type="登场",
-        ))
+            type="chapter",
+            title="已填写章节",
+            sort_order=1,
+            extra_data={"characters": [{"id": character.id, "name": "沈夜"}]},
+        )
+        db.add(chapter)
         db.commit()
 
         warnings = nt._collect_chapter_character_relation_warnings(db, work.id, chapter)

@@ -76,4 +76,16 @@ describe("IsolatedNodePanel", () => {
     render(<IsolatedNodePanel nodes={[]} />);
     expect(screen.getByText("暂无角色或设定")).toBeDefined();
   });
+
+  it("可以独立收起和展开角色与设定侧栏", () => {
+    render(<IsolatedNodePanel nodes={nodes} />);
+
+    fireEvent.click(screen.getByRole("button", { name: "收起角色与设定侧栏" }));
+    expect(screen.queryByText("林川")).toBeNull();
+    expect(screen.getByRole("button", { name: "展开角色与设定侧栏" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开角色与设定侧栏" }));
+    expect(screen.getByText("林川")).toBeDefined();
+    expect(screen.getByRole("button", { name: "收起角色与设定侧栏" })).toBeDefined();
+  });
 });

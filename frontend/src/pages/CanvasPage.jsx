@@ -5,6 +5,7 @@ import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
 import { fetchWorks, createWork, deleteWork } from "../lib/canvasApi";
+import { accumulateNodeContentDiff } from "../lib/inlineContentDiff";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
 
 const CHAT_WIDTH_STORAGE_KEY = "novel_canvas_chat_width";
@@ -44,6 +45,7 @@ export function CanvasPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelConfig, setShowModelConfig] = useState(false);
+  const [nodeContentDiffs, setNodeContentDiffs] = useState({});
   const insertPillRef = useRef(null);
 
   const handleAddContext = useCallback((node, selectedText) => {
@@ -88,6 +90,24 @@ export function CanvasPage() {
   const handleNodesUpdate = useCallback(() => {
     debouncedRefresh();
   }, [debouncedRefresh]);
+
+  const handleNodeContentDiff = useCallback((nodeId, diff) => {
+    setNodeContentDiffs((current) => {
+      if (!diff) {
+        const next = { ...current };
+        delete next[nodeId];
+        return next;
+      }
+      if (Array.isArray(diff.batches)) {
+        return { ...current, [nodeId]: diff };
+      }
+      return { ...current, [nodeId]: accumulateNodeContentDiff(current[nodeId], diff) };
+    });
+  }, []);
+
+  const handleNodeContentDiffsReset = useCallback(() => {
+    setNodeContentDiffs({});
+  }, []);
 
   const handleCreateWork = async () => {
     const title = prompt("请输入作品名称：", "未命名作品");
@@ -372,7 +392,14 @@ export function CanvasPage() {
         ) : (
           <>
             <div className="min-w-0 flex-1 transition-all duration-300">
-              <Canvas key={currentWorkId} ref={canvasRef} workId={currentWorkId} onAddContext={handleAddContext} />
+              <Canvas
+                key={currentWorkId}
+                ref={canvasRef}
+                workId={currentWorkId}
+                onAddContext={handleAddContext}
+                nodeContentDiffs={nodeContentDiffs}
+                onNodeContentDiffChange={handleNodeContentDiff}
+              />
             </div>
             {showChat && (
               <div
@@ -392,6 +419,8 @@ export function CanvasPage() {
                 <AgentChat
                   workId={currentWorkId}
                   onNodesUpdate={handleNodesUpdate}
+                  onNodeContentDiff={handleNodeContentDiff}
+                  onNodeContentDiffsReset={handleNodeContentDiffsReset}
                   insertPillRef={insertPillRef}
                 />
               </div>

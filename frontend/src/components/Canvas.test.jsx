@@ -422,6 +422,22 @@ describe("applyNodeUpdateToData", () => {
     expect(next.extra_data.last_generation).toEqual({ ok: true });
   });
 
+  it("merges characters into extra_data preserving other fields", () => {
+    const prev = {
+      label: "第一章",
+      content: "",
+      extra_data: {
+        last_generation: { ok: true },
+        characters: [{ id: "old", name: "旧" }],
+      },
+    };
+    const next = applyNodeUpdateToData(prev, {
+      characters: [{ id: "char-1", name: "林川" }],
+    });
+    expect(next.extra_data.characters).toEqual([{ id: "char-1", name: "林川" }]);
+    expect(next.extra_data.last_generation).toEqual({ ok: true });
+  });
+
   it("preserves label/content when title/content absent in update", () => {
     const prev = { label: "保留", content: "保留c", extra_data: {} };
     const next = applyNodeUpdateToData(prev, { chapter_elements: [] });

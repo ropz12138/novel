@@ -80,28 +80,10 @@ function placeSubtree({
 /**
  * @returns {Map<string, {x: number, y: number}>} 仅包含可见节点的坐标
  */
-/**
- * 卫星节点不属于树，挂在其锚点节点右侧纵向排列，不影响树的宽度计算。
- */
-function placeSatellites(positions, satelliteAnchorById) {
-  const countByAnchor = new Map();
-  for (const [satelliteId, anchorId] of satelliteAnchorById) {
-    const anchorPosition = positions.get(anchorId);
-    if (!anchorPosition) continue;
-    const slot = countByAnchor.get(anchorId) ?? 0;
-    countByAnchor.set(anchorId, slot + 1);
-    positions.set(satelliteId, {
-      x: anchorPosition.x + NODE_WIDTH + MIN_HORIZONTAL_GAP,
-      y: anchorPosition.y + slot * (NODE_HEIGHT + MIN_HORIZONTAL_GAP),
-    });
-  }
-}
-
 export function layoutVisibleGraph({
   index,
   visibleNodeIds,
   depthById,
-  satelliteAnchorById = null,
   previousPositions = null,
   anchorNodeId = null,
 }) {
@@ -125,10 +107,6 @@ export function layoutVisibleGraph({
       positions,
     });
     cursor += width + ROOT_GAP;
-  }
-
-  if (satelliteAnchorById?.size) {
-    placeSatellites(positions, satelliteAnchorById);
   }
 
   return applyAnchorCompensation(positions, previousPositions, anchorNodeId);

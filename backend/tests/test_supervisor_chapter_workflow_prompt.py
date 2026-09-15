@@ -58,8 +58,9 @@ def test_removed_operational_rules_are_available_from_registered_tools():
 
     update_schema_text = str(tools["update_node"].args_schema.model_json_schema())
     update_tool_text = tools["update_node"].description + update_schema_text
-    assert "content_edit_instruction" in update_tool_text
-    assert "整篇重写或空节点首次写入" in update_tool_text
+    assert "content_edit_instruction" not in update_tool_text
+    assert "完整正文" in update_tool_text
+    assert "content_edit_instruction" not in PROMPT
 
     assert "必须先创建任务清单" in tools["write_todolist"].description
     assert "先 read_node_content" in tools["insert_chapter_illustration"].description

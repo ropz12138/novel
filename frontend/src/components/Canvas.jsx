@@ -47,12 +47,10 @@ import {
   buildGraphIndex,
   hasHierarchyChildren,
   hiddenDescendantSummary,
-  hasRelatedCharacters,
 } from "../lib/canvasGraph";
 import {
   projectVisibleGraph,
   toggleExpanded,
-  toggleSatelliteExpanded,
 } from "../lib/canvasVisibility";
 import { layoutVisibleGraph } from "../lib/canvasLayout";
 import { deriveRelationKind } from "../lib/canvasRelation";
@@ -93,9 +91,6 @@ const createNodeTypes = (
   expandableNodeIds = new Set(),
   hiddenSummaryById = new Map(),
   onCollapseToggle,
-  satelliteExpandedNodeIds = new Set(),
-  relatedCharacterNodeIds = new Set(),
-  onSatelliteToggle,
 ) => ({
   custom: (props) => {
     const summary = hiddenSummaryById.get(props.id);
@@ -110,9 +105,6 @@ const createNodeTypes = (
         hiddenDescendantCount={summary?.total || 0}
         hiddenDescendantText={summary?.text || ""}
         onCollapseToggle={onCollapseToggle}
-        hasRelatedCharacters={relatedCharacterNodeIds.has(props.id)}
-        isSatellitesExpanded={satelliteExpandedNodeIds.has(props.id)}
-        onSatelliteToggle={onSatelliteToggle}
       />
     );
   },
@@ -131,20 +123,19 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = forwardRef(function Canvas({ workId, onAddContext }, ref) {
+const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} ref={ref} />
+      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} ref={ref} />
     </ReactFlowProvider>
   );
 });
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
   const [showStructuralEdges, setShowStructuralEdges] = useState(true);
-  const [showCharacterRelations, setShowCharacterRelations] = useState(true);
   const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
   const [focusedNodeId, setFocusedNodeId] = useState(null);
@@ -156,7 +147,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
   const [expandedNodeIds, setExpandedNodeIds] = useState(
     () => initialViewState?.expandedNodeIds ?? new Set(),
   );
-  const [satelliteExpandedNodeIds, setSatelliteExpandedNodeIds] = useState(() => new Set());
   // 展开/收起时记录操作节点与操作前的坐标，用于布局后的整体平移补偿
   const [layoutAnchor, setLayoutAnchor] = useState(null);
   const contextMenuRef = useRef(null);
@@ -208,7 +198,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
 
     const restored = loadViewState(workId, localViewStorage());
     setExpandedNodeIds(restored?.expandedNodeIds ?? new Set());
-    setSatelliteExpandedNodeIds(new Set());
     // viewport 只能在挂载时经 defaultViewport 恢复，此处仅接管后续保存的基准
     viewportRef.current = restored?.viewport ?? null;
   }, [workId]);
@@ -519,12 +508,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     const srcNode = nodesRef.current.find((n) => n.id === connection.source);
     const tgtNode = nodesRef.current.find((n) => n.id === connection.target);
 
-    if (srcRel || tgtRel) {
-      if (!srcRel || !tgtRel) return false;
-      return srcNode?.data?.type === "character" && tgtNode?.data?.type === "character";
-    }
-
-    if (srcNode?.data?.type === "character" && tgtNode?.data?.type === "character") {
+    // 角色暂不进画布；角色关系线本期不接；任一端是 character 或 rel handle 一律拒绝
+    if (srcRel || tgtRel) return false;
+    if (srcNode?.data?.type === "character" || tgtNode?.data?.type === "character") {
       return false;
     }
     // 同级、跨级与反向的层级链组合都会被后端拒绝，这里提前挡住，避免拖出连线后再失败
@@ -720,9 +706,8 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       index: graphIndex,
       expandedNodeIds,
       focusNodeId: focusedNodeId,
-      satelliteExpandedNodeIds,
     }),
-    [graphIndex, expandedNodeIds, focusedNodeId, satelliteExpandedNodeIds],
+    [graphIndex, expandedNodeIds, focusedNodeId],
   );
 
   const layoutPositions = useMemo(
@@ -730,7 +715,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       index: graphIndex,
       visibleNodeIds: visibleGraph.visibleNodeIds,
       depthById: visibleGraph.depthById,
-      satelliteAnchorById: visibleGraph.satelliteAnchorById,
       previousPositions: layoutAnchor?.positions ?? null,
       anchorNodeId: layoutAnchor?.nodeId ?? null,
     }),
@@ -767,22 +751,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     });
     setExpandedNodeIds((prev) => toggleExpanded(prev, nodeId));
   }, []);
-
-  const handleSatelliteToggle = useCallback((nodeId) => {
-    setLayoutAnchor({
-      nodeId,
-      positions: new Map(layoutPositionsRef.current),
-    });
-    setSatelliteExpandedNodeIds((prev) => toggleSatelliteExpanded(prev, nodeId));
-  }, []);
-
-  const relatedCharacterNodeIds = useMemo(() => {
-    const ids = new Set();
-    for (const node of graphIndex.nodes) {
-      if (hasRelatedCharacters(graphIndex, node.id)) ids.add(node.id);
-    }
-    return ids;
-  }, [graphIndex]);
 
   const persistViewState = useCallback(
     (expanded) => {
@@ -840,22 +808,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
     [visibleGraph, focusedNodeId, showStructuralEdges],
   );
 
-  const visibleCharacterRelations = useMemo(
-    () => {
-      if (!showCharacterRelations) return [];
-      const onCanvas = characterRelations.filter(
-        (edge) =>
-          visibleGraph.visibleNodeIds.has(edge.source) &&
-          visibleGraph.visibleNodeIds.has(edge.target),
-      );
-      return focusedNodeId
-        ? onCanvas.filter(
-          (edge) => edge.source === focusedNodeId || edge.target === focusedNodeId,
-        )
-        : onCanvas;
-    },
-    [characterRelations, visibleGraph, focusedNodeId, showCharacterRelations],
-  );
+  const visibleCharacterRelations = useMemo(() => [], []);
 
   const displayStructuralEdges = useMemo(
     () => applyEdgeLabelAvoidance(
@@ -884,9 +837,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
-      satelliteExpandedNodeIds,
-      relatedCharacterNodeIds,
-      handleSatelliteToggle,
     ),
     [
       handleNodeClick,
@@ -896,9 +846,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
-      satelliteExpandedNodeIds,
-      relatedCharacterNodeIds,
-      handleSatelliteToggle,
     ],
   );
 
@@ -921,17 +868,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
             }`}
           >
             结构线
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCharacterRelations((v) => !v)}
-            className={`rounded px-2 py-1 text-xs border shadow-sm transition-colors ${
-              showCharacterRelations
-                ? "bg-rose-50 border-rose-200 text-rose-700"
-                : "bg-slate-100 border-slate-200 text-slate-400"
-            }`}
-          >
-            角色关系线
           </button>
         </div>
         <ReactFlow
@@ -1019,7 +955,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext }
       <IsolatedNodePanel nodes={nodes} onSelect={handleNodeClick} />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer node={selectedNode} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
+      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
     </div>
   );
 });

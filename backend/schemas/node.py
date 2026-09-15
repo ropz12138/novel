@@ -36,6 +36,13 @@ class NodeUpdate(BaseModel):
         None,
         description="仅 chapter 节点：替换 extra_data.chapter_elements，保留 extra_data 中的其它字段",
     )
+    characters: Optional[List[dict]] = Field(
+        None,
+        description=(
+            "仅 chapter 节点：替换 extra_data.characters。"
+            "每项必须含 id（character 节点 ID）与 name（角色名）"
+        ),
+    )
     storylines: Optional[List[dict]] = Field(
         None,
         description="仅 character 节点：替换 extra_data.storylines，保留 extra_data 中的其它字段",

@@ -1,5 +1,13 @@
 import { Children, useState, useEffect, useLayoutEffect, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight, Check, Undo2 } from "lucide-react";
+import {
+  buildStackedInlineDiffBlocks,
+  contentAfterBatches,
+  hydrateDiffBatches,
+  pendingHunksFromBatches,
+  setAllHunkStatusInBatches,
+  setHunkStatusInBatches,
+} from "../../lib/inlineContentDiff";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
@@ -194,6 +202,33 @@ function useRememberedDetailScroll(nodeId) {
   return scrollRef;
 }
 
+function ChapterCharactersBar({ characters }) {
+  if (!Array.isArray(characters) || characters.length === 0) return null;
+
+  return (
+    <div className="mb-6 rounded-lg border border-pink-200 bg-pink-50/70 px-4 py-3 text-left">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-pink-700">出场角色</h2>
+        <span className="text-xs text-pink-700/70">{characters.length} 人</span>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {characters.map((character, index) => {
+          const name = character?.name;
+          if (!name) return null;
+          return (
+            <span
+              key={character?.id || `${name}-${index}`}
+              className="inline-flex max-w-full items-center rounded-full border border-pink-200 bg-white px-3 py-1 text-xs font-medium text-pink-900 shadow-sm"
+            >
+              <span className="truncate">{name}</span>
+            </span>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function ChapterElementsBar({ elements }) {
   if (!Array.isArray(elements) || elements.length === 0) return null;
 
@@ -222,12 +257,79 @@ function ChapterElementsBar({ elements }) {
   );
 }
 
-function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect }) {
+function InlineDiffHunk({ hunk, onAccept, onReject }) {
+  const type = hunk.type || "replace";
+  return (
+    <section data-testid="inline-diff-hunk" className="my-4 overflow-hidden rounded-lg border border-blue-200">
+      <div className="flex items-center justify-end gap-1 border-b border-blue-100 bg-blue-50 px-2 py-1">
+        <button
+          type="button"
+          aria-label="保留修改"
+          onClick={onAccept}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+        >
+          <Check className="h-3.5 w-3.5" />
+          保留修改
+        </button>
+        <button
+          type="button"
+          aria-label="撤回修改"
+          onClick={onReject}
+          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+        >
+          <Undo2 className="h-3.5 w-3.5" />
+          撤回修改
+        </button>
+      </div>
+      {type !== "insert_after" && hunk.old_text ? (
+        <div className="bg-red-50 px-3 py-2 text-red-900">
+          <div className="mb-1 text-[11px] text-red-600">原文</div>
+          <div className="whitespace-pre-wrap leading-relaxed line-through decoration-red-400/70">{hunk.old_text}</div>
+        </div>
+      ) : null}
+      {type !== "delete" && hunk.new_text ? (
+        <div className="bg-emerald-50 px-3 py-2 text-emerald-950">
+          <div className="mb-1 text-[11px] text-emerald-700">新文</div>
+          <div className="whitespace-pre-wrap leading-relaxed">{hunk.new_text}</div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk }) {
+  const pending = pendingHunksFromBatches(batches);
+  if (!pending.length) {
+    return content ? <MarkdownRenderer content={content} /> : <p className="whitespace-pre-wrap">暂无内容</p>;
+  }
+
+  const blocks = buildStackedInlineDiffBlocks(batches);
+  return (
+    <div className="space-y-1">
+      {blocks.map((block, index) => {
+        if (block.kind === "paragraph") {
+          return <MarkdownRenderer key={`p-${index}`} content={block.text} />;
+        }
+        return (
+          <InlineDiffHunk
+            key={`h-${block.batchIndex}-${block.hunkIndex}`}
+            hunk={block.hunk}
+            onAccept={() => onAcceptHunk(block.batchIndex, block.hunkIndex)}
+            onReject={() => onRejectHunk(block.batchIndex, block.hunkIndex)}
+          />
+        );
+      })}
+    </div>
+  );
+}
+
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
   const wordCount = (node.content || "").replace(/\s+/g, "").length;
   const chapterElements = node.extra_data?.chapter_elements || [];
+  const chapterCharacters = node.extra_data?.characters || [];
 
   return (
     <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
@@ -256,11 +358,17 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
           </div>
         </div>
 
+        <ChapterCharactersBar characters={chapterCharacters} />
         <ChapterElementsBar elements={chapterElements} />
 
         <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none font-serif`}>
           <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
-            {node.content ? <MarkdownRenderer content={node.content} /> : <p className="whitespace-pre-wrap">暂无内容</p>}
+            <NodeContentBody
+              content={node.content}
+              batches={batches}
+              onAcceptHunk={onAcceptHunk}
+              onRejectHunk={onRejectHunk}
+            />
           </div>
         </div>
 
@@ -348,7 +456,7 @@ function StorylinesPanel({ storylines }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef, onTextSelect }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
 
@@ -367,13 +475,18 @@ function DefaultNodeView({ node, scrollRef, onTextSelect }) {
           </div>
         </div>
 
-        {node.content && (
+        {(node.content || pendingHunksFromBatches(batches).length > 0) && (
           <div>
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
               内容
             </h4>
             <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-lg p-4">
-              <MarkdownRenderer content={node.content} />
+              <NodeContentBody
+                content={node.content}
+                batches={batches}
+                onAcceptHunk={onAcceptHunk}
+                onRejectHunk={onRejectHunk}
+              />
             </div>
           </div>
         )}
@@ -538,7 +651,7 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, chapterNodes, onChapterNavigate }) {
+function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
@@ -558,12 +671,14 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
   );
   const [saving, setSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  const [selectedText, setSelectedText] = useState("");
+  const [diffBatches, setDiffBatches] = useState(() => hydrateDiffBatches(node.content || "", contentDiff).batches);
+  const selectedTextRef = useRef("");
+  const addContextButtonRef = useRef(null);
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
 
   useEffect(() => {
     setIsEditing(false);
-    setSelectedText("");
+    selectedTextRef.current = "";
     setEditTitle(node.label);
     setEditContent(node.content || "");
     setEditChapterElements(
@@ -581,6 +696,10 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
         : []
     );
   }, [node]);
+
+  useEffect(() => {
+    setDiffBatches(hydrateDiffBatches(node.content || "", contentDiff).batches);
+  }, [contentDiff]);
 
   const handleSave = async () => {
     const payload = { title: editTitle, content: editContent };
@@ -614,17 +733,63 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
     if (!selection || selection.rangeCount === 0) return;
     const range = selection.getRangeAt(0);
     if (!event.currentTarget.contains(range.commonAncestorContainer)) return;
-    setSelectedText(selection.toString().trim());
+    const selectedText = selection.toString().trim();
+    selectedTextRef.current = selectedText;
+    const label = selectedText ? "加入选中文本到对话上下文" : "加入对话上下文";
+    addContextButtonRef.current?.setAttribute("title", label);
+    addContextButtonRef.current?.setAttribute("aria-label", label);
   };
 
   const handleAddContext = () => {
-    onAddContext?.(node, selectedText || undefined);
-    setSelectedText("");
+    onAddContext?.(node, selectedTextRef.current || undefined);
+    selectedTextRef.current = "";
+    addContextButtonRef.current?.setAttribute("title", "加入对话上下文");
+    addContextButtonRef.current?.setAttribute("aria-label", "加入对话上下文");
   };
+
+  const persistBatches = (nextBatches) => {
+    setDiffBatches(nextBatches);
+    if (!pendingHunksFromBatches(nextBatches).length) {
+      onContentDiffChange?.(null);
+      return;
+    }
+    onContentDiffChange?.({
+      ...contentDiff,
+      original_content: nextBatches[0]?.original_content,
+      batches: nextBatches,
+      hunks: pendingHunksFromBatches(nextBatches),
+    });
+  };
+
+  const applyHunkDecisions = async (nextBatches) => {
+    const nextContent = contentAfterBatches(nextBatches);
+    if (nextContent !== (node.content || "")) {
+      await onUpdate?.(node.id, { content: nextContent });
+    }
+    persistBatches(nextBatches);
+  };
+
+  const handleAcceptHunk = (batchIndex, hunkIndex) => {
+    applyHunkDecisions(setHunkStatusInBatches(diffBatches, batchIndex, hunkIndex, "accepted"));
+  };
+
+  const handleRejectHunk = (batchIndex, hunkIndex) => {
+    applyHunkDecisions(setHunkStatusInBatches(diffBatches, batchIndex, hunkIndex, "rejected"));
+  };
+
+  const handleAcceptAll = () => {
+    applyHunkDecisions(setAllHunkStatusInBatches(diffBatches, "accepted"));
+  };
+
+  const handleRejectAll = () => {
+    applyHunkDecisions(setAllHunkStatusInBatches(diffBatches, "rejected"));
+  };
+
+  const pendingDiffCount = pendingHunksFromBatches(diffBatches).length;
 
   return (
     <div
-      className={`relative flex flex-col bg-white shadow-xl animate-in slide-in-from-left ${
+      className={`nodrag nopan nowheel select-text relative flex flex-col bg-white shadow-xl animate-in slide-in-from-left ${
         isFullscreen
           ? "h-full w-full"
           : isEditing || isChapter || isCharacter
@@ -640,6 +805,26 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
           </span>
         </div>
         <div className="flex items-center gap-1">
+          {!isEditing && pendingDiffCount > 0 && (
+            <div className="mr-1 flex items-center gap-1">
+              <button
+                type="button"
+                aria-label="全部保留修改"
+                onClick={handleAcceptAll}
+                className="rounded-md px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+              >
+                全部保留修改
+              </button>
+              <button
+                type="button"
+                aria-label="全部撤回修改"
+                onClick={handleRejectAll}
+                className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+              >
+                全部撤回修改
+              </button>
+            </div>
+          )}
           {isEditing ? (
             <>
               <button
@@ -660,10 +845,11 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
             <>
               {onAddContext && (
                 <button
+                  ref={addContextButtonRef}
                   onClick={handleAddContext}
                   className="p-1.5 rounded-md text-gray-400 hover:text-amber-500 hover:bg-amber-50 transition-colors"
-                  title={selectedText ? "加入选中文本到对话上下文" : "加入对话上下文"}
-                  aria-label={selectedText ? "加入选中文本到对话上下文" : "加入对话上下文"}
+                  title="加入对话上下文"
+                  aria-label="加入对话上下文"
                 >
                   <MessageSquarePlus className="w-4 h-4" />
                 </button>
@@ -765,22 +951,37 @@ function NodeDetailDrawerInner({ node, onClose, onDelete, onUpdate, onAddContext
           onStorylinesChange={setEditStorylines}
         />
       ) : isChapter ? (
-        <ChapterReadingView node={node} scrollRef={detailScrollRef} isFullscreen={isFullscreen} onTextSelect={handleTextSelect} />
+        <ChapterReadingView
+          node={node}
+          scrollRef={detailScrollRef}
+          isFullscreen={isFullscreen}
+          onTextSelect={handleTextSelect}
+          batches={diffBatches}
+          onAcceptHunk={handleAcceptHunk}
+          onRejectHunk={handleRejectHunk}
+        />
       ) : (
-        <DefaultNodeView node={node} scrollRef={detailScrollRef} onTextSelect={handleTextSelect} />
+        <DefaultNodeView
+          node={node}
+          scrollRef={detailScrollRef}
+          onTextSelect={handleTextSelect}
+          batches={diffBatches}
+          onAcceptHunk={handleAcceptHunk}
+          onRejectHunk={handleRejectHunk}
+        />
       )}
     </div>
   );
 }
 
-export default function NodeDetailDrawer({ node, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, chapterNodes = [], onChapterNavigate }) {
+export default function NodeDetailDrawer({ node, contentDiff, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
-      <NodeDetailDrawerInner node={node} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
+      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
     </div>
   );
 }
