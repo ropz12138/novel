@@ -257,11 +257,11 @@ function ChapterElementsBar({ elements }) {
   );
 }
 
-function InlineDiffHunk({ hunk, onAccept, onReject }) {
+function InlineDiffHunk({ hunk, onAccept, onReject, readOnly = false }) {
   const type = hunk.type || "replace";
   return (
     <section data-testid="inline-diff-hunk" className="my-4 overflow-hidden rounded-lg border border-blue-200">
-      <div className="flex items-center justify-end gap-1 border-b border-blue-100 bg-blue-50 px-2 py-1">
+      {!readOnly && <div className="flex items-center justify-end gap-1 border-b border-blue-100 bg-blue-50 px-2 py-1">
         <button
           type="button"
           aria-label="保留修改"
@@ -280,7 +280,7 @@ function InlineDiffHunk({ hunk, onAccept, onReject }) {
           <Undo2 className="h-3.5 w-3.5" />
           撤回修改
         </button>
-      </div>
+      </div>}
       {type !== "insert_after" && hunk.old_text ? (
         <div className="bg-red-50 px-3 py-2 text-red-900">
           <div className="mb-1 text-[11px] text-red-600">原文</div>
@@ -297,7 +297,7 @@ function InlineDiffHunk({ hunk, onAccept, onReject }) {
   );
 }
 
-function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk }) {
+function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnly = false }) {
   const pending = pendingHunksFromBatches(batches);
   if (!pending.length) {
     return content ? <MarkdownRenderer content={content} /> : <p className="whitespace-pre-wrap">暂无内容</p>;
@@ -314,6 +314,7 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk }) {
           <InlineDiffHunk
             key={`h-${block.batchIndex}-${block.hunkIndex}`}
             hunk={block.hunk}
+            readOnly={readOnly}
             onAccept={() => onAcceptHunk(block.batchIndex, block.hunkIndex)}
             onReject={() => onRejectHunk(block.batchIndex, block.hunkIndex)}
           />
@@ -323,7 +324,7 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk }) {
   );
 }
 
-function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk }) {
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
@@ -368,6 +369,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
               batches={batches}
               onAcceptHunk={onAcceptHunk}
               onRejectHunk={onRejectHunk}
+              readOnly={readOnlyDiff}
             />
           </div>
         </div>
@@ -456,7 +458,7 @@ function StorylinesPanel({ storylines }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
 
@@ -486,6 +488,7 @@ function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAccept
                 batches={batches}
                 onAcceptHunk={onAcceptHunk}
                 onRejectHunk={onRejectHunk}
+                readOnly={readOnlyDiff}
               />
             </div>
           </div>
@@ -651,7 +654,7 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
+function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
@@ -786,6 +789,7 @@ function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate,
   };
 
   const pendingDiffCount = pendingHunksFromBatches(diffBatches).length;
+  const isDiffPreview = contentDiff?.preview === true && agentRunning !== false;
 
   return (
     <div
@@ -805,7 +809,7 @@ function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate,
           </span>
         </div>
         <div className="flex items-center gap-1">
-          {!isEditing && pendingDiffCount > 0 && (
+          {!isEditing && pendingDiffCount > 0 && !isDiffPreview && (
             <div className="mr-1 flex items-center gap-1">
               <button
                 type="button"
@@ -824,6 +828,11 @@ function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate,
                 全部撤回修改
               </button>
             </div>
+          )}
+          {!isEditing && pendingDiffCount > 0 && isDiffPreview && (
+            <span className="mr-1 rounded-full bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700">
+              生成预览
+            </span>
           )}
           {isEditing ? (
             <>
@@ -959,6 +968,7 @@ function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate,
           batches={diffBatches}
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
+          readOnlyDiff={isDiffPreview}
         />
       ) : (
         <DefaultNodeView
@@ -968,20 +978,21 @@ function NodeDetailDrawerInner({ node, contentDiff, onClose, onDelete, onUpdate,
           batches={diffBatches}
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
+          readOnlyDiff={isDiffPreview}
         />
       )}
     </div>
   );
 }
 
-export default function NodeDetailDrawer({ node, contentDiff, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
+export default function NodeDetailDrawer({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
-      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
+      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
     </div>
   );
 }

@@ -4,6 +4,7 @@ import { API_BASE } from "../lib/runtime-config";
 import { sessionApi } from "../lib/api";
 import { normalizeTodoItem } from "../lib/sseEventHandlers";
 import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards";
+import { buildContentDiffFromContents } from "../lib/inlineContentDiff";
 
 /**
  * Custom hook encapsulating Supervisor chat logic for Canvas AgentChat.
@@ -33,6 +34,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
   const assistantDraftRef = useRef("");
   const [assistantReasoningDraft, setAssistantReasoningDraft] = useState("");
   const assistantReasoningDraftRef = useRef("");
+  const contentPreviewRef = useRef(new Map());
   const timelineIdRef = useRef(0);
   const sseRef = useRef(null);
   const sseCompletedRef = useRef(false);
@@ -274,10 +276,48 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         if (onNodesUpdate) onNodesUpdate();
         break;
 
+      case "node_content_diff_preview": {
+        const nodeId = d.node_id;
+        if (!nodeId) break;
+        if (d.phase === "start") {
+          contentPreviewRef.current.set(nodeId, {
+            node_id: nodeId,
+            node_type: d.node_type || "chapter",
+            title: d.title || "",
+            original_content: d.original_content || "",
+            current_content: "",
+          });
+          break;
+        }
+        const preview = contentPreviewRef.current.get(nodeId);
+        if (!preview) break;
+        if (d.phase === "delta") preview.current_content += d.chunk || "";
+        if (d.phase === "complete") preview.current_content = d.current_content || preview.current_content;
+        const hunks = buildContentDiffFromContents(
+          preview.original_content,
+          preview.current_content,
+        );
+        const charsAdded = hunks.reduce((sum, hunk) => sum + (hunk.new_text || "").length, 0);
+        const charsRemoved = hunks.reduce((sum, hunk) => sum + (hunk.old_text || "").length, 0);
+        onNodeContentDiff?.(nodeId, {
+          ...preview,
+          preview: true,
+          preview_phase: d.phase,
+          hunks,
+          summary: {
+            paragraphs_changed: hunks.length,
+            chars_added: charsAdded,
+            chars_removed: charsRemoved,
+          },
+        });
+        break;
+      }
+
       case "chapter_edit_diff":
       case "node_content_diff": {
         const nodeId = d.node_id || d.chapter_node_id;
         const nodeType = d.node_type || (ev === "chapter_edit_diff" ? "chapter" : undefined);
+        contentPreviewRef.current.delete(nodeId);
         finalizeAllRunningSteps();
         addMessage("assistant", "", {
           type: "chapter_content_diff_card",
@@ -532,7 +572,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 
   // ── handleSend ──
 
-  const handleSend = useCallback((overrideMsg) => {
+  const handleSend = useCallback((overrideMsg, chapterReviewIntensity = "low") => {
     if (running) return;
 
     const raw = (overrideMsg ?? input).trim();
@@ -546,16 +586,18 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
       connectSSE(`${API_BASE}/supervisor/start`, {
         message: raw,
         work_id: workId,
+        chapter_review_intensity: chapterReviewIntensity,
       });
     } else {
       connectSSE(`${API_BASE}/supervisor/resume`, {
         session_id: sid,
         message: raw,
+        chapter_review_intensity: chapterReviewIntensity,
       });
     }
   }, [running, input, addMessage, connectSSE, workId]);
 
-  const handleEditResend = useCallback((dbMessageId, newContent) => {
+  const handleEditResend = useCallback((dbMessageId, newContent, chapterReviewIntensity = "low") => {
     if (running) return;
     const trimmed = (newContent || "").trim();
     if (!trimmed || !dbMessageId) return;
@@ -567,6 +609,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
       session_id: sid,
       message_id: dbMessageId,
       message: trimmed,
+      chapter_review_intensity: chapterReviewIntensity,
     });
   }, [running, connectSSE]);
 
@@ -659,32 +702,11 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 // ── Helpers ──
 
 export function restoreNodeContentDiffsFromTimeline(
-  timeline,
+  _timeline,
   onReset,
-  onNodeContentDiff,
+  _onNodeContentDiff,
 ) {
   onReset?.();
-  if (!onNodeContentDiff) return;
-
-  for (const item of timeline || []) {
-    if (item?.type !== "chapter_content_diff_card") continue;
-    const card = item.chapterContentDiffCard;
-    const nodeId = card?.node_id || card?.chapter_node_id;
-    if (!nodeId || !card?.hunks?.length) continue;
-    onNodeContentDiff(nodeId, {
-      node_id: nodeId,
-      node_type: card.node_type,
-      title: card.title,
-      hunks: card.hunks,
-      summary: card.summary || {},
-      original_content: card.original_content,
-      current_content: card.current_content,
-      text_count: card.text_count,
-      text_count_delta: card.text_count_delta,
-      word_count: card.word_count,
-      word_count_delta: card.word_count_delta,
-    });
-  }
 }
 
 /** op-4.8 等模型在连续 tool_call 时常用 "..." / "…" 作为无意义正文占位。 */

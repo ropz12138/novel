@@ -3,7 +3,7 @@ import json
 import asyncio
 import logging
 from datetime import datetime
-from typing import List, Optional
+from typing import List, Optional, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -13,6 +13,7 @@ from database import SessionLocal
 from models.user import User
 from routers.auth import get_current_user
 from services.agents.supervisor import supervisor_agent
+from services.agents.chapter_review_policy import ChapterReviewPolicy, current_chapter_review_policy
 from services.canvas_checkpoint_service import capture_canvas_checkpoint, prepare_edit_resend
 from services.session_store import session_store
 from services.supervisor_event_persist import persist_supervisor_event_safe
@@ -27,12 +28,14 @@ class SupervisorStartRequest(BaseModel):
     message: str
     work_id: Optional[str] = None
     context_node_ids: Optional[List[str]] = None
+    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
 
 
 class SupervisorResumeRequest(BaseModel):
     session_id: str
     message: str
     context_node_ids: Optional[List[str]] = None
+    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
 
 
 class SupervisorEditResendRequest(BaseModel):
@@ -40,6 +43,7 @@ class SupervisorEditResendRequest(BaseModel):
     message_id: str
     message: str
     context_node_ids: Optional[List[str]] = None
+    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
 
 
 def _sse_format(event: str, data: dict) -> str:
@@ -107,6 +111,9 @@ async def _execute_supervisor_run(
     context: dict,
     wrapped_emit,
 ) -> None:
+    review_policy_token = current_chapter_review_policy.set(
+        ChapterReviewPolicy(context.get("chapter_review_intensity", "low"))
+    )
     try:
         result = await supervisor_agent.run(
             user_message,
@@ -115,7 +122,9 @@ async def _execute_supervisor_run(
         )
         if not result.get("success", False):
             raise RuntimeError(result.get("error") or "Supervisor 执行失败")
-        session_store.update_session(session_id, stage="done", status="completed")
+        workflow_status = result.get("workflow_status")
+        session_status = workflow_status if workflow_status in {"needs_user", "needs_revision"} else "completed"
+        session_store.update_session(session_id, stage="done", status=session_status)
         _advance_watermark_from_context(context)
     except asyncio.CancelledError:
         session_store.mark_session_interrupted(session_id)
@@ -127,6 +136,8 @@ async def _execute_supervisor_run(
     except Exception as e:
         await wrapped_emit("error", {"message": str(e)})
         session_store.update_session(session_id, stage="done", status="error")
+    finally:
+        current_chapter_review_policy.reset(review_policy_token)
 
 
 def _advance_watermark_from_context(context: dict) -> None:
@@ -153,6 +164,7 @@ def _stream_supervisor_run(
     work_id: Optional[str],
     user_id: str,
     context_node_ids: Optional[List[str]],
+    chapter_review_intensity: Literal["low", "medium", "high"] = "low",
     emit_session_created: bool = True,
     user_message_id: Optional[str] = None,
     user_actions_message: Optional[dict] = None,
@@ -170,6 +182,7 @@ def _stream_supervisor_run(
                 "work_id": work_id,
                 "session_id": session_id,
                 "context_node_ids": context_node_ids,
+                "chapter_review_intensity": chapter_review_intensity,
                 "run_started_at": run_started_at,
             }
             await _execute_supervisor_run(
@@ -240,6 +253,7 @@ async def start_supervisor(
         work_id=payload.work_id,
         user_id=user.id,
         context_node_ids=payload.context_node_ids,
+        chapter_review_intensity=payload.chapter_review_intensity,
         user_message_id=user_msg["id"] if user_msg else None,
         user_actions_message=user_actions_message,
     )
@@ -273,6 +287,7 @@ async def resume_supervisor(
         work_id=session.get("work_id"),
         user_id=user.id,
         context_node_ids=payload.context_node_ids,
+        chapter_review_intensity=payload.chapter_review_intensity,
         emit_session_created=True,
         user_message_id=user_msg["id"] if user_msg else None,
         user_actions_message=user_actions_message,
@@ -317,6 +332,7 @@ async def edit_resend_supervisor(
         work_id=work_id,
         user_id=user.id,
         context_node_ids=payload.context_node_ids,
+        chapter_review_intensity=payload.chapter_review_intensity,
         emit_session_created=False,
         pre_run_events=[
             ("canvas_restored", {"message_id": payload.message_id}),

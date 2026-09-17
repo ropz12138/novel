@@ -224,6 +224,110 @@ describe("NodeDetailDrawer", () => {
     expect(onContentDiffChange).toHaveBeenCalledWith(null);
   });
 
+  it("shows streaming preview diffs without apply or revert actions", () => {
+    const node = {
+      id: "chapter-preview",
+      type: "chapter",
+      label: "第一章",
+      content: "旧文",
+      extra_data: {},
+    };
+    render(
+      <NodeDetailDrawer
+        node={node}
+        contentDiff={{
+          preview: true,
+          original_content: "旧文",
+          current_content: "新文",
+          hunks: [{
+            type: "replace",
+            paragraph_index: 1,
+            old_text: "旧文",
+            new_text: "新文",
+          }],
+        }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("生成预览")).toBeDefined();
+    expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "保留修改" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "撤回修改" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "全部保留修改" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "全部撤回修改" })).toBeNull();
+  });
+
+  it("keeps preview diffs read-only while the agent is still running", () => {
+    render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-preview",
+          type: "chapter",
+          label: "第一章",
+          content: "旧文",
+          extra_data: {},
+        }}
+        contentDiff={{
+          preview: true,
+          original_content: "旧文",
+          current_content: "新文",
+          hunks: [{
+            type: "replace",
+            paragraph_index: 1,
+            old_text: "旧文",
+            new_text: "新文",
+          }],
+        }}
+        agentRunning
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText("生成预览")).toBeDefined();
+    expect(screen.queryByRole("button", { name: "保留修改" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "撤回修改" })).toBeNull();
+  });
+
+  it("does not write again when accepting a full-chapter insert that is already saved", async () => {
+    const chapter = "第一段。\n\n第二段。\n\n第三段。";
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-3",
+          type: "chapter",
+          label: "第三章",
+          content: chapter,
+          extra_data: {},
+        }}
+        contentDiff={{
+          original_content: "",
+          current_content: chapter,
+          hunks: [{
+            type: "insert_after",
+            paragraph_index: 0,
+            old_text: "",
+            new_text: chapter,
+          }],
+        }}
+        agentRunning={false}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+        onContentDiffChange={onContentDiffChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "全部保留修改" }));
+    await waitFor(() => {
+      expect(onContentDiffChange).toHaveBeenCalledWith(null);
+    });
+    expect(onUpdate).not.toHaveBeenCalled();
+  });
+
   it("reverts a single pending hunk back to the original paragraph", async () => {
     const node = {
       id: "plot-2",

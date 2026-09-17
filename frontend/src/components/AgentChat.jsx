@@ -17,7 +17,7 @@ const NODE_PILL_COLORS = {
   element: "#d97706",
 };
 
-export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, insertPillRef }) {
+export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onRunningChange, insertPillRef }) {
   const chat = useSupervisorChat({
     workId,
     callbacks: {
@@ -28,8 +28,14 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     },
   });
 
+  useEffect(() => {
+    onRunningChange?.(chat.running);
+    return () => onRunningChange?.(false);
+  }, [chat.running, onRunningChange]);
+
   const inputRef = useRef(null);
   const [hasInput, setHasInput] = useState(false);
+  const [chapterReviewIntensity, setChapterReviewIntensity] = useState("low");
 
   const serializeContentEditable = useCallback((el) => {
     let result = "";
@@ -154,8 +160,8 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     el.innerHTML = "";
     el.setAttribute("data-empty", "");
     setHasInput(false);
-    chat.handleSend(serialized);
-  }, [chat.running, chat.handleSend, serializeContentEditable]);
+    chat.handleSend(serialized, chapterReviewIntensity);
+  }, [chat.running, chat.handleSend, chapterReviewIntensity, serializeContentEditable]);
 
   const onInput = useCallback(() => {
     const el = inputRef.current;
@@ -373,7 +379,7 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
             assistantDraft={chat.assistantDraft}
             running={chat.running}
             onToggleStep={chat.toggleStepPanel}
-            onEditMessage={chat.handleEditResend}
+            onEditMessage={(messageId, content) => chat.handleEditResend(messageId, content, chapterReviewIntensity)}
           />
 
           {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.assistantDraft && !chat.assistantReasoningDraft && (
@@ -398,9 +404,25 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
 
       {/* 输入框 */}
       <div className="shrink-0 px-3 py-3 border-t border-gray-200 bg-gray-50">
+        <label className="mb-2 flex items-center gap-2 text-xs text-gray-600">
+          章节评审强度
+          <select
+            aria-label="章节评审强度"
+            value={chapterReviewIntensity}
+            disabled={chat.running}
+            onChange={(event) => setChapterReviewIntensity(event.target.value)}
+            className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
+          >
+            <option value="low">低 · 不评审连续性和对白</option>
+            <option value="medium">中 · 各评审一次</option>
+            <option value="high">高 · 按需复评</option>
+          </select>
+        </label>
         <div className="flex items-end gap-2">
           <div
             ref={inputRef}
+            role="textbox"
+            aria-label="创作指令"
             contentEditable={!chat.running}
             onInput={onInput}
             onKeyDown={(e) => {

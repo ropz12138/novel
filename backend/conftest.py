@@ -27,6 +27,7 @@ import models.todo_item  # noqa: E402, F401
 import models.canvas_checkpoint  # noqa: E402, F401
 import models.user_canvas_action  # noqa: E402, F401
 import models.research  # noqa: E402, F401
+import models.workflow  # noqa: E402, F401
 
 
 def _ensure_test_db(db_name: str = "novel_test") -> str:

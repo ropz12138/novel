@@ -13,6 +13,7 @@ import {
   accumulateNodeContentDiff,
   hydrateDiffBatches,
   setHunkStatusInBatches,
+  setAllHunkStatusInBatches,
   buildContentDiffFromContents,
 } from "./inlineContentDiff";
 
@@ -198,5 +199,27 @@ describe("inlineContentDiff", () => {
     const hydrated = hydrateDiffBatches("开场改。\n\n第二段。\n\n第三段。", diff);
     expect(hydrated.original_content).toBe(ORIGINAL);
     expect(hydrated.batches[0].original_content).toBe(ORIGINAL);
+  });
+
+  it("keeps an empty original when hydrating a full-chapter insert already on the node", () => {
+    const chapter = "第一段。\n\n第二段。\n\n第三段。";
+    const hunks = buildContentDiffFromContents("", chapter);
+    const hydrated = hydrateDiffBatches(chapter, {
+      original_content: "",
+      current_content: chapter,
+      hunks,
+    });
+
+    expect(hydrated.original_content).toBe("");
+    expect(contentAfterBatches(hydrated.batches)).toBe(chapter);
+    expect(contentAfterBatches(setAllHunkStatusInBatches(hydrated.batches, "accepted"))).toBe(chapter);
+  });
+
+  it("reverses a multi-paragraph insert_after without leaving leftover paragraphs", () => {
+    const inserted = "文首一。\n\n文首二。";
+    const hunks = [{ type: "insert_after", paragraph_index: 0, new_text: inserted }];
+    const next = applyHunks(ORIGINAL, hunks);
+    expect(next).toBe(`${inserted}\n\n${ORIGINAL}`);
+    expect(reverseHunks(next, hunks)).toBe(ORIGINAL);
   });
 });

@@ -66,7 +66,22 @@ describe("useSupervisorChat", () => {
     expect(JSON.parse(request.body)).toEqual({
       message: "创建大纲",
       work_id: "w1",
+      chapter_review_intensity: "low",
     });
+  });
+
+  it("sends the selected chapter review intensity", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current.handleSend("写第一章", "high"));
+    expect(JSON.parse(authFetchCalls[0][1].body).chapter_review_intensity).toBe("high");
+  });
+
+  it("keeps the selected intensity when resuming a session", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current._testOnSSE("session_created", { session_id: "session-1" }));
+    act(() => result.current.handleSend("继续写", "medium"));
+    expect(authFetchCalls[0][0]).toBe("/api/supervisor/resume");
+    expect(JSON.parse(authFetchCalls[0][1].body).chapter_review_intensity).toBe("medium");
   });
 
   it("inserts the stored user actions message before the optimistic user message", () => {
@@ -248,6 +263,37 @@ describe("useSupervisorChat", () => {
     }));
   });
 
+  it("streams a read-only node content diff preview", () => {
+    const onNodeContentDiff = vi.fn();
+    const { result } = renderHook(() => useSupervisorChat({
+      workId: "w1",
+      callbacks: { onNodeContentDiff },
+    }));
+
+    act(() => {
+      result.current._testOnSSE("node_content_diff_preview", {
+        phase: "start",
+        node_id: "chapter-1",
+        node_type: "chapter",
+        title: "第一章",
+        original_content: "旧文",
+      });
+      result.current._testOnSSE("node_content_diff_preview", {
+        phase: "delta",
+        node_id: "chapter-1",
+        chunk: "新文",
+      });
+    });
+
+    expect(onNodeContentDiff).toHaveBeenLastCalledWith("chapter-1", expect.objectContaining({
+      preview: true,
+      original_content: "旧文",
+      current_content: "新文",
+      hunks: [expect.objectContaining({ type: "replace", old_text: "旧文", new_text: "新文" })],
+    }));
+    expect(result.current.timeline).toEqual([]);
+  });
+
   it("applies current todolist events", () => {
     const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
 
@@ -329,7 +375,7 @@ describe("useSupervisorChat", () => {
     expect(timeline[2].chapterContentDiffCard.chapter_node_id).toBe("chapter-1");
   });
 
-  it("restores node body diffs when loading a persisted conversation", async () => {
+  it("does not replay node body diffs when loading a persisted conversation", async () => {
     const onNodeContentDiff = vi.fn();
     const onNodeContentDiffsReset = vi.fn();
     sessionApi.getSupervisorMessages.mockResolvedValueOnce([{
@@ -362,10 +408,7 @@ describe("useSupervisorChat", () => {
     });
 
     expect(onNodeContentDiffsReset).toHaveBeenCalledOnce();
-    expect(onNodeContentDiff).toHaveBeenCalledWith("plot-1", expect.objectContaining({
-      node_type: "plot",
-      hunks: [expect.objectContaining({ new_text: "新正文" })],
-    }));
+    expect(onNodeContentDiff).not.toHaveBeenCalled();
   });
 
   it("skips assistant bubbles whose content is only ellipsis placeholder", () => {

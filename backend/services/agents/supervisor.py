@@ -160,6 +160,29 @@ def _build_tool_call_parse_feedback(message) -> str:
     return "\n\n".join(sections)
 
 
+def _structured_tool_error(exc: Exception) -> str:
+    """把工具参数校验错误作为稳定契约返回给 Supervisor。"""
+    fields = []
+    errors = getattr(exc, "errors", None)
+    if callable(errors):
+        for item in errors():
+            location = item.get("loc") or []
+            fields.append({
+                "path": ".".join(str(part) for part in location),
+                "message": item.get("msg") or str(exc),
+                "type": item.get("type") or "validation_error",
+            })
+    return json.dumps({
+        "success": False,
+        "status": "failed",
+        "error": {
+            "code": "tool_argument_validation_failed",
+            "message": "工具参数不符合 Schema",
+            "fields": fields or [{"path": "", "message": str(exc), "type": "validation_error"}],
+        },
+    }, ensure_ascii=False)
+
+
 def _get_db():
     from database import SessionLocal
     return SessionLocal()
@@ -190,7 +213,7 @@ class SupervisorAgent:
     def __init__(self, emit: Optional[Callable] = None):
         self.emit = emit
 
-    def _build_system_prompt(self, context_node_ids: list | None = None) -> str:
+    def _build_system_prompt(self, context_node_ids: list | None = None, chapter_review_intensity: str = "low") -> str:
         """构建系统提示"""
         template_path = PROMPT_DIR / "supervisor_system.txt"
         template = template_path.read_text(encoding="utf-8")
@@ -205,7 +228,12 @@ class SupervisorAgent:
                 f"{ids_list}\n\n"
             )
 
-        return template.format(context_section=context_section)
+        review_instructions = {
+            "low": "本次章节评审强度为低：执行场景规划、正文生成、字数质量门、摘要和提交。",
+            "medium": "本次章节评审强度为中：连续性与对白各评审一次。汇总两项反馈；若有未通过项，完成一次合并修订后生成摘要并提交。",
+            "high": "本次章节评审强度为高：连续性与对白按写章 Skill 执行评审、修订和复检，次数随质量结果确定。",
+        }
+        return template.replace("{context_section}", context_section) + "\n\n" + review_instructions[chapter_review_intensity]
 
     def _get_tools(self):
         """单 Agent：直接挂全部操作工具，不再 dispatch 到子 agent。"""
@@ -214,12 +242,13 @@ class SupervisorAgent:
         from services.agents.tools.chapter_tools import evaluate_chapter, count_chapter_words
         from services.agents.tools.illustration_tools import insert_chapter_illustration
         from services.agents.tools.character_relation_tools import character_relation_tools
-        from services.agents.tools.todo_tools import todo_tools
         from services.agents.tools.context_tools import context_tools
         from services.agents.tools.research_tools import research_tools
         from services.agents.tools.humanizer_tools import humanizer_tools
+        from services.agents.tools.specialist_agent_tools import specialist_agent_tools
+        from services.agents.tools.workflow_agent_tools import workflow_agent_tools
 
-        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + todo_tools + context_tools + research_tools + humanizer_tools
+        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + context_tools + research_tools + humanizer_tools + specialist_agent_tools + workflow_agent_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""
@@ -288,7 +317,7 @@ class SupervisorAgent:
     def _build_graph(self, model_pref: dict | None = None, session_id: str | None = None, work_id: str | None = None):
         """构建LangGraph"""
         tools = self._get_tools()
-        tool_node = ToolNode(tools)
+        tool_node = ToolNode(tools, handle_tool_errors=_structured_tool_error)
 
         primary = model_pref.get("primary") if model_pref else None
         fallback = model_pref.get("fallback") if model_pref else None
@@ -423,7 +452,10 @@ class SupervisorAgent:
 
             graph = self._build_graph(model_pref=model_pref, session_id=session_id, work_id=work_id)
 
-            system_prompt = self._build_system_prompt(context_node_ids=context_node_ids)
+            system_prompt = self._build_system_prompt(
+                context_node_ids=context_node_ids,
+                chapter_review_intensity=context.get("chapter_review_intensity", "low") if context else "low",
+            )
 
             # 注入历史对话（多轮），让 agent 看到上文，理解"需要/好/不用了"等省略回答
             chat_history, current_turn_msgs = self._load_chat_history(session_id)
@@ -489,8 +521,17 @@ class SupervisorAgent:
                 "message": extract_text_content(getattr(last_message, "content", "")) if last_message else "",
             }
 
+            workflow_gate = get_context().get("workflow_gate")
+            if isinstance(workflow_gate, dict):
+                result["workflow_status"] = workflow_gate.get("status")
+                result["workflow_gate"] = workflow_gate
+
             if emit:
-                await emit("supervisor_done", {"message": result["message"]})
+                await emit("supervisor_done", {
+                    "message": result["message"],
+                    "workflow_status": result.get("workflow_status", "completed"),
+                    "workflow_gate": result.get("workflow_gate"),
+                })
 
             return result
 

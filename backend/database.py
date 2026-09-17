@@ -56,6 +56,7 @@ def init_db() -> None:
     import models.canvas_checkpoint
     import models.user_canvas_action
     import models.research
+    import models.workflow
     Base.metadata.create_all(bind=engine)
 
 

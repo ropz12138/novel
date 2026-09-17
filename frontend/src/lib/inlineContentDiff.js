@@ -87,13 +87,20 @@ function summarizeContentDiff(hunks, originalContent, currentContent) {
   };
 }
 
+function insertedParagraphs(hunk) {
+  return splitParagraphs(hunk.new_text || "");
+}
+
 function applySingle(paragraphs, hunk) {
   const type = hunk.type || "replace";
   const idx = hunk.paragraph_index;
   const result = [...paragraphs];
 
   if (type === "insert_after") {
-    result.splice(idx, 0, hunk.new_text);
+    const inserted = insertedParagraphs(hunk);
+    if (inserted.length) {
+      result.splice(idx, 0, ...inserted);
+    }
     return result;
   }
 
@@ -117,8 +124,10 @@ function reverseSingle(paragraphs, hunk) {
   const result = [...paragraphs];
 
   if (type === "insert_after") {
-    if (idx < 0 || idx >= result.length) return result;
-    result.splice(idx, 1);
+    const count = insertedParagraphs(hunk).length;
+    if (count > 0 && idx >= 0) {
+      result.splice(idx, count);
+    }
     return result;
   }
 
@@ -245,9 +254,17 @@ export function hydrateDiffBatches(currentContent, diff) {
   if (!batches.length) {
     return { ...diff, original_content: currentContent || "", batches: [] };
   }
-  let baseline = currentContent || "";
-  for (let index = batches.length - 1; index >= 0; index -= 1) {
-    baseline = reverseHunks(baseline, stillAppliedHunks(batches[index].hunks));
+  const knownOriginal = diff?.original_content != null
+    ? diff.original_content
+    : batches[0]?.original_content;
+  let baseline;
+  if (knownOriginal != null) {
+    baseline = knownOriginal;
+  } else {
+    baseline = currentContent || "";
+    for (let index = batches.length - 1; index >= 0; index -= 1) {
+      baseline = reverseHunks(baseline, stillAppliedHunks(batches[index].hunks));
+    }
   }
   const hydrated = recomputeBatchOriginals(batches, baseline);
   return {

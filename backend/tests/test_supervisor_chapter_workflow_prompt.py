@@ -40,10 +40,30 @@ def test_prompt_removed_sections():
 
 def test_prompt_keeps_workflow():
     assert "## 创作工作流" in PROMPT
+    assert "write_todolist" not in PROMPT
+    assert "update_todolist" not in PROMPT
     assert "章节正文以 3000 字为目标" in PROMPT
     assert "2500–3500 字" in PROMPT
     assert "`write_chapter`" not in PROMPT
     assert "`edit_chapter_content`" not in PROMPT
+    assert "尚无章节则传 `parent_node_id`" in PROMPT
+    assert "由该工具创建空章节并建立 plot→chapter 的 contains 连线" in PROMPT
+    assert "`prepare_chapter_from_scene_plan`" in PROMPT
+    assert "先调用 `decide_chapter_revision`" in PROMPT
+
+
+def test_write_chapter_skill_routes_each_revision_through_strategy_decision():
+    skill = (
+        Path(__file__).resolve().parents[1]
+        / "services/agents/skills/write-chapter/SKILL.md"
+    ).read_text(encoding="utf-8")
+
+    for tool_name in (
+        "decide_chapter_revision", "replan_chapter_scenes",
+        "rewrite_chapter_draft", "edit_chapter_draft_locally",
+    ):
+        assert f"`{tool_name}`" in skill
+    assert "每出现新一轮修改需求" in skill
 
 
 def test_removed_operational_rules_are_available_from_registered_tools():
@@ -62,7 +82,7 @@ def test_removed_operational_rules_are_available_from_registered_tools():
     assert "完整正文" in update_tool_text
     assert "content_edit_instruction" not in PROMPT
 
-    assert "必须先创建任务清单" in tools["write_todolist"].description
+    assert "write_todolist" not in tools
     assert "先 read_node_content" in tools["insert_chapter_illustration"].description
     assert "final_report" in tools["list_research_artifacts"].description
     assert "[C1]" in tools["create_context_compaction"].description
@@ -73,12 +93,10 @@ def test_prompt_requires_dedicated_plot_markers_and_post_write_review():
     assert "`[[PLOT]]正文中已有的连续原文[[/PLOT]]`" in PROMPT
     assert "Markdown 的 `**...**` 仅表示普通粗体" in PROMPT
     assert "必须调用 `read_node_content` 重新读取已保存的整章正文" in PROMPT
-    assert "必须再次调用 `update_node` 修正正文中的标记" in PROMPT
-    assert "检查合格前不得结束任务" in PROMPT
-    assert "只能包裹正文中已经存在的连续原文" in PROMPT
-    assert "禁止为了高亮新增、改写、压缩、拼接或另起任何剧情总结" in PROMPT
+    assert "高亮采用正文中已经存在的连续原文" in PROMPT
+    assert "高亮的数量和长度由剧情表达需要决定" in PROMPT
     assert "微型章节梗概" not in PROMPT
-    assert "`plot_highlight_validation`" in PROMPT
+    assert "`plot_highlight_validation`" not in PROMPT
 
 
 def test_prompt_leaves_layout_to_frontend():

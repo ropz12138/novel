@@ -20,6 +20,9 @@ from models.edge import Edge
 
 nt = importlib.import_module("services.agents.tools.node_tools")
 supervisor_mod = importlib.import_module("services.agents.supervisor")
+sat = importlib.import_module("services.agents.tools.specialist_agent_tools")
+wat = importlib.import_module("services.agents.tools.workflow_agent_tools")
+tt = importlib.import_module("services.agents.tools.todo_tools")
 
 
 # ── 公共 fixtures ──
@@ -130,4 +133,101 @@ def test_create_node_async_emits_nodes_updated(monkeypatch):
         assert any(ev == "nodes_updated" for ev, _ in events)
     finally:
         db.close()
+        _clear_context()
+
+
+def test_commit_chapter_emits_single_nodes_updated_event(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db)
+        chapter = Node(work_id=work.id, type="chapter", title="第一章", content="", sort_order=1)
+        db.add(chapter)
+        db.commit()
+        work_id, chapter_id = work.id, chapter.id
+    finally:
+        db.close()
+    draft = sat._create_artifact(work_id, chapter_id, "chapter_draft", "最终正文")
+    collect, events = _make_collector()
+    _inject_emit(work_id, collect)
+    try:
+        result = json.loads(asyncio.run(sat.commit_chapter_workflow_result.ainvoke({
+            "chapter_node_id": chapter_id,
+            "draft_artifact_id": draft.id,
+            "expected_content_sha256": sat._content_sha256(""),
+        })))
+        assert result["gate"]["code"] == "chapter_committed"
+        updates = [(event, data) for event, data in events if event == "nodes_updated"]
+        assert updates == [("nodes_updated", {
+            "action": "chapter_commit",
+            "chapter_node_id": chapter_id,
+            "content_changed": True,
+        })]
+        diffs = [(event, data) for event, data in events if event == "chapter_edit_diff"]
+        assert len(diffs) == 1
+        assert diffs[0][1]["chapter_node_id"] == chapter_id
+        assert diffs[0][1]["original_content"] == ""
+        assert diffs[0][1]["current_content"] == "最终正文"
+        assert diffs[0][1]["diff"]["hunks"]
+    finally:
+        _clear_context()
+
+
+def test_develop_existing_node_emits_single_nodes_updated_event(monkeypatch):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db)
+        work_id = work.id
+    finally:
+        db.close()
+    from models.node import Node
+    db = database.SessionLocal()
+    try:
+        node = Node(work_id=work_id, type="outline", title="总纲", content="", sort_order=1)
+        db.add(node)
+        db.commit()
+        node_id = node.id
+    finally:
+        db.close()
+
+    async def fake_agent(*args, **kwargs):
+        return {"nodes": [{"node_id": node_id, "content": "完整总纲"}]}
+
+    monkeypatch.setattr(wat.sat, "_invoke_json_agent", fake_agent)
+    collect, events = _make_collector()
+    _inject_emit(work_id, collect)
+    try:
+        result = json.loads(asyncio.run(wat.develop_existing_nodes.ainvoke({
+            "specialty": "outline", "node_ids": [node_id], "user_instruction": "完善总纲",
+        })))
+        assert result["gate"]["code"] == "nodes_written"
+        updates = [(event, data) for event, data in events if event == "nodes_updated"]
+        assert updates == [("nodes_updated", {
+            "action": "direct_node_write",
+            "node_ids": [node_id],
+        })]
+    finally:
+        _clear_context()
+
+
+def test_needs_user_gate_blocks_todo_completion(monkeypatch):
+    called = False
+
+    def unexpected_update(*args, **kwargs):
+        nonlocal called
+        called = True
+
+    monkeypatch.setattr(tt, "_update_todolist_sync", unexpected_update)
+    supervisor_mod.set_context({
+        "workflow_gate": {
+            "passed": False,
+            "code": "chapter_version_conflict",
+            "status": "needs_user",
+        },
+    })
+    try:
+        result = asyncio.run(tt._update_todolist_async("complete", task_id="T5"))
+        assert called is False
+        assert result.startswith("失败：")
+        assert "chapter_version_conflict" in result
+    finally:
         _clear_context()

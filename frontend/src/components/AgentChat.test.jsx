@@ -62,6 +62,7 @@ describe("AgentChat context quote", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     expect(mocks.handleSend).toHaveBeenCalledWith(
       "[[ctx|node-1|plot|废墟相遇]]\n“废墟中遇见苏婉”\n请强化这一处伏笔",
+      "low",
     );
     await waitFor(() => expect(screen.getByText("AI 写作助手")).toBeDefined());
   });
@@ -78,5 +79,17 @@ describe("AgentChat context quote", () => {
     expect(screen.queryByText("废墟相遇")).toBeNull();
     expect(screen.queryByText("废墟中遇见苏婉")).toBeNull();
     expect(screen.getByRole("button", { name: "发送" }).disabled).toBe(true);
+  });
+
+  it("defaults chapter review intensity to low and passes the selected value", () => {
+    render(<AgentChat workId="work-1" />);
+    const selector = screen.getByRole("combobox", { name: "章节评审强度" });
+    expect(selector.value).toBe("low");
+    fireEvent.change(selector, { target: { value: "medium" } });
+    const editable = screen.getByRole("textbox", { name: "创作指令" });
+    editable.textContent = "写第七章";
+    fireEvent.input(editable);
+    fireEvent.click(screen.getByRole("button", { name: "发送" }));
+    expect(mocks.handleSend).toHaveBeenCalledWith("写第七章", "medium");
   });
 });

@@ -123,15 +123,15 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange }, ref) {
+const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange, agentRunning }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} ref={ref} />
+      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} agentRunning={agentRunning} ref={ref} />
     </ReactFlowProvider>
   );
 });
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange, agentRunning }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
@@ -955,7 +955,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       <IsolatedNodePanel nodes={nodes} onSelect={handleNodeClick} />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
+      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
     </div>
   );
 });

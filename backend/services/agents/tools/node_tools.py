@@ -3,11 +3,11 @@ import json
 import uuid
 import asyncio
 import logging
-from typing import Optional
+from typing import Literal, Optional
 from functools import partial
 
 from langchain_core.tools import StructuredTool
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 from sqlalchemy.orm import Session
 
 from models.node import Node
@@ -86,33 +86,54 @@ def _content_diff_event(node: dict, content_diff: dict) -> tuple[str, dict]:
 # 节点类型白名单，创建/更新时强制校验，禁止 agent 自创
 VALID_NODE_TYPES = list(STANDARD_NODE_TYPES)
 
+CREATE_NODE_PARENT_ID_ERROR = (
+    "create_node 不接受 parent_node_id。"
+    "新建章节请调用 assemble_chapter_context，并传入 parent_node_id、chapter_title、sort_order；"
+    "已有章节请用 create_edge 建立 contains 连线。"
+)
+CREATE_NODE_NO_PARENT_ID_TEXT = (
+    "不接受 parent_node_id。"
+    "新建章节必须调用 assemble_chapter_context（parent_node_id、chapter_title、sort_order），"
+    "禁止用 create_node 建章并指望自动连父节点；"
+    "已有章节与父情节的 contains 关系用 create_edge 建立。"
+)
+
 
 # 输入Schema
 class CreateNodeInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def reject_parent_node_id(cls, data):
+        if isinstance(data, dict) and "parent_node_id" in data:
+            raise ValueError(CREATE_NODE_PARENT_ID_ERROR)
+        return data
+
     node_type: str = Field(description=f"节点类型。{NODE_TYPES_RULES_TEXT}")
     title: str = Field(description="节点标题")
     content: str = Field(default="", description="节点内容")
     chapter_elements: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "chapter 专用：本章情节元素列表，每项建议包含 title 和 content。"
-            "元素不是节点类型，不要创建 element 节点；创建章节时把本章元素放在这里。"
+            "chapter 专用：本章情节元素，对象数组，每项含 title 和 content。"
+            "创建章节时把本章元素放在这里。"
         ),
     )
     characters: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "chapter 专用：本章出场角色列表，写入 extra_data.characters。"
-            "每项必须含 id（已有 character 节点的 ID）与 name（角色名，供前端展示）。"
-            "不要用画布连线表达角色登场；先 create_node(type=character) 再把 id 写进这里。"
+            "chapter 专用：本章出场角色，对象数组，每项含 id（已有 character 节点 ID）与 name。"
+            "写入 extra_data.characters。"
+            "先 create_node(type=character) 再把 id 写进这里。"
         ),
     )
     storylines: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "character 专用：角色发展线列表，写入 extra_data.storylines，不覆盖 extra_data 中的其它字段。"
-            "每项必须含 name（线名）和 body（轨迹节点的字符串列表，按时间顺序）；"
-            "description 为该线的说明文字。"
+            "character 专用：角色发展线，对象数组。"
+            "每项含 name、description，以及 body（按时间顺序的字符串数组）。"
+            "写入 extra_data.storylines。"
         ),
     )
     sort_order: int = Field(description=NODE_SORT_ORDER_RULES_TEXT)
@@ -126,17 +147,36 @@ class CreateNodeInput(BaseModel):
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
+class ContentReplacement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    old: str = Field(description="必须与当前正文中的连续原文完全一致，且只出现一次。")
+    new: str = Field(description="替换后的文本；删除该片段时传空字符串。")
+
+
 class UpdateNodeInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     node_id: str = Field(description="节点ID")
+    mode: Literal["overwrite", "replace"] = Field(
+        default="overwrite",
+        description=(
+            "正文写入模式。overwrite：用 content 全量覆盖现有正文；"
+            "replace：只按 replacements 替换命中的原文片段，其余正文保持不变。"
+            "未指定时默认为 overwrite。"
+        ),
+    )
     title: Optional[str] = Field(default=None, description="新标题")
     content: Optional[str] = Field(
         default=None,
         description=(
-            "agent 完成编辑后的完整正文，直接覆盖现有 content。"
-            "局部修改时也提交包含全部保留段落和修改段落的完整正文。"
+            "mode=overwrite 时若修改正文，传完整正文并直接覆盖现有 content。"
+            "mode=replace 时只填写 replacements。"
         ),
+    )
+    replacements: list[ContentReplacement] = Field(
+        default_factory=list,
+        description="mode=replace 时填写。数组。元素是对象。对象字段是 old 和 new。",
     )
     sort_order: Optional[int] = Field(
         default=None,
@@ -145,22 +185,23 @@ class UpdateNodeInput(BaseModel):
     chapter_elements: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "chapter 专用：更新本章情节元素列表，每项建议包含 title 和 content。"
-            "只更新 extra_data.chapter_elements，不覆盖 extra_data 中的其它字段。"
+            "chapter 专用：更新本章情节元素，对象数组，每项含 title 和 content。"
+            "只更新 extra_data.chapter_elements。"
         ),
     )
     characters: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "chapter 专用：更新本章出场角色列表，每项必须含 id（character 节点 ID）与 name。"
-            "只更新 extra_data.characters，不覆盖 extra_data 中的其它字段。"
+            "chapter 专用：更新本章出场角色，对象数组，每项含 id 与 name。"
+            "只更新 extra_data.characters。"
         ),
     )
     storylines: Optional[list[dict]] = Field(
         default=None,
         description=(
-            "character 专用：更新角色发展线列表，每项必须含 name 和 body（字符串列表）；"
-            "description 为该线的说明。只更新 extra_data.storylines，不覆盖 extra_data 中的其它字段。"
+            "character 专用：更新角色发展线，对象数组。"
+            "每项含 name、description，以及 body（字符串数组）。"
+            "只更新 extra_data.storylines。"
         ),
     )
     node_type: Optional[str] = Field(default=None, description="新类型")
@@ -182,6 +223,17 @@ class UpdateNodeInput(BaseModel):
         description="是否固定节点（固定后坐标不可被移动）。仅由用户侧设置，agent 不应主动修改。",
     )
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
+
+    @model_validator(mode="after")
+    def validate_content_mode(self):
+        if self.mode == "replace":
+            if self.content is not None:
+                raise ValueError("mode=replace 时只填写 replacements")
+            if not self.replacements:
+                raise ValueError("mode=replace 时 replacements 需要至少一个替换项")
+        elif self.replacements:
+            raise ValueError("mode=overwrite 时只填写 content；局部修改使用 mode=replace")
+        return self
 
 
 class DeleteNodeInput(BaseModel):
@@ -216,9 +268,12 @@ class UpdateEdgeInput(BaseModel):
 
 
 class BatchCreateNodesInput(BaseModel):
-    nodes_data: list[dict] = Field(
+    model_config = ConfigDict(extra="forbid")
+
+    nodes_data: list[CreateNodeInput] = Field(
         description=(
             "节点数据列表，每项必须含 node_type、title、sort_order。"
+            f"{CREATE_NODE_NO_PARENT_ID_TEXT}"
             "创建 chapter 时可带 chapter_elements 与 characters；创建 character 时可带 storylines；不要创建 element 节点。"
             f"{NODE_SORT_ORDER_RULES_TEXT}{NODE_LAYOUT_RULES_TEXT}"
         ),
@@ -482,15 +537,6 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
     if not work_id:
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
 
-    if node_type == "chapter" and content:
-        from services.plot_highlight_service import validate_plot_highlights
-        highlight_validation = validate_plot_highlights(content)
-        if not highlight_validation.valid:
-            return json.dumps({
-                "success": False,
-                "error": "章节剧情高亮未通过质量校验，请修正后重新创建",
-                "plot_highlight_validation": highlight_validation.as_dict(),
-            }, ensure_ascii=False)
     
     db = _get_db()
     try:
@@ -504,7 +550,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             work_id=work_id,
             type=node_type,
             title=title,
-            content=content,
+            content="",
             layer=layer,
             sort_order=sort_order,
             scope=final_scope,
@@ -518,6 +564,10 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             position_y=position_y,
         )
         db.add(node)
+        if content:
+            db.flush()
+            from services.node_content_write_service import write_node_content
+            write_node_content(db, node, content)
         db.commit()
         db.refresh(node)
         return json.dumps({
@@ -531,6 +581,30 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         return json.dumps({"error": str(e)}, ensure_ascii=False)
     finally:
         db.close()
+
+
+def _apply_content_replacements(content: str, replacements) -> str:
+    if not replacements:
+        raise ValueError("mode=replace 时 replacements 不能为空")
+    updated = content
+    for index, item in enumerate(replacements):
+        if isinstance(item, dict):
+            old = item.get("old")
+            new = item.get("new")
+        else:
+            old = getattr(item, "old", None)
+            new = getattr(item, "new", None)
+        if not isinstance(old, str) or not old:
+            raise ValueError(f"replacements[{index}] 缺少非空 old")
+        if not isinstance(new, str):
+            raise ValueError(f"replacements[{index}] 的 new 必须是字符串")
+        match_count = updated.count(old)
+        if match_count == 0:
+            raise ValueError(f"replacements[{index}] 的 old 在正文中未找到")
+        if match_count > 1:
+            raise ValueError(f"replacements[{index}] 的 old 在正文中出现多次")
+        updated = updated.replace(old, new, 1)
+    return updated
 
 
 def _update_node_sync(
@@ -548,6 +622,8 @@ def _update_node_sync(
     characters=None,
     storylines=None,
     sort_order=None,
+    mode="overwrite",
+    replacements=None,
 ):
     if node_type is not None:
         try:
@@ -577,15 +653,6 @@ def _update_node_sync(
             return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
         if storylines is not None and final_type_for_elements != "character":
             return json.dumps({"error": "storylines 只能用于 character 节点"}, ensure_ascii=False)
-        if content is not None and final_type_for_elements == "chapter":
-            from services.plot_highlight_service import validate_plot_highlights
-            highlight_validation = validate_plot_highlights(content)
-            if not highlight_validation.valid:
-                return json.dumps({
-                    "success": False,
-                    "error": "章节剧情高亮未通过质量校验，请修正后重新写入",
-                    "plot_highlight_validation": highlight_validation.as_dict(),
-                }, ensure_ascii=False)
         # 锁定校验：被用户固定的节点，其坐标不可被移动
         is_locked = bool(node.locked)
         trying_move = (position_x is not None) or (position_y is not None)
@@ -596,12 +663,20 @@ def _update_node_sync(
             }, ensure_ascii=False)
         if title is not None:
             node.title = title
-        if content is not None:
-            node.content = content
-            from services.chapter_history_service import clear_chapter_summary_on_content_change
-            clear_chapter_summary_on_content_change(db, node)
         if node_type is not None:
             node.type = node_type
+        write_content = content
+        if (mode or "overwrite") == "replace":
+            try:
+                write_content = _apply_content_replacements(old_content, replacements)
+            except ValueError as e:
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
+        elif replacements:
+            return json.dumps({"error": "mode=overwrite 时只填写 content；局部修改使用 mode=replace"}, ensure_ascii=False)
+        if write_content is not None:
+            from services.node_content_write_service import write_node_content
+            write_node_content(db, node, write_content)
+            content = write_content
         if layer is not None:
             node.layer = layer
         if sort_order is not None:
@@ -790,12 +865,39 @@ def _update_edge_sync(edge_id, edge_type=None, label=None, reason=None):
         db.close()
 
 
+def _as_create_node_item_dict(data):
+    if isinstance(data, CreateNodeInput):
+        return data.model_dump()
+    return data
+
+
+def _validate_create_node_item(data):
+    payload = _as_create_node_item_dict(data)
+    try:
+        CreateNodeInput.model_validate(payload)
+    except ValidationError as exc:
+        title = payload.get("title", "未命名") if isinstance(payload, dict) else "未命名"
+        messages = []
+        for item in exc.errors():
+            path = ".".join(str(part) for part in (item.get("loc") or ()) if part != "__root__")
+            text = item.get("msg") or str(item)
+            messages.append(f"{path}: {text}" if path else text)
+        return f"{title}：{'; '.join(messages)}"
+    return None
+
+
 def _batch_create_nodes_sync(nodes_data, reason=None):
     work_id = _get_current_work_id()
     if not work_id:
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
 
+    normalized_items = []
     for data in nodes_data:
+        schema_error = _validate_create_node_item(data)
+        if schema_error:
+            return json.dumps({"error": schema_error}, ensure_ascii=False)
+        data = _as_create_node_item_dict(data)
+        normalized_items.append(data)
         node_type = data.get("node_type") or data.get("type")
         if not node_type:
             return json.dumps({"error": "节点类型不能为空"}, ensure_ascii=False)
@@ -826,7 +928,7 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
     db = _get_db()
     try:
         created_nodes = []
-        for data in nodes_data:
+        for data in normalized_items:
             node_type = data.get("node_type") or data.get("type")
             if not node_type or not node_type.strip():
                 continue
@@ -853,7 +955,7 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 work_id=work_id,
                 type=node_type,
                 title=data.get("title", "未命名"),
-                content=data.get("content", ""),
+                content="",
                 extra_data=_merge_extra_data_fields(
                     {},
                     chapter_elements=normalized_elements,
@@ -867,6 +969,10 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 position_y=position_y if position_y is not None else 0.0,
             )
             db.add(node)
+            if data.get("content"):
+                db.flush()
+                from services.node_content_write_service import write_node_content
+                write_node_content(db, node, data["content"])
             created_nodes.append(node)
         
         db.commit()
@@ -981,9 +1087,11 @@ async def _update_node_async(
     characters=None,
     storylines=None,
     sort_order=None,
+    mode="overwrite",
+    replacements=None,
 ):
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order))
+    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements))
     try:
         data = json.loads(result)
         if data.get("success"):
@@ -1098,6 +1206,7 @@ create_node = StructuredTool.from_function(
     name="create_node",
     description=(
         "创建新节点。"
+        f"{CREATE_NODE_NO_PARENT_ID_TEXT}"
         "创建 chapter 时返回 relation_warnings 与 relation_hint："
         "若章节未写入 characters 字段，须按 hint 补建角色并把 id/name 写入 characters。"
         f"{NODE_TYPES_RULES_TEXT} {NODE_LAYOUT_RULES_TEXT}"
@@ -1111,8 +1220,10 @@ update_node = StructuredTool.from_function(
     name="update_node",
     description=(
         "更新节点属性。"
-        "文本编辑由 agent 先读取最新正文并自行完成，再通过 content 直接保存完整正文。"
-        "局部修改时保持其余内容完整，保存后重新读取核对。"
+        "正文用 mode 选择写入方式：overwrite 填写完整 content 覆盖；"
+        "replace 填写 replacements 数组，按原文片段替换。"
+        "局部修改使用 mode=replace，且 old 必须与当前正文完全一致并只出现一次。"
+        "保存后重新读取核对。"
         f"{NODE_LAYOUT_RULES_TEXT}"
     ),
     args_schema=UpdateNodeInput,
@@ -1159,6 +1270,7 @@ batch_create_nodes = StructuredTool.from_function(
     name="batch_create_nodes",
     description=(
         "批量创建多个节点。"
+        f"{CREATE_NODE_NO_PARENT_ID_TEXT}"
         f"{NODE_LAYOUT_RULES_TEXT} "
         "若创建了 chapter，返回 relation_warnings 与 relation_hint："
         "章节未写入 characters 时须补建角色并把 id/name 写入 characters 字段。"

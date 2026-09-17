@@ -6,11 +6,11 @@
 from services.agents.supervisor import SupervisorAgent
 
 
-def test_supervisor_has_todo_tools():
+def test_supervisor_does_not_offer_todo_tools_while_disabled():
     agent = SupervisorAgent()
     names = {t.name for t in agent._get_tools()}
-    assert "write_todolist" in names
-    assert "update_todolist" in names
+    assert "write_todolist" not in names
+    assert "update_todolist" not in names
 
 
 def test_supervisor_has_direct_node_ops():

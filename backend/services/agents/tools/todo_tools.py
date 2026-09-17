@@ -34,6 +34,15 @@ def _get_emit():
         return None
 
 
+def _get_workflow_gate():
+    try:
+        from services.agents.supervisor import get_context
+
+        return get_context().get("workflow_gate")
+    except Exception:
+        return None
+
+
 async def _emit_events(events: list[tuple[str, dict]]) -> None:
     emit = _get_emit()
     if not emit:
@@ -46,7 +55,13 @@ async def _emit_events(events: list[tuple[str, dict]]) -> None:
 
 
 class WriteTodolistInput(BaseModel):
-    tasks: list[str] = Field(description="自然语言任务列表，每条只描述「做什么」，不写工具名或参数。")
+    tasks: list[str] = Field(
+        description=(
+            "自然语言任务列表，必须是 JSON 字符串数组，禁止传字符串化的 JSON。"
+            "参数名必须是 tasks，禁止使用 todos。"
+            "每条只描述「做什么」，不写工具名或参数。"
+        ),
+    )
 
 
 class UpdateTodolistInput(BaseModel):
@@ -99,6 +114,13 @@ async def _update_todolist_async(
     task: Optional[str] = None,
     tasks: Optional[list[str]] = None,
 ) -> str:
+    gate = _get_workflow_gate()
+    if action == "complete" and isinstance(gate, dict) and gate.get("passed") is False:
+        return (
+            "失败：当前工作流质量门未通过，不能将任务标记完成。"
+            f"状态：{gate.get('status') or 'unknown'}；"
+            f"门禁：{gate.get('code') or 'unknown'}"
+        )
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(
         None,
@@ -113,8 +135,9 @@ write_todolist = StructuredTool.from_function(
     name="write_todolist",
     description=(
         "收到可执行的用户需求后，必须先创建任务清单再逐项执行。"
-        "tasks 为自然语言字符串列表，每条只写「做什么」，"
-        "禁止写工具名、坐标、node_id 等「怎么做」的内容；通常 1–4 条。"
+        "参数名必须是 tasks，禁止使用 todos。"
+        "tasks 为自然语言字符串列表，必须是 JSON 数组，禁止传字符串化的 JSON；"
+        "每条只写「做什么」，禁止写工具名、坐标、node_id 等「怎么做」的内容；通常 1–4 条。"
     ),
     args_schema=WriteTodolistInput,
 )

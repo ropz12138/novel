@@ -46,6 +46,7 @@ export function CanvasPage() {
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelConfig, setShowModelConfig] = useState(false);
   const [nodeContentDiffs, setNodeContentDiffs] = useState({});
+  const [agentRunning, setAgentRunning] = useState(false);
   const insertPillRef = useRef(null);
 
   const handleAddContext = useCallback((node, selectedText) => {
@@ -399,6 +400,7 @@ export function CanvasPage() {
                 onAddContext={handleAddContext}
                 nodeContentDiffs={nodeContentDiffs}
                 onNodeContentDiffChange={handleNodeContentDiff}
+                agentRunning={agentRunning}
               />
             </div>
             {showChat && (
@@ -421,6 +423,7 @@ export function CanvasPage() {
                   onNodesUpdate={handleNodesUpdate}
                   onNodeContentDiff={handleNodeContentDiff}
                   onNodeContentDiffsReset={handleNodeContentDiffsReset}
+                  onRunningChange={setAgentRunning}
                   insertPillRef={insertPillRef}
                 />
               </div>

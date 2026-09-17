@@ -14,6 +14,7 @@ from services.agents.tools.node_tools import (
     _merge_extra_data_fields,
 )
 from services import user_action_service as action_svc
+from services.node_content_write_service import write_node_content
 
 router = APIRouter(tags=["nodes"])
 
@@ -34,7 +35,7 @@ def create_node(
         work_id=work_id,
         type=data.type,
         title=data.title,
-        content=data.content,
+        content="",
         extra_data=data.extra_data,
         layer=data.layer,
         sort_order=data.sort_order,
@@ -43,6 +44,9 @@ def create_node(
         position_y=data.position_y,
     )
     db.add(node)
+    if data.content:
+        db.flush()
+        write_node_content(db, node, data.content)
     db.commit()
     db.refresh(node)
     action_svc.record_node_action(
@@ -85,8 +89,11 @@ def update_node(
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     for key, value in update_data.items():
-        setattr(node, key, value)
+        if key != "content":
+            setattr(node, key, value)
     node.scope = final_scope
+    if "content" in update_data:
+        write_node_content(db, node, update_data["content"])
 
     if chapter_elements is not None:
         effective_type = new_type or node.type
