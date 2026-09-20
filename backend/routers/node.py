@@ -15,8 +15,75 @@ from services.agents.tools.node_tools import (
 )
 from services import user_action_service as action_svc
 from services.node_content_write_service import write_node_content
+from services.node_content_diff_state import record_manual_change, save_decision
+from models.node_content_diff_state import NodeContentDiffState
+from pydantic import BaseModel
 
 router = APIRouter(tags=["nodes"])
+
+
+class ContentDiffDecision(BaseModel):
+    expected_content: str
+    expected_baseline: str
+    baseline_content: str
+    current_content: str
+
+
+@router.get("/works/{work_id}/content-diffs")
+def list_content_diffs(work_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from models.work import CanvasWork
+    from models.session import SupervisorMessage, SupervisorSession
+    work = db.get(CanvasWork, work_id)
+    if not work or work.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Work not found")
+    # 为上线前已保存的 diff 卡片建立初始基线；仅采纳仍对应当前正文的最新卡片。
+    nodes = {node.id: node for node in db.query(Node).filter(Node.work_id == work_id).all()}
+    existing = {row.node_id for row in db.query(NodeContentDiffState).filter_by(work_id=work_id).all()}
+    messages = db.query(SupervisorMessage).join(
+        SupervisorSession, SupervisorMessage.session_id == SupervisorSession.id
+    ).filter(
+        SupervisorSession.work_id == work_id,
+        SupervisorMessage.role == "assistant",
+        SupervisorMessage.meta["type"].as_string() == "chapter_content_diff_card",
+    ).order_by(
+        SupervisorMessage.created_at.desc()
+    ).all()
+    for message in messages:
+        card = (message.meta or {}).get("chapterContentDiffCard")
+        if not card:
+            continue
+        node_id = card.get("node_id") or card.get("chapter_node_id")
+        node = nodes.get(node_id)
+        if node_id in existing or node is None or card.get("current_content") != (node.content or ""):
+            continue
+        baseline = card.get("original_content")
+        if baseline is None:
+            continue
+        db.add(NodeContentDiffState(node_id=node_id, work_id=work_id, baseline_content=baseline))
+        existing.add(node_id)
+    db.commit()
+    rows = db.query(NodeContentDiffState, Node).join(Node, Node.id == NodeContentDiffState.node_id).filter(
+        NodeContentDiffState.work_id == work_id,
+    ).all()
+    return [{"node_id": node.id, "original_content": state.baseline_content,
+             "current_content": node.content or ""} for state, node in rows
+            if state.baseline_content != (node.content or "")]
+
+
+@router.put("/nodes/{node_id}/content-diff-decision")
+def decide_content_diff(node_id: str, data: ContentDiffDecision, db: Session = Depends(get_db),
+                        current_user: User = Depends(get_current_user)):
+    from models.work import CanvasWork
+    node = db.get(Node, node_id)
+    work = db.get(CanvasWork, node.work_id) if node else None
+    if not work or work.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        save_decision(db, node, **data.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"node_id": node.id, "original_content": data.baseline_content,
+            "current_content": data.current_content}
 
 
 @router.post("/works/{work_id}/nodes", response_model=NodeResponse, status_code=201)
@@ -79,6 +146,7 @@ def update_node(
         raise HTTPException(status_code=404, detail="Node not found")
 
     update_data = data.model_dump(exclude_unset=True)
+    old_content = node.content or ""
     proposed_scope = update_data.pop("scope", None)
     chapter_elements = update_data.pop("chapter_elements", None)
     characters = update_data.pop("characters", None)
@@ -124,6 +192,8 @@ def update_node(
 
     db.commit()
     db.refresh(node)
+    if "content" in update_data and (node.content or "") != old_content:
+        record_manual_change(db, node, old_content)
     substantial = (
         action_svc.has_substantial_node_change(update_data)
         or chapter_elements is not None

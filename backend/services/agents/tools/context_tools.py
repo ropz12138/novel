@@ -358,24 +358,19 @@ def _resolve_context_source_sync(context_pack_id=None, citation_id="", mode="exc
 
 async def _get_context_window_status_async(planned_chars=0, reserved_output_tokens=8000, model_name=None, reason=None):
     import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
+    return await asyncio.to_thread(
         partial(_get_context_window_status_sync, planned_chars, reserved_output_tokens, model_name, reason),
     )
 
 
 async def _create_context_compaction_async(summary, citations, reason=None):
     import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_create_context_compaction_sync, summary, citations, reason))
+    return await asyncio.to_thread(partial(_create_context_compaction_sync, summary, citations, reason))
 
 
 async def _resolve_context_source_async(context_pack_id=None, citation_id="", mode="excerpt", query=None, max_chars=4000, reason=None):
     import asyncio
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None,
+    return await asyncio.to_thread(
         partial(_resolve_context_source_sync, context_pack_id, citation_id, mode, query, max_chars, reason),
     )
 

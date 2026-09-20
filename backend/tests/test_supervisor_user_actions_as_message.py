@@ -128,6 +128,27 @@ def test_build_system_prompt_no_longer_accepts_user_actions_section():
 
 # ---------- /start 存消息顺序 + 标题不被操作污染 ----------
 
+def test_start_rejects_work_owned_by_another_user(mock_auth):
+    db = database.SessionLocal()
+    try:
+        other = User(username="other-owner", email="other-owner@test.dev", password_hash="x")
+        db.add(other)
+        db.flush()
+        foreign_work = CanvasWork(user_id=other.id, title="其他用户作品")
+        db.add(foreign_work)
+        db.commit()
+        foreign_work_id = foreign_work.id
+    finally:
+        db.close()
+
+    response = client.post(
+        "/api/supervisor/start",
+        json={"message": "读取这个作品", "work_id": foreign_work_id},
+    )
+
+    assert response.status_code == 404
+    assert session_store.list_sessions(user_id=mock_auth.id, work_id=foreign_work_id) == []
+
 def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
     db = database.SessionLocal()
     work_id = None

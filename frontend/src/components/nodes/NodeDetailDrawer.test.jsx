@@ -106,6 +106,55 @@ describe("NodeDetailDrawer", () => {
     expect(screen.queryByText("char-uuid-1")).toBeNull();
   });
 
+  it("cycles through each occurrence of a character name in chapter content", () => {
+    const addRange = vi.fn();
+    const removeAllRanges = vi.fn();
+    vi.spyOn(window, "getSelection").mockReturnValue({ addRange, removeAllRanges });
+    render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-character-navigation",
+          type: "chapter",
+          label: "第一章",
+          content: "林川看见林川。",
+          extra_data: { characters: [{ id: "char-1", name: "林川" }] },
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const characterButton = screen.getByRole("button", { name: "定位角色：林川" });
+    fireEvent.click(characterButton);
+    fireEvent.click(characterButton);
+    fireEvent.click(characterButton);
+
+    expect(addRange.mock.calls.map(([range]) => range.startOffset)).toEqual([0, 4, 0]);
+  });
+
+  it("keeps chapter metadata in a left-aligned header outside the body scroller", () => {
+    const node = {
+      id: "node-header",
+      type: "chapter",
+      label: "第十二章：雨夜来客",
+      content: "正文内容",
+      extra_data: {
+        characters: [{ id: "char-1", name: "林川" }],
+        chapter_elements: [{ id: "element-1", title: "雨夜敲门", content: "推进情节" }],
+      },
+    };
+
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+
+    const header = screen.getByTestId("chapter-detail-header");
+    const scroller = screen.getByTestId("node-detail-scroll");
+    expect(header.className).toContain("text-left");
+    expect(scroller.contains(header)).toBe(false);
+    expect(header.contains(screen.getByText("第十二章：雨夜来客"))).toBe(true);
+    expect(header.contains(screen.getByText("4 字"))).toBe(true);
+    expect(header.contains(screen.getByText("出场角色"))).toBe(true);
+    expect(header.contains(screen.getByText("本章元素"))).toBe(true);
+  });
+
   it("keeps Markdown double-star syntax as ordinary bold text", () => {
     const node = {
       id: "node-1",
@@ -122,7 +171,7 @@ describe("NodeDetailDrawer", () => {
     expect(boldText.className).not.toContain("bg-amber-100");
   });
 
-  it("allows selected plot text to be added to conversation context", () => {
+  it("shows 引用此段 after selecting text and adds that quote to conversation context", () => {
     const node = {
       id: "plot-1",
       type: "plot",
@@ -147,9 +196,10 @@ describe("NodeDetailDrawer", () => {
     });
 
     fireEvent.mouseUp(screen.getByTestId("node-detail-scroll"));
-    fireEvent.click(screen.getByRole("button", { name: "加入选中文本到对话上下文" }));
+    fireEvent.click(screen.getByRole("button", { name: "引用此段" }));
 
     expect(onAddContext).toHaveBeenCalledWith(node, "废墟中遇见苏婉");
+    expect(screen.queryByRole("button", { name: "引用此段" })).toBeNull();
   });
 
   it("does not rebuild the rendered content when text selection is captured", () => {
@@ -179,7 +229,19 @@ describe("NodeDetailDrawer", () => {
     fireEvent.mouseUp(screen.getByTestId("node-detail-scroll"));
 
     expect(screen.getByText("林川在废墟中遇见苏婉。")).toBe(contentBeforeSelection);
-    expect(screen.getByRole("button", { name: "加入选中文本到对话上下文" })).toBeDefined();
+    expect(screen.getByRole("button", { name: "引用此段" })).toBeDefined();
+  });
+
+  it("does not show the old whole-node context button in node details", () => {
+    render(
+      <NodeDetailDrawer
+        node={{ id: "plot-1", type: "plot", label: "废墟相遇", content: "正文", extra_data: {} }}
+        onClose={vi.fn()}
+        onAddContext={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "加入对话上下文" })).toBeNull();
   });
 
   it("shows agent content diffs inline in the body with apply and revert actions", async () => {
@@ -191,6 +253,7 @@ describe("NodeDetailDrawer", () => {
       extra_data: {},
     };
     const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
     const onContentDiffChange = vi.fn();
     render(
       <NodeDetailDrawer
@@ -206,6 +269,7 @@ describe("NodeDetailDrawer", () => {
         }}
         onClose={vi.fn()}
         onUpdate={onUpdate}
+        onContentDiffDecision={onContentDiffDecision}
         onContentDiffChange={onContentDiffChange}
       />,
     );
@@ -220,6 +284,10 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("林川在雨中遇见苏婉。")).toBeDefined();
 
     fireEvent.click(screen.getByRole("button", { name: "保留修改" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("plot-1", expect.objectContaining({
+      baseline_content: "开场。\n\n林川在雨中遇见苏婉。",
+      current_content: "开场。\n\n林川在雨中遇见苏婉。",
+    })));
     expect(onUpdate).not.toHaveBeenCalled();
     expect(onContentDiffChange).toHaveBeenCalledWith(null);
   });
@@ -294,6 +362,7 @@ describe("NodeDetailDrawer", () => {
   it("does not write again when accepting a full-chapter insert that is already saved", async () => {
     const chapter = "第一段。\n\n第二段。\n\n第三段。";
     const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
     const onContentDiffChange = vi.fn();
     render(
       <NodeDetailDrawer
@@ -317,6 +386,7 @@ describe("NodeDetailDrawer", () => {
         agentRunning={false}
         onClose={vi.fn()}
         onUpdate={onUpdate}
+        onContentDiffDecision={onContentDiffDecision}
         onContentDiffChange={onContentDiffChange}
       />,
     );
@@ -326,6 +396,9 @@ describe("NodeDetailDrawer", () => {
       expect(onContentDiffChange).toHaveBeenCalledWith(null);
     });
     expect(onUpdate).not.toHaveBeenCalled();
+    expect(onContentDiffDecision).toHaveBeenCalledWith("chapter-3", expect.objectContaining({
+      baseline_content: chapter, current_content: chapter,
+    }));
   });
 
   it("reverts a single pending hunk back to the original paragraph", async () => {
@@ -337,6 +410,7 @@ describe("NodeDetailDrawer", () => {
       extra_data: {},
     };
     const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
     const onContentDiffChange = vi.fn();
     render(
       <NodeDetailDrawer
@@ -351,15 +425,47 @@ describe("NodeDetailDrawer", () => {
         }}
         onClose={vi.fn()}
         onUpdate={onUpdate}
+        onContentDiffDecision={onContentDiffDecision}
         onContentDiffChange={onContentDiffChange}
       />,
     );
 
     fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith("plot-2", { content: "开场。\n\n林川在废墟中遇见苏婉。" });
+      expect(onContentDiffDecision).toHaveBeenCalledWith("plot-2", expect.objectContaining({
+        current_content: "开场。\n\n林川在废墟中遇见苏婉。",
+      }));
     });
     expect(onContentDiffChange).toHaveBeenCalledWith(null);
+  });
+
+  it("moves only the accepted paragraph into the cross-device baseline", async () => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(<NodeDetailDrawer
+      node={{ id: "chapter-partial", type: "chapter", label: "第一章",
+        content: "第一段新。\n\n第二段新。", extra_data: {} }}
+      contentDiff={{ original_content: "第一段旧。\n\n第二段旧。",
+        current_content: "第一段新。\n\n第二段新。",
+        hunks: [
+          { type: "replace", paragraph_index: 1, old_text: "第一段旧。", new_text: "第一段新。" },
+          { type: "replace", paragraph_index: 2, old_text: "第二段旧。", new_text: "第二段新。" },
+        ] }}
+      onContentDiffDecision={onContentDiffDecision}
+      onContentDiffChange={onContentDiffChange}
+      onClose={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getAllByRole("button", { name: "保留修改" })[0]);
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("chapter-partial", {
+      expected_content: "第一段新。\n\n第二段新。",
+      expected_baseline: "第一段旧。\n\n第二段旧。",
+      baseline_content: "第一段新。\n\n第二段旧。",
+      current_content: "第一段新。\n\n第二段新。",
+    }));
+    expect(onContentDiffChange).toHaveBeenCalledWith(expect.objectContaining({
+      hunks: [{ type: "replace", paragraph_index: 2, old_text: "第二段旧。", new_text: "第二段新。" }],
+    }));
   });
 
   it("hydrates inline diffs from node content when the stored diff has no original_content", () => {
@@ -539,8 +645,46 @@ describe("NodeDetailDrawer", () => {
     fireEvent.click(screen.getByTitle("全屏查看"));
 
     expect(screen.getByTitle("上一章").disabled).toBe(true);
+    expect(screen.getByTitle("上一章").className).toContain("left-4");
+    expect(screen.getByTitle("下一章").className).toContain("right-4");
     fireEvent.click(screen.getByTitle("下一章"));
     expect(onChapterNavigate).toHaveBeenCalledWith(chapters[1]);
+  });
+
+  it("uses a book-like pale yellow background for chapter details", () => {
+    const { container } = render(
+      <NodeDetailDrawer
+        node={{ id: "chapter-paper", type: "chapter", label: "第一章", content: "正文" }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(container.querySelector(".bg-amber-50")).not.toBeNull();
+  });
+
+  it("navigates chapters by sort_order when chapter nodes are unordered", () => {
+    const chapters = [
+      { id: "chapter-3", type: "chapter", label: "第三章", content: "第三章正文", sort_order: 3 },
+      { id: "chapter-2", type: "chapter", label: "第二章", content: "第二章正文", sort_order: 2 },
+      { id: "chapter-1", type: "chapter", label: "第一章", content: "第一章正文", sort_order: 1 },
+    ];
+    const onChapterNavigate = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={chapters[1]}
+        onClose={vi.fn()}
+        chapterNodes={chapters}
+        onChapterNavigate={onChapterNavigate}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle("全屏查看"));
+
+    fireEvent.click(screen.getByTitle("上一章"));
+    expect(onChapterNavigate).toHaveBeenCalledWith(chapters[2]);
+    onChapterNavigate.mockClear();
+    fireEvent.click(screen.getByTitle("下一章"));
+    expect(onChapterNavigate).toHaveBeenCalledWith(chapters[0]);
   });
 
   it("enlarges chapter typography in fullscreen mode", () => {
@@ -551,7 +695,7 @@ describe("NodeDetailDrawer", () => {
     fireEvent.click(screen.getByTitle("全屏查看"));
 
     expect(container.querySelector(".text-xl.leading-loose")).not.toBeNull();
-    expect(container.querySelector(".text-4xl")).not.toBeNull();
+    expect(container.querySelector(".text-2xl")).not.toBeNull();
   });
 
   it("restores the last scroll position when reopening the same node", async () => {

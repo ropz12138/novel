@@ -295,28 +295,23 @@ def _get_canvas_overview_sync(work_id=None, reason=None):
 
 # 异步包装
 async def _query_nodes_async(node_type=None, keyword=None, limit=50, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_query_nodes_sync, node_type, keyword, limit, reason))
+    return await asyncio.to_thread(partial(_query_nodes_sync, node_type, keyword, limit, reason))
 
 
 async def _query_edges_async(source_id=None, target_id=None, edge_type=None, limit=100, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_query_edges_sync, source_id, target_id, edge_type, limit, reason))
+    return await asyncio.to_thread(partial(_query_edges_sync, source_id, target_id, edge_type, limit, reason))
 
 
 async def _read_node_content_async(node_ids: list[str], force_original_context=False, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_read_node_content_sync, node_ids, force_original_context, reason))
+    return await asyncio.to_thread(partial(_read_node_content_sync, node_ids, force_original_context, reason))
 
 
 async def _grep_nodes_async(keywords, node_type=None, context_chars=100, limit=20, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_grep_nodes_sync, keywords, node_type, context_chars, limit, reason))
+    return await asyncio.to_thread(partial(_grep_nodes_sync, keywords, node_type, context_chars, limit, reason))
 
 
 async def _get_canvas_overview_async(work_id=None, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_get_canvas_overview_sync, work_id, reason))
+    return await asyncio.to_thread(partial(_get_canvas_overview_sync, work_id, reason))
 
 
 # 创建工具
@@ -407,8 +402,7 @@ def _get_canvas_index_sync(reason=None):
 
 
 async def _get_canvas_index_async(reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_get_canvas_index_sync, reason))
+    return await asyncio.to_thread(partial(_get_canvas_index_sync, reason))
 
 
 get_canvas_index = StructuredTool.from_function(
@@ -441,8 +435,7 @@ def _list_user_canvas_actions_sync(limit=50, reason=None):
 
 
 async def _list_user_canvas_actions_async(limit=50, reason=None):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_list_user_canvas_actions_sync, limit, reason))
+    return await asyncio.to_thread(partial(_list_user_canvas_actions_sync, limit, reason))
 
 
 list_user_canvas_actions = StructuredTool.from_function(

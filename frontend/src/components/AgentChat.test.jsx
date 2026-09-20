@@ -81,11 +81,34 @@ describe("AgentChat context quote", () => {
     expect(screen.getByRole("button", { name: "发送" }).disabled).toBe(true);
   });
 
-  it("defaults chapter review intensity to low and passes the selected value", () => {
+  it("defaults chapter review intensity to low and snaps by sliding, not clicking", () => {
     render(<AgentChat workId="work-1" />);
-    const selector = screen.getByRole("combobox", { name: "章节评审强度" });
-    expect(selector.value).toBe("low");
-    fireEvent.change(selector, { target: { value: "medium" } });
+    expect(screen.queryByText("按 Enter 发送，Shift + Enter 换行")).toBeNull();
+
+    const slider = screen.getByRole("slider", { name: "章节评审强度" });
+    expect(slider.getAttribute("aria-valuetext")).toBe("low");
+    expect(slider.querySelector("[data-intensity-window]").getAttribute("data-intensity")).toBe("low");
+
+    fireEvent.click(screen.getByText("中"));
+    expect(slider.getAttribute("aria-valuetext")).toBe("low");
+
+    vi.spyOn(slider, "getBoundingClientRect").mockReturnValue({
+      x: 0,
+      y: 0,
+      top: 0,
+      left: 0,
+      right: 90,
+      bottom: 20,
+      width: 90,
+      height: 20,
+      toJSON: () => ({}),
+    });
+    fireEvent.pointerDown(slider, { clientX: 5, pointerId: 1 });
+    fireEvent.pointerMove(slider, { clientX: 45, pointerId: 1 });
+    fireEvent.pointerUp(slider, { clientX: 45, pointerId: 1 });
+    expect(slider.getAttribute("aria-valuetext")).toBe("medium");
+    expect(slider.querySelector("[data-intensity-window]").getAttribute("data-intensity")).toBe("medium");
+
     const editable = screen.getByRole("textbox", { name: "创作指令" });
     editable.textContent = "写第七章";
     fireEvent.input(editable);

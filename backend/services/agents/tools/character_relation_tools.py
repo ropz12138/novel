@@ -205,23 +205,19 @@ def _delete_character_relation_sync(relation_id, reason=None):
 
 
 async def _query_character_relations_async(**kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_query_character_relations_sync, **kwargs))
+    return await asyncio.to_thread(partial(_query_character_relations_sync, **kwargs))
 
 
 async def _create_character_relation_async(**kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_create_character_relation_sync, **kwargs))
+    return await asyncio.to_thread(partial(_create_character_relation_sync, **kwargs))
 
 
 async def _update_character_relation_async(**kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_update_character_relation_sync, **kwargs))
+    return await asyncio.to_thread(partial(_update_character_relation_sync, **kwargs))
 
 
 async def _delete_character_relation_async(**kwargs):
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, partial(_delete_character_relation_sync, **kwargs))
+    return await asyncio.to_thread(partial(_delete_character_relation_sync, **kwargs))
 
 
 character_relation_tools = [

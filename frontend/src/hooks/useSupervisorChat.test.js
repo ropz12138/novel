@@ -1,18 +1,25 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 
 let authFetchCalls = [];
+let streamChunks = null;
 
 vi.mock("../lib/authFetch", () => ({
   authFetch: (url, options = {}) => {
     const { signal, ...request } = options;
     authFetchCalls.push([url, request]);
+    const chunks = streamChunks;
+    let index = 0;
     return Promise.resolve({
       ok: true,
       status: 200,
       body: {
-        getReader: () => ({ read: () => new Promise(() => {}) }),
+        getReader: () => ({ read: () => chunks
+          ? Promise.resolve(index < chunks.length
+            ? { done: false, value: new TextEncoder().encode(chunks[index++]) }
+            : { done: true })
+          : new Promise(() => {}) }),
       },
     });
   },
@@ -37,6 +44,7 @@ const { sessionApi } = await import("../lib/api");
 describe("useSupervisorChat", () => {
   beforeEach(() => {
     authFetchCalls = [];
+    streamChunks = null;
     vi.clearAllMocks();
   });
 
@@ -260,6 +268,25 @@ describe("useSupervisorChat", () => {
     expect(onNodeContentDiff).toHaveBeenCalledWith("chapter-1", expect.objectContaining({
       title: "第一章",
       hunks: [{ type: "replace" }],
+    }));
+  });
+
+  it("shows a streamed diff immediately when event and data arrive in separate reads", async () => {
+    streamChunks = [
+      "event: chapter_edit_diff\n",
+      'data: {"chapter_node_id":"chapter-live","node_type":"chapter","title":"第一章","original_content":"旧文","current_content":"新文","diff":{"hunks":[{"type":"replace","paragraph_index":1,"old_text":"旧文","new_text":"新文"}]}}\n\n',
+    ];
+    const onNodeContentDiff = vi.fn();
+    const { result } = renderHook(() => useSupervisorChat({
+      workId: "w1", callbacks: { onNodeContentDiff },
+    }));
+    act(() => result.current.handleSend("修改第一章"));
+
+    await waitFor(() => expect(result.current.timeline).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "chapter_content_diff_card" }),
+    ])));
+    expect(onNodeContentDiff).toHaveBeenCalledWith("chapter-live", expect.objectContaining({
+      original_content: "旧文", current_content: "新文",
     }));
   });
 

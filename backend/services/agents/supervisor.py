@@ -2,6 +2,7 @@
 import json
 import logging
 import uuid
+from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any
 
@@ -188,19 +189,27 @@ def _get_db():
     return SessionLocal()
 
 
-# 全局context存储（简单实现）
-_current_context: Dict[str, Any] = {}
+# 请求级上下文必须随异步任务隔离，不能由并发 Agent 共享。
+_current_context: ContextVar[Dict[str, Any] | None] = ContextVar(
+    "supervisor_context",
+    default=None,
+)
 
 
-def set_context(context: Dict[str, Any]):
+def set_context(context: Dict[str, Any]) -> Token:
     """设置当前上下文"""
-    global _current_context
-    _current_context = context
+    return _current_context.set(context)
+
+
+def reset_context(token: Token) -> None:
+    """恢复设置前的请求上下文。"""
+    _current_context.reset(token)
 
 
 def get_context() -> Dict[str, Any]:
     """获取当前上下文"""
-    return _current_context
+    context = _current_context.get()
+    return context if context is not None else {}
 
 
 class SupervisorState(MessagesState):
@@ -211,7 +220,7 @@ class SupervisorAgent:
     """Supervisor Agent - 主编排Agent"""
 
     def __init__(self, emit: Optional[Callable] = None):
-        self.emit = emit
+        self._default_emit = emit
 
     def _build_system_prompt(self, context_node_ids: list | None = None, chapter_review_intensity: str = "low") -> str:
         """构建系统提示"""
@@ -314,8 +323,9 @@ class SupervisorAgent:
 
         return history, current_turn
 
-    def _build_graph(self, model_pref: dict | None = None, session_id: str | None = None, work_id: str | None = None):
+    def _build_graph(self, model_pref: dict | None = None, session_id: str | None = None, work_id: str | None = None, emit: Optional[Callable] = None):
         """构建LangGraph"""
+        emit = emit or self._default_emit
         tools = self._get_tools()
         tool_node = ToolNode(tools, handle_tool_errors=_structured_tool_error)
 
@@ -330,15 +340,15 @@ class SupervisorAgent:
             response = None
 
             for parse_attempt in range(MAX_TOOL_CALL_PARSE_RETRIES + 1):
-                if self.emit:
+                if emit:
                     label = "AI 思考中" if parse_attempt == 0 else "修复工具参数"
-                    await self.emit("stage_start", {"stage": "thinking", "label": label})
+                    await emit("stage_start", {"stage": "thinking", "label": label})
 
                 aggregated = None
                 async for chunk in llm_with_tools.astream(messages):
                     aggregated = chunk if aggregated is None else aggregated + chunk
-                    if self.emit:
-                        await emit_llm_stream_deltas(self.emit, "supervisor_stream", chunk)
+                    if emit:
+                        await emit_llm_stream_deltas(emit, "supervisor_stream", chunk)
 
                 if aggregated is None:
                     raise RuntimeError("LLM 未返回任何响应")
@@ -347,7 +357,6 @@ class SupervisorAgent:
                 if usage:
                     ctx = get_context()
                     ctx["last_llm_usage"] = usage
-                    set_context(ctx)
 
                 diagnostic = _tool_call_diagnostic_payload(aggregated)
                 has_unparsed_tool_call = (
@@ -397,15 +406,15 @@ class SupervisorAgent:
             if response is None:
                 raise RuntimeError("LLM 未返回任何响应")
 
-            if self.emit and response.tool_calls:
+            if emit and response.tool_calls:
                 tool_calls = [
                     {"id": tc.get("id", ""), "name": tc.get("name", "")}
                     for tc in response.tool_calls
                     if tc.get("name")
                 ]
                 if tool_calls:
-                    await self.emit("tool_calls", {"tools": tool_calls})
-                    await self.emit(
+                    await emit("tool_calls", {"tools": tool_calls})
+                    await emit(
                         "stage_start",
                         {"stage": "tool_calling", "label": f"调用工具: {tool_calls[0]['name']}"},
                     )
@@ -436,25 +445,31 @@ class SupervisorAgent:
     )
     async def run(self, user_message: str, context: Dict[str, Any] = None, emit: Optional[Callable] = None) -> dict:
         """运行Supervisor Agent"""
+        context_token = None
         try:
-            self.emit = emit
+            run_emit = emit or self._default_emit
+            run_context = dict(context or {})
 
-            work_id = context.get("work_id") if context else None
-            session_id = context.get("session_id") if context else None
-            user_id = context.get("user_id") if context else None
-            context_node_ids = context.get("context_node_ids") if context else None
+            work_id = run_context.get("work_id")
+            session_id = run_context.get("session_id")
+            user_id = run_context.get("user_id")
+            context_node_ids = run_context.get("context_node_ids")
 
             model_pref = self._load_model_pref(user_id)
-            if context:
-                context["emit"] = emit
-                context["model_pref"] = model_pref
-                set_context(context)
+            run_context["emit"] = run_emit
+            run_context["model_pref"] = model_pref
+            context_token = set_context(run_context)
 
-            graph = self._build_graph(model_pref=model_pref, session_id=session_id, work_id=work_id)
+            graph = self._build_graph(
+                model_pref=model_pref,
+                session_id=session_id,
+                work_id=work_id,
+                emit=run_emit,
+            )
 
             system_prompt = self._build_system_prompt(
                 context_node_ids=context_node_ids,
-                chapter_review_intensity=context.get("chapter_review_intensity", "low") if context else "low",
+                chapter_review_intensity=run_context.get("chapter_review_intensity", "low"),
             )
 
             # 注入历史对话（多轮），让 agent 看到上文，理解"需要/好/不用了"等省略回答
@@ -481,11 +496,11 @@ class SupervisorAgent:
                     run_messages = _collect_messages_from_graph_event(
                         run_messages, node_name, node_output
                     )
-                    if node_name == "tools" and self.emit:
+                    if node_name == "tools" and run_emit:
                         for msg in node_output.get("messages", []):
                             if isinstance(msg, ToolMessage):
                                 content = msg.content if hasattr(msg, "content") else str(msg)
-                                await self.emit(
+                                await run_emit(
                                     "tool_executed",
                                     {
                                         "tool": getattr(msg, "name", "unknown"),
@@ -526,8 +541,8 @@ class SupervisorAgent:
                 result["workflow_status"] = workflow_gate.get("status")
                 result["workflow_gate"] = workflow_gate
 
-            if emit:
-                await emit("supervisor_done", {
+            if run_emit:
+                await run_emit("supervisor_done", {
                     "message": result["message"],
                     "workflow_status": result.get("workflow_status", "completed"),
                     "workflow_gate": result.get("workflow_gate"),
@@ -541,6 +556,9 @@ class SupervisorAgent:
                 "success": False,
                 "error": str(e),
             }
+        finally:
+            if context_token is not None:
+                reset_context(context_token)
 
     def _save_intermediate_messages(self, session_id: str, messages: list, work_id: str = None):
         """保存中间过程（assistant 文本 / tool_call）到数据库；不保存 tool_result。"""

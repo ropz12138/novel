@@ -11,6 +11,7 @@ from pydantic import BaseModel
 
 from database import SessionLocal
 from models.user import User
+from models.work import CanvasWork
 from routers.auth import get_current_user
 from services.agents.supervisor import supervisor_agent
 from services.agents.chapter_review_policy import ChapterReviewPolicy, current_chapter_review_policy
@@ -22,6 +23,22 @@ from services import user_action_service as action_svc
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/supervisor", tags=["supervisor"])
+
+
+def _require_owned_work(work_id: Optional[str], user_id: str) -> None:
+    """确保 Agent 只能绑定当前用户自己的作品。"""
+    if not work_id:
+        return
+    db = SessionLocal()
+    try:
+        owned = db.query(CanvasWork.id).filter(
+            CanvasWork.id == work_id,
+            CanvasWork.user_id == user_id,
+        ).first()
+    finally:
+        db.close()
+    if not owned:
+        raise HTTPException(status_code=404, detail="作品不存在")
 
 
 class SupervisorStartRequest(BaseModel):
@@ -240,6 +257,7 @@ async def start_supervisor(
     user: User = Depends(get_current_user),
 ):
     """启动 Supervisor 会话（SSE 流式）"""
+    _require_owned_work(payload.work_id, user.id)
     session = session_store.create_session(user_id=user.id, work_id=payload.work_id)
     session_id = session["id"]
 
@@ -270,6 +288,7 @@ async def resume_supervisor(
         raise HTTPException(status_code=404, detail="会话不存在")
     if session["user_id"] != user.id:
         raise HTTPException(status_code=404, detail="会话不存在")
+    _require_owned_work(session.get("work_id"), user.id)
 
     session_id = payload.session_id
     user_actions_message = _store_user_actions_message(
@@ -309,6 +328,7 @@ async def edit_resend_supervisor(
     work_id = session.get("work_id")
     if not work_id:
         raise HTTPException(status_code=400, detail="会话未绑定作品，无法恢复画布")
+    _require_owned_work(work_id, user.id)
 
     db = SessionLocal()
     try:

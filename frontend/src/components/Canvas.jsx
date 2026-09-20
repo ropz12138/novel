@@ -28,6 +28,7 @@ import {
   fetchNodes,
   createNode,
   updateNode,
+  saveContentDiffDecision,
   fetchEdges,
   createEdge,
   deleteEdge,
@@ -123,15 +124,15 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange, agentRunning }, ref) {
+const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} agentRunning={agentRunning} ref={ref} />
+      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} agentRunning={agentRunning} ref={ref} />
     </ReactFlowProvider>
   );
 });
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange, agentRunning }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
@@ -383,11 +384,24 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       setSelectedNode((prev) =>
         prev && prev.id === nodeId ? applyNodeUpdateToData(prev, data) : prev
       );
+      if (Object.hasOwn(data, "content")) await onNodeContentDiffsRefresh?.();
     } catch (err) {
       console.error("Failed to update node:", err);
       alert("保存失败：" + (err?.message || "未知错误"));
     }
-  }, [setNodes, updateNode]);
+  }, [setNodes, updateNode, onNodeContentDiffsRefresh]);
+
+  const handleContentDiffDecision = useCallback(async (nodeId, data) => {
+    const result = await saveContentDiffDecision(nodeId, data);
+    if (data.current_content !== data.expected_content) {
+      setNodes((nds) => nds.map((n) => n.id === nodeId
+        ? { ...n, data: applyNodeUpdateToData(n.data, { content: result.current_content }) }
+        : n));
+      setSelectedNode((prev) => prev?.id === nodeId
+        ? applyNodeUpdateToData(prev, { content: result.current_content }) : prev);
+    }
+    return result;
+  }, [setNodes]);
 
   const handleToggleLocked = useCallback(async (nodeData) => {
     const nodeId = nodeData?.id;
@@ -576,6 +590,19 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     const bounds = event.target.closest('.react-flow')?.getBoundingClientRect();
     if (!bounds) return;
     setContextMenu({
+      kind: "pane",
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    });
+  }, []);
+
+  const onNodeContextMenu = useCallback((event, flowNode) => {
+    event.preventDefault();
+    const bounds = event.target.closest('.react-flow')?.getBoundingClientRect();
+    if (!bounds) return;
+    setContextMenu({
+      kind: "node",
+      node: { id: flowNode.id, ...flowNode.data },
       x: event.clientX - bounds.left,
       y: event.clientY - bounds.top,
     });
@@ -879,6 +906,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
           isValidConnection={isValidConnection}
           onPaneClick={onPaneClick}
           onPaneContextMenu={onPaneContextMenu}
+          onNodeContextMenu={onNodeContextMenu}
           onSelectionChange={handleSelectionChange}
           onNodeDragStart={beginDragTracking}
           onNodeDragStop={endDragTracking}
@@ -911,42 +939,58 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
             className="absolute z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
-            <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100">
-              添加节点
-            </div>
-            {[
-              { type: "outline", icon: "📋", label: "大纲", color: "text-blue-600" },
-              { type: "volume", icon: "📚", label: "卷", color: "text-indigo-600" },
-              { type: "plot", icon: "⚡", label: "情节", color: "text-orange-600" },
-              { type: "chapter", icon: "📖", label: "章节", color: "text-green-600" },
-              { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
-              { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
-              { type: "note", icon: "📝", label: "笔记", color: "text-fuchsia-600" },
-            ].map((item) => (
+            {contextMenu.kind === "node" ? (
               <button
-                key={item.type}
+                type="button"
+                aria-label="引用此节点"
                 onClick={() => {
-                  handleAddNode(item.type);
+                  onAddContext?.(contextMenu.node);
                   closeContextMenu();
                 }}
-                className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors ${item.color}`}
+                className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
               >
-                <span>{item.icon}</span>
-                <span>{item.label}</span>
+                引用此节点
               </button>
-            ))}
-            <div className="border-t border-gray-100 mt-1 pt-1">
-              <button
-                onClick={() => {
-                  handleRefresh();
-                  closeContextMenu();
-                }}
-                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-              >
-                <span>🔄</span>
-                <span>刷新</span>
-              </button>
-            </div>
+            ) : (
+              <>
+                <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100">
+                  添加节点
+                </div>
+                {[
+                  { type: "outline", icon: "📋", label: "大纲", color: "text-blue-600" },
+                  { type: "volume", icon: "📚", label: "卷", color: "text-indigo-600" },
+                  { type: "plot", icon: "⚡", label: "情节", color: "text-orange-600" },
+                  { type: "chapter", icon: "📖", label: "章节", color: "text-green-600" },
+                  { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
+                  { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
+                  { type: "note", icon: "📝", label: "笔记", color: "text-fuchsia-600" },
+                ].map((item) => (
+                  <button
+                    key={item.type}
+                    onClick={() => {
+                      handleAddNode(item.type);
+                      closeContextMenu();
+                    }}
+                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors ${item.color}`}
+                  >
+                    <span>{item.icon}</span>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+                <div className="border-t border-gray-100 mt-1 pt-1">
+                  <button
+                    onClick={() => {
+                      handleRefresh();
+                      closeContextMenu();
+                    }}
+                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
+                  >
+                    <span>🔄</span>
+                    <span>刷新</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         )}
       </div>
@@ -955,7 +999,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       <IsolatedNodePanel nodes={nodes} onSelect={handleNodeClick} />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
+      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
     </div>
   );
 });

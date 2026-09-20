@@ -1,11 +1,11 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, User, Settings, LogOut, BookOpen } from "lucide-react";
+import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft } from "lucide-react";
 import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
-import { fetchWorks, createWork, deleteWork } from "../lib/canvasApi";
-import { accumulateNodeContentDiff } from "../lib/inlineContentDiff";
+import { fetchWorks, createWork, deleteWork, fetchContentDiffs } from "../lib/canvasApi";
+import { accumulateNodeContentDiff, buildContentDiffFromContents } from "../lib/inlineContentDiff";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
 
 const CHAT_WIDTH_STORAGE_KEY = "novel_canvas_chat_width";
@@ -42,7 +42,6 @@ export function CanvasPage() {
   const [loading, setLoading] = useState(true);
   const [worksError, setWorksError] = useState("");
   const [showWorkSelector, setShowWorkSelector] = useState(false);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [showModelConfig, setShowModelConfig] = useState(false);
   const [nodeContentDiffs, setNodeContentDiffs] = useState({});
@@ -107,8 +106,20 @@ export function CanvasPage() {
   }, []);
 
   const handleNodeContentDiffsReset = useCallback(() => {
-    setNodeContentDiffs({});
-  }, []);
+    if (!currentWorkId) return;
+    return fetchContentDiffs(currentWorkId).then((rows) => {
+      const restored = {};
+      for (const row of rows) {
+        const hunks = buildContentDiffFromContents(row.original_content, row.current_content);
+        if (hunks.length) restored[row.node_id] = accumulateNodeContentDiff(null, { ...row, hunks });
+      }
+      setNodeContentDiffs(restored);
+    }).catch((error) => console.error("Failed to restore content diffs:", error));
+  }, [currentWorkId]);
+
+  useEffect(() => {
+    handleNodeContentDiffsReset();
+  }, [handleNodeContentDiffsReset]);
 
   const handleCreateWork = async () => {
     const title = prompt("请输入作品名称：", "未命名作品");
@@ -323,17 +334,6 @@ export function CanvasPage() {
             <BookOpen className="h-4 w-4" />
             <span>小说研究</span>
           </button>
-          <button
-            onClick={() => setShowChat(!showChat)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-sm transition-colors ${
-              showChat
-                ? "bg-blue-100 text-blue-700"
-                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-            }`}
-          >
-            <Bot className="h-4 w-4" />
-            <span>{showChat ? "隐藏Agent" : "显示Agent"}</span>
-          </button>
           <div className="relative">
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
@@ -400,6 +400,7 @@ export function CanvasPage() {
                 onAddContext={handleAddContext}
                 nodeContentDiffs={nodeContentDiffs}
                 onNodeContentDiffChange={handleNodeContentDiff}
+                onNodeContentDiffsRefresh={handleNodeContentDiffsReset}
                 agentRunning={agentRunning}
               />
             </div>
@@ -420,6 +421,7 @@ export function CanvasPage() {
                 </div>
                 <AgentChat
                   workId={currentWorkId}
+                  onCollapse={() => setShowChat(false)}
                   onNodesUpdate={handleNodesUpdate}
                   onNodeContentDiff={handleNodeContentDiff}
                   onNodeContentDiffsReset={handleNodeContentDiffsReset}
@@ -427,6 +429,23 @@ export function CanvasPage() {
                   insertPillRef={insertPillRef}
                 />
               </div>
+            )}
+            {!showChat && (
+              <aside className="flex w-10 shrink-0 flex-col items-center border-l border-slate-200 bg-slate-50/80 py-2">
+                <button
+                  type="button"
+                  onClick={() => setShowChat(true)}
+                  className="rounded-md p-1.5 text-slate-500 transition-colors hover:bg-white hover:text-blue-600"
+                  title="展开Agent侧边栏"
+                  aria-label="展开Agent侧边栏"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </button>
+                <Bot className="mt-2 h-4 w-4 text-blue-500" />
+                <span className="mt-2 select-none text-[11px] text-slate-400 [writing-mode:vertical-rl]">
+                  Agent
+                </span>
+              </aside>
             )}
           </>
         )}

@@ -528,6 +528,32 @@ describe("Canvas forwardRef", () => {
     expect(typeof mocks.lastReactFlowProps.onSelectionDragStop).toBe("function");
   });
 
+  it("shows 引用此节点 when a node is right-clicked", async () => {
+    const onAddContext = vi.fn();
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-node-menu" onAddContext={onAddContext} />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    const flowNode = {
+      id: "chapter-1",
+      data: { type: "chapter", label: "第一章", content: "正文", sort_order: 1 },
+    };
+    act(() => {
+      mocks.lastReactFlowProps.onNodeContextMenu({
+        preventDefault: vi.fn(),
+        clientX: 120,
+        clientY: 80,
+        target: document.querySelector('[data-testid="react-flow"]'),
+      }, flowNode);
+    });
+
+    fireEvent.click(document.querySelector('button[aria-label="引用此节点"]'));
+
+    expect(onAddContext).toHaveBeenCalledWith({ id: "chapter-1", ...flowNode.data });
+  });
+
   it("exposes a refresh method via ref", async () => {
     fetchNodes.mockResolvedValue({ nodes: [] });
     fetchEdges.mockResolvedValue({ edges: [] });

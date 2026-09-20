@@ -1,8 +1,9 @@
-import { Children, useState, useEffect, useLayoutEffect, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, MessageSquarePlus, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight, Check, Undo2 } from "lucide-react";
+import { Children, useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight, Check, Undo2 } from "lucide-react";
 import {
   buildStackedInlineDiffBlocks,
   contentAfterBatches,
+  buildContentDiffFromContents,
   hydrateDiffBatches,
   pendingHunksFromBatches,
   setAllHunkStatusInBatches,
@@ -11,6 +12,7 @@ import {
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
+import { compareSiblings } from "../../lib/canvasOrder";
 
 const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
 const HIGHLIGHT_TOKEN_SUFFIX = "%%";
@@ -202,26 +204,46 @@ function useRememberedDetailScroll(nodeId) {
   return scrollRef;
 }
 
-function ChapterCharactersBar({ characters }) {
+function textRangesIn(container, text) {
+  if (!container || !text) return [];
+  const ranges = [];
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  let textNode = walker.nextNode();
+  while (textNode) {
+    let offset = textNode.nodeValue.indexOf(text);
+    while (offset >= 0) {
+      const range = document.createRange();
+      range.setStart(textNode, offset);
+      range.setEnd(textNode, offset + text.length);
+      ranges.push(range);
+      offset = textNode.nodeValue.indexOf(text, offset + text.length);
+    }
+    textNode = walker.nextNode();
+  }
+  return ranges;
+}
+
+function ChapterCharactersBar({ characters, onCharacterClick }) {
   if (!Array.isArray(characters) || characters.length === 0) return null;
 
   return (
-    <div className="mb-6 rounded-lg border border-pink-200 bg-pink-50/70 px-4 py-3 text-left">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-pink-700">出场角色</h2>
-        <span className="text-xs text-pink-700/70">{characters.length} 人</span>
-      </div>
-      <div className="flex flex-wrap gap-2">
+    <div className="flex w-full min-w-0 items-center gap-2 border-l border-gray-200 pl-4 text-left">
+      <h2 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-pink-700">出场角色</h2>
+      <span className="shrink-0 text-xs text-pink-700/70">{characters.length} 人</span>
+      <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
         {characters.map((character, index) => {
           const name = character?.name;
           if (!name) return null;
           return (
-            <span
+            <button
+              type="button"
               key={character?.id || `${name}-${index}`}
-              className="inline-flex max-w-full items-center rounded-full border border-pink-200 bg-white px-3 py-1 text-xs font-medium text-pink-900 shadow-sm"
+              aria-label={`定位角色：${name}`}
+              onClick={() => onCharacterClick?.(name)}
+              className="inline-flex max-w-32 shrink-0 items-center rounded-full border border-pink-200 bg-pink-50 px-2 py-1 text-xs font-medium text-pink-900 hover:border-pink-300 hover:bg-pink-100"
             >
               <span className="truncate">{name}</span>
-            </span>
+            </button>
           );
         })}
       </div>
@@ -233,19 +255,17 @@ function ChapterElementsBar({ elements }) {
   if (!Array.isArray(elements) || elements.length === 0) return null;
 
   return (
-    <div className="mb-10 rounded-lg border border-amber-200 bg-amber-50/70 px-4 py-3 text-left">
-      <div className="mb-2 flex items-center justify-between gap-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wide text-amber-700">本章元素</h2>
-        <span className="text-xs text-amber-700/70">{elements.length} 项</span>
-      </div>
-      <div className="flex flex-wrap gap-2">
+    <div className="flex w-full min-w-0 items-center gap-2 border-l border-gray-200 pl-4 text-left">
+      <h2 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-amber-700">本章元素</h2>
+      <span className="shrink-0 text-xs text-amber-700/70">{elements.length} 项</span>
+      <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
         {elements.map((element, index) => {
           const title = element?.title || element?.content || `元素 ${index + 1}`;
           const content = element?.content || "";
           return (
             <span
               key={element?.id || `${title}-${index}`}
-              className="inline-flex max-w-full items-center rounded-full border border-amber-200 bg-white px-3 py-1 text-xs font-medium text-amber-900 shadow-sm"
+              className="inline-flex max-w-40 shrink-0 items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900"
               title={content || title}
             >
               <span className="truncate">{title}</span>
@@ -331,88 +351,123 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
   const wordCount = (node.content || "").replace(/\s+/g, "").length;
   const chapterElements = node.extra_data?.chapter_elements || [];
   const chapterCharacters = node.extra_data?.characters || [];
+  const characterOccurrenceRef = useRef({ nodeId: node.id, nextIndexByName: new Map() });
+
+  const handleCharacterClick = (name) => {
+    const scrollContainer = scrollRef.current;
+    const ranges = textRangesIn(scrollContainer, name);
+    if (!ranges.length) return;
+
+    if (characterOccurrenceRef.current.nodeId !== node.id) {
+      characterOccurrenceRef.current = { nodeId: node.id, nextIndexByName: new Map() };
+    }
+    const nextIndex = characterOccurrenceRef.current.nextIndexByName.get(name) || 0;
+    const range = ranges[nextIndex % ranges.length];
+    characterOccurrenceRef.current.nextIndexByName.set(name, (nextIndex + 1) % ranges.length);
+
+    const selection = window.getSelection?.();
+    selection?.removeAllRanges?.();
+    selection?.addRange?.(range);
+
+    const rangeRect = range.getBoundingClientRect?.();
+    const containerRect = scrollContainer.getBoundingClientRect?.();
+    if (rangeRect && containerRect && typeof scrollContainer.scrollTo === "function") {
+      scrollContainer.scrollTo({
+        top: scrollContainer.scrollTop + rangeRect.top - containerRect.top - scrollContainer.clientHeight / 2,
+        behavior: "smooth",
+      });
+    } else {
+      range.startContainer.parentElement?.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    }
+  };
 
   return (
-    <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
-      <div className={`${isFullscreen ? "max-w-4xl px-16 py-16" : "max-w-2xl px-8 py-12"} mx-auto`}>
-        <div className="text-center mb-12">
-          <h1 className={`${isFullscreen ? "text-4xl" : "text-3xl"} font-serif font-bold text-gray-900 mb-2`}>
-            {node.label}
-          </h1>
-          <div className="w-16 h-px bg-gray-300 mx-auto" />
-          <div className="mt-3 flex items-center justify-center gap-2 text-xs text-gray-500">
-            <span>{wordCount} 字</span>
-            {latestEvaluation && (
-              <span
-                className={`rounded-full px-2 py-0.5 ${
-                  latestEvaluation.passed
-                    ? "bg-emerald-100 text-emerald-700"
-                    : "bg-amber-100 text-amber-700"
-                }`}
-              >
-                {latestEvaluation.passed ? "与画布规划同步" : "同步检查未通过"}
-              </span>
-            )}
-            {generation && (
-              <span>自动修订 {Math.max(0, evaluations.length - 1)} 次</span>
-            )}
+    <>
+      <div data-testid="chapter-detail-header" className="shrink-0 border-b border-amber-200 bg-amber-50 text-left">
+        <div className={`${isFullscreen ? "px-16" : "px-8"} mx-auto flex min-h-20 max-w-6xl items-center gap-5 overflow-hidden py-3`}>
+          <div className="min-w-48 shrink-0">
+            <h1 className={`${isFullscreen ? "text-2xl" : "text-xl"} truncate font-serif font-bold text-gray-900`}>
+              {node.label}
+            </h1>
+            <div className="mt-1.5 flex items-center justify-start gap-2 text-xs text-gray-500">
+              <span>{wordCount} 字</span>
+              {latestEvaluation && (
+                <span
+                  className={`rounded-full px-2 py-0.5 ${
+                    latestEvaluation.passed
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-amber-100 text-amber-700"
+                  }`}
+                >
+                  {latestEvaluation.passed ? "与画布规划同步" : "同步检查未通过"}
+                </span>
+              )}
+              {generation && (
+                <span>自动修订 {Math.max(0, evaluations.length - 1)} 次</span>
+              )}
+            </div>
+          </div>
+          <div className="flex min-w-0 flex-1 flex-col gap-2">
+            <ChapterCharactersBar characters={chapterCharacters} onCharacterClick={handleCharacterClick} />
+            <ChapterElementsBar elements={chapterElements} />
           </div>
         </div>
-
-        <ChapterCharactersBar characters={chapterCharacters} />
-        <ChapterElementsBar elements={chapterElements} />
-
-        <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none font-serif`}>
-          <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
-            <NodeContentBody
-              content={node.content}
-              batches={batches}
-              onAcceptHunk={onAcceptHunk}
-              onRejectHunk={onRejectHunk}
-              readOnly={readOnlyDiff}
-            />
-          </div>
-        </div>
-
-        {latestEvaluation && (
-          <div className="mt-16 pt-8 border-t border-gray-200">
-            <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
-              同步检查
-            </h3>
-            {latestEvaluation.plan_alignment?.completed?.length > 0 && (
-              <div className="mt-6">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  已完成的规划
-                </h4>
-                <ul className="space-y-1">
-                  {latestEvaluation.plan_alignment.completed.map((item, i) => (
-                    <li key={i} className="text-sm text-gray-600 flex items-start gap-2">
-                      <span className="text-green-500 mt-1">•</span>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-            {latestEvaluation.plan_alignment?.missing?.length > 0 && (
-              <div className="mt-6">
-                <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
-                  尚未完成的规划
-                </h4>
-                <ul className="space-y-1">
-                  {latestEvaluation.plan_alignment.missing.map((item, i) => (
-                    <li key={i} className="text-sm text-gray-600 flex items-start gap-2">
-                      <span className="text-amber-500 mt-1">•</span>
-                      {item}
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            )}
-          </div>
-        )}
       </div>
-    </div>
+
+      <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto bg-amber-50">
+        <div className={`${isFullscreen ? "max-w-4xl px-16 py-16" : "max-w-2xl px-8 py-12"} mx-auto`}>
+          <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none font-serif`}>
+            <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
+              <NodeContentBody
+                content={node.content}
+                batches={batches}
+                onAcceptHunk={onAcceptHunk}
+                onRejectHunk={onRejectHunk}
+                readOnly={readOnlyDiff}
+              />
+            </div>
+          </div>
+
+          {latestEvaluation && (
+            <div className="mt-16 pt-8 border-t border-gray-200">
+              <h3 className="text-sm font-semibold text-gray-500 uppercase tracking-wide mb-4">
+                同步检查
+              </h3>
+              {latestEvaluation.plan_alignment?.completed?.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    已完成的规划
+                  </h4>
+                  <ul className="space-y-1">
+                    {latestEvaluation.plan_alignment.completed.map((item, i) => (
+                      <li key={i} className="text-sm text-gray-600 flex items-start gap-2">
+                        <span className="text-green-500 mt-1">•</span>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {latestEvaluation.plan_alignment?.missing?.length > 0 && (
+                <div className="mt-6">
+                  <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
+                    尚未完成的规划
+                  </h4>
+                  <ul className="space-y-1">
+                    {latestEvaluation.plan_alignment.missing.map((item, i) => (
+                      <li key={i} className="text-sm text-gray-600 flex items-start gap-2">
+                        <span className="text-amber-500 mt-1">•</span>
+                        {item}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -654,7 +709,14 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
+function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onContentDiffDecision, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
+  const orderedChapterNodes = useMemo(
+    () => [...chapterNodes].sort((left, right) => compareSiblings(
+      { id: left.id, data: left },
+      { id: right.id, data: right },
+    )),
+    [chapterNodes],
+  );
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
@@ -674,14 +736,13 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   );
   const [saving, setSaving] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [selectionAction, setSelectionAction] = useState(null);
   const [diffBatches, setDiffBatches] = useState(() => hydrateDiffBatches(node.content || "", contentDiff).batches);
-  const selectedTextRef = useRef("");
-  const addContextButtonRef = useRef(null);
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
 
   useEffect(() => {
     setIsEditing(false);
-    selectedTextRef.current = "";
+    setSelectionAction(null);
     setEditTitle(node.label);
     setEditContent(node.content || "");
     setEditChapterElements(
@@ -733,43 +794,50 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
 
   const handleTextSelect = (event) => {
     const selection = window.getSelection?.();
-    if (!selection || selection.rangeCount === 0) return;
-    const range = selection.getRangeAt(0);
-    if (!event.currentTarget.contains(range.commonAncestorContainer)) return;
-    const selectedText = selection.toString().trim();
-    selectedTextRef.current = selectedText;
-    const label = selectedText ? "加入选中文本到对话上下文" : "加入对话上下文";
-    addContextButtonRef.current?.setAttribute("title", label);
-    addContextButtonRef.current?.setAttribute("aria-label", label);
-  };
-
-  const handleAddContext = () => {
-    onAddContext?.(node, selectedTextRef.current || undefined);
-    selectedTextRef.current = "";
-    addContextButtonRef.current?.setAttribute("title", "加入对话上下文");
-    addContextButtonRef.current?.setAttribute("aria-label", "加入对话上下文");
-  };
-
-  const persistBatches = (nextBatches) => {
-    setDiffBatches(nextBatches);
-    if (!pendingHunksFromBatches(nextBatches).length) {
-      onContentDiffChange?.(null);
+    if (!selection || selection.rangeCount === 0) {
+      setSelectionAction(null);
       return;
     }
-    onContentDiffChange?.({
-      ...contentDiff,
-      original_content: nextBatches[0]?.original_content,
-      batches: nextBatches,
-      hunks: pendingHunksFromBatches(nextBatches),
-    });
+    const range = selection.getRangeAt(0);
+    if (!event.currentTarget.contains(range.commonAncestorContainer)) {
+      setSelectionAction(null);
+      return;
+    }
+    const selectedText = selection.toString().trim();
+    setSelectionAction(selectedText ? {
+      text: selectedText,
+      x: event.clientX,
+      y: event.clientY,
+    } : null);
+  };
+
+  const handleQuoteSelection = () => {
+    if (!selectionAction?.text) return;
+    onAddContext?.(node, selectionAction.text);
+    setSelectionAction(null);
+    window.getSelection?.()?.removeAllRanges?.();
   };
 
   const applyHunkDecisions = async (nextBatches) => {
     const nextContent = contentAfterBatches(nextBatches);
-    if (nextContent !== (node.content || "")) {
-      await onUpdate?.(node.id, { content: nextContent });
+    const nextBaseline = contentAfterBatches(setAllHunkStatusInBatches(nextBatches, "rejected"));
+    try {
+      await onContentDiffDecision?.(node.id, {
+        expected_content: contentDiff?.current_content ?? node.content ?? "",
+        expected_baseline: contentDiff?.original_content ?? nextBatches[0]?.original_content ?? "",
+        baseline_content: nextBaseline,
+        current_content: nextContent,
+      });
+      const hunks = buildContentDiffFromContents(nextBaseline, nextContent);
+      if (hunks.length) {
+        onContentDiffChange?.({ original_content: nextBaseline, current_content: nextContent,
+          hunks, batches: [{ original_content: nextBaseline, hunks }] });
+      } else {
+        onContentDiffChange?.(null);
+      }
+    } catch (error) {
+      alert("处理正文修改失败：" + (error?.message || "未知错误"));
     }
-    persistBatches(nextBatches);
   };
 
   const handleAcceptHunk = (batchIndex, hunkIndex) => {
@@ -790,10 +858,19 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
 
   const pendingDiffCount = pendingHunksFromBatches(diffBatches).length;
   const isDiffPreview = contentDiff?.preview === true && agentRunning !== false;
+  const currentChapterIndex = isChapter
+    ? orderedChapterNodes.findIndex((chapter) => chapter.id === node.id)
+    : -1;
+  const previousChapter = currentChapterIndex > 0
+    ? orderedChapterNodes[currentChapterIndex - 1]
+    : null;
+  const nextChapter = currentChapterIndex >= 0
+    ? orderedChapterNodes[currentChapterIndex + 1]
+    : null;
 
   return (
     <div
-      className={`nodrag nopan nowheel select-text relative flex flex-col bg-white shadow-xl animate-in slide-in-from-left ${
+      className={`nodrag nopan nowheel select-text relative flex flex-col shadow-xl animate-in slide-in-from-left ${isChapter ? "bg-amber-50" : "bg-white"} ${
         isFullscreen
           ? "h-full w-full"
           : isEditing || isChapter || isCharacter
@@ -801,6 +878,42 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
             : "h-full w-[420px] max-w-[90vw]"
       }`}
     >
+      {selectionAction && onAddContext && (
+        <button
+          type="button"
+          aria-label="引用此段"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={handleQuoteSelection}
+          className="fixed z-[60] rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-slate-700"
+          style={{ left: selectionAction.x + 8, top: selectionAction.y + 8 }}
+        >
+          引用此段
+        </button>
+      )}
+      {isChapter && isFullscreen && orderedChapterNodes.length > 1 && (
+        <>
+          <button
+            type="button"
+            onClick={() => previousChapter && onChapterNavigate?.(previousChapter)}
+            disabled={!previousChapter}
+            className="absolute left-4 top-1/2 z-20 -translate-y-1/2 rounded-full border border-amber-200 bg-amber-100/90 p-3 text-amber-900 shadow-md transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-30"
+            title="上一章"
+            aria-label="上一章"
+          >
+            <ChevronLeft className="h-6 w-6" />
+          </button>
+          <button
+            type="button"
+            onClick={() => nextChapter && onChapterNavigate?.(nextChapter)}
+            disabled={!nextChapter}
+            className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full border border-amber-200 bg-amber-100/90 p-3 text-amber-900 shadow-md transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-30"
+            title="下一章"
+            aria-label="下一章"
+          >
+            <ChevronRight className="h-6 w-6" />
+          </button>
+        </>
+      )}
       <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
         <div className="flex items-center gap-2">
           <span className="text-lg">{isEditing ? "✏️" : isChapter ? "📖" : "📄"}</span>
@@ -852,17 +965,6 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
             </>
           ) : (
             <>
-              {onAddContext && (
-                <button
-                  ref={addContextButtonRef}
-                  onClick={handleAddContext}
-                  className="p-1.5 rounded-md text-gray-400 hover:text-amber-500 hover:bg-amber-50 transition-colors"
-                  title="加入对话上下文"
-                  aria-label="加入对话上下文"
-                >
-                  <MessageSquarePlus className="w-4 h-4" />
-                </button>
-              )}
               {onToggleLocked && (
                 <button
                   onClick={() => onToggleLocked(node)}
@@ -902,33 +1004,6 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
               )}
             </>
           )}
-          {isChapter && isFullscreen && Array.isArray(chapterNodes) && chapterNodes.length > 1 && (() => {
-            const currentIndex = chapterNodes.findIndex((chapter) => chapter.id === node.id);
-            const previousChapter = currentIndex > 0 ? chapterNodes[currentIndex - 1] : null;
-            const nextChapter = currentIndex >= 0 ? chapterNodes[currentIndex + 1] : null;
-            return (
-              <div className="mr-1 flex items-center gap-1 border-r border-gray-200 pr-1">
-                <button
-                  onClick={() => previousChapter && onChapterNavigate?.(previousChapter)}
-                  disabled={!previousChapter}
-                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
-                  title="上一章"
-                  aria-label="上一章"
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                </button>
-                <button
-                  onClick={() => nextChapter && onChapterNavigate?.(nextChapter)}
-                  disabled={!nextChapter}
-                  className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-30 transition-colors"
-                  title="下一章"
-                  aria-label="下一章"
-                >
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            );
-          })()}
           <button
             onClick={() => setIsFullscreen((value) => !value)}
             className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -985,14 +1060,14 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   );
 }
 
-export default function NodeDetailDrawer({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
+export default function NodeDetailDrawer({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onContentDiffDecision, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
-      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
+      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
     </div>
   );
 }

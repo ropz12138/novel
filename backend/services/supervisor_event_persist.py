@@ -66,6 +66,11 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
         return False
 
     if event in ("chapter_edit_diff", "node_content_diff"):
+        from models.node import Node
+        from services.node_content_diff_state import record_agent_change
+        source_node = db.get(Node, data.get("node_id") or data.get("chapter_node_id"))
+        if source_node is not None and data.get("original_content") is not None:
+            record_agent_change(db, source_node, data["original_content"])
         diff = data.get("diff") or {}
         node_id = data.get("node_id") or data.get("chapter_node_id") or ""
         db.add(

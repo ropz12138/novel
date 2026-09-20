@@ -47,6 +47,17 @@ export async function updateNode(id, data) {
   }, "更新节点失败");
 }
 
+export async function fetchContentDiffs(workId) {
+  return authJson(`${API_BASE}/works/${workId}/content-diffs`, {}, "加载正文修改失败");
+}
+
+export async function saveContentDiffDecision(nodeId, data) {
+  return authJson(`${API_BASE}/nodes/${nodeId}/content-diff-decision`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }, "处理正文修改失败");
+}
+
 export async function deleteNode(id) {
   return authJson(`${API_BASE}/nodes/${id}`, {
     method: "DELETE",

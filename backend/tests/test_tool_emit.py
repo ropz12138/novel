@@ -70,23 +70,27 @@ def _make_collector():
 # ── BUG #0: run() 必须把 emit 注入 context ──
 
 def test_run_injects_emit_into_context(monkeypatch):
-    """run() 调用后，全局 context 应含 emit，使工具的 _get_emit() 能读到。"""
+    """run() 期间工具可读取 emit，结束后请求上下文不会残留。"""
+    seen_context = {}
+
+    class FakeGraph:
+        async def astream(self, *args, **kwargs):
+            seen_context.update(supervisor_mod.get_context())
+            if False:
+                yield None
+
     monkeypatch.setattr(
         supervisor_mod.SupervisorAgent,
         "_build_graph",
-        lambda self, **kwargs: _FakeGraph(),
+        lambda self, **kwargs: FakeGraph(),
     )
 
     collect, _ = _make_collector()
     agent = supervisor_mod.SupervisorAgent()
-    try:
-        asyncio.run(agent.run("hi", {"work_id": "w1"}, emit=collect))
-    except Exception:
-        # run 可能因 traceable/事件不完整抛错；本测试只关心 context 注入
-        pass
+    asyncio.run(agent.run("hi", {"work_id": "w1"}, emit=collect))
 
-    ctx = supervisor_mod.get_context()
-    assert ctx.get("emit") is collect, "run() 未把 emit 注入 context（BUG #0）"
+    assert seen_context.get("emit") is collect
+    assert supervisor_mod.get_context() == {}
 
 
 # ── BUG #A: _update_edge_async 触发 emit ──

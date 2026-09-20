@@ -214,9 +214,7 @@ async def _list_research_artifacts_async(
     limit=50,
     reason=None,
 ) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
+    return await asyncio.to_thread(
         partial(
             _list_research_artifacts_sync,
             job_id,
@@ -232,9 +230,7 @@ async def _read_research_artifacts_async(
     artifact_ids,
     reason=None,
 ) -> str:
-    loop = asyncio.get_running_loop()
-    return await loop.run_in_executor(
-        None,
+    return await asyncio.to_thread(
         partial(_read_research_artifacts_sync, artifact_ids, reason),
     )
 

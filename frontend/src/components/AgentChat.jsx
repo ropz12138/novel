@@ -1,10 +1,20 @@
 import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import { Bot, Send, Sparkles, Plus, ChevronDown, Trash2 } from "lucide-react";
+import { Bot, Send, Sparkles, Plus, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "./supervisor/ChatTimeline";
 import { useSmartScroll } from "../hooks/useSmartScroll";
 import { sessionApi } from "../lib/api";
 import { getLatestSupervisorSession } from "../lib/supervisorSession";
+
+const CHAPTER_REVIEW_INTENSITIES = [
+  { value: "low", shortLabel: "低", label: "低 · 不评审连续性和对白" },
+  { value: "medium", shortLabel: "中", label: "中 · 各评审一次" },
+  { value: "high", shortLabel: "高", label: "高 · 按需复评" },
+];
+
+function snapIntensityIndex(ratio) {
+  return Math.min(2, Math.max(0, Math.round(ratio * 2)));
+}
 
 const NODE_PILL_COLORS = {
   outline: "#3b82f6",
@@ -17,7 +27,7 @@ const NODE_PILL_COLORS = {
   element: "#d97706",
 };
 
-export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onRunningChange, insertPillRef }) {
+export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onRunningChange, insertPillRef, onCollapse }) {
   const chat = useSupervisorChat({
     workId,
     callbacks: {
@@ -36,6 +46,40 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
   const inputRef = useRef(null);
   const [hasInput, setHasInput] = useState(false);
   const [chapterReviewIntensity, setChapterReviewIntensity] = useState("low");
+  const [intensityDragRatio, setIntensityDragRatio] = useState(null);
+  const intensityTrackRef = useRef(null);
+  const intensityDragRef = useRef({ active: false, moved: false });
+  const intensityIndex = CHAPTER_REVIEW_INTENSITIES.findIndex((item) => item.value === chapterReviewIntensity);
+  const intensityDisplayRatio = intensityDragRatio ?? intensityIndex / 2;
+
+  const ratioFromIntensityPointer = useCallback((clientX) => {
+    const rect = intensityTrackRef.current.getBoundingClientRect();
+    return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
+  }, []);
+
+  const onIntensityPointerDown = useCallback((event) => {
+    if (chat.running) return;
+    intensityDragRef.current = { active: true, moved: false };
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    setIntensityDragRatio(intensityIndex / 2);
+  }, [chat.running, intensityIndex]);
+
+  const onIntensityPointerMove = useCallback((event) => {
+    if (!intensityDragRef.current.active) return;
+    intensityDragRef.current.moved = true;
+    setIntensityDragRatio(ratioFromIntensityPointer(event.clientX));
+  }, [ratioFromIntensityPointer]);
+
+  const onIntensityPointerUp = useCallback((event) => {
+    if (!intensityDragRef.current.active) return;
+    const moved = intensityDragRef.current.moved;
+    intensityDragRef.current = { active: false, moved: false };
+    if (moved) {
+      const snapped = snapIntensityIndex(ratioFromIntensityPointer(event.clientX));
+      setChapterReviewIntensity(CHAPTER_REVIEW_INTENSITIES[snapped].value);
+    }
+    setIntensityDragRatio(null);
+  }, [ratioFromIntensityPointer]);
 
   const serializeContentEditable = useCallback((el) => {
     let result = "";
@@ -277,6 +321,15 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
         <div className="flex items-center justify-between px-3 py-2">
           <button
             type="button"
+            onClick={onCollapse}
+            className="mr-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-slate-400 transition-colors hover:bg-slate-100 hover:text-slate-600"
+            title="收起Agent侧边栏"
+            aria-label="收起Agent侧边栏"
+          >
+            <ChevronRight className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
             onClick={() => !chat.running && setSessionListOpen(!sessionListOpen)}
             className="flex min-w-0 flex-1 items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-sm text-slate-700 transition-colors hover:bg-slate-100 disabled:opacity-50"
             disabled={chat.running}
@@ -404,20 +457,6 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
 
       {/* 输入框 */}
       <div className="shrink-0 px-3 py-3 border-t border-gray-200 bg-gray-50">
-        <label className="mb-2 flex items-center gap-2 text-xs text-gray-600">
-          章节评审强度
-          <select
-            aria-label="章节评审强度"
-            value={chapterReviewIntensity}
-            disabled={chat.running}
-            onChange={(event) => setChapterReviewIntensity(event.target.value)}
-            className="rounded border border-gray-300 bg-white px-2 py-1 text-xs text-gray-700"
-          >
-            <option value="low">低 · 不评审连续性和对白</option>
-            <option value="medium">中 · 各评审一次</option>
-            <option value="high">高 · 按需复评</option>
-          </select>
-        </label>
         <div className="flex items-end gap-2">
           <div
             ref={inputRef}
@@ -472,8 +511,47 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
             <Send className="h-4 w-4" />
           </button>
         </div>
-        <div className="mt-2 text-[10px] text-gray-400 text-center">
-          按 Enter 发送，Shift + Enter 换行
+        <div className="mt-2 flex justify-end">
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] text-gray-500">章节评审强度</span>
+            <div
+              ref={intensityTrackRef}
+              role="slider"
+              aria-label="章节评审强度"
+              aria-valuemin={0}
+              aria-valuemax={2}
+              aria-valuenow={intensityIndex}
+              aria-valuetext={chapterReviewIntensity}
+              aria-disabled={chat.running}
+              tabIndex={chat.running ? -1 : 0}
+              onPointerDown={onIntensityPointerDown}
+              onPointerMove={onIntensityPointerMove}
+              onPointerUp={onIntensityPointerUp}
+              onPointerCancel={onIntensityPointerUp}
+              className={`relative grid h-6 w-16 grid-cols-3 rounded-md bg-gray-200 p-0.5 text-[10px] select-none ${
+                chat.running ? "cursor-not-allowed opacity-50" : "cursor-ew-resize"
+              }`}
+            >
+              <div
+                data-intensity-window
+                data-intensity={chapterReviewIntensity}
+                className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded bg-white shadow-sm ${
+                  intensityDragRatio == null ? "transition-transform duration-150" : ""
+                }`}
+                style={{ transform: `translateX(${intensityDisplayRatio * 200}%)` }}
+              />
+              {CHAPTER_REVIEW_INTENSITIES.map((item) => (
+                <span
+                  key={item.value}
+                  className={`pointer-events-none relative z-10 flex items-center justify-center ${
+                    chapterReviewIntensity === item.value ? "font-medium text-gray-900" : "text-gray-500"
+                  }`}
+                >
+                  {item.shortLabel}
+                </span>
+              ))}
+            </div>
+          </div>
         </div>
       </div>
     </div>

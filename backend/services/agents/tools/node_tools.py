@@ -1058,8 +1058,7 @@ def _batch_create_edges_sync(edges_data, reason=None):
 
 # 异步包装
 async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
+    result = await asyncio.to_thread(partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -1090,8 +1089,7 @@ async def _update_node_async(
     mode="overwrite",
     replacements=None,
 ):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements))
+    result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements))
     try:
         data = json.loads(result)
         if data.get("success"):
@@ -1109,8 +1107,7 @@ async def _update_node_async(
 
 
 async def _delete_node_async(node_id, reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_delete_node_sync, node_id, reason))
+    result = await asyncio.to_thread(partial(_delete_node_sync, node_id, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -1124,8 +1121,7 @@ async def _delete_node_async(node_id, reason=None):
 
 
 async def _create_edge_async(source_id, target_id, edge_type="uses", reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_create_edge_sync, source_id, target_id, edge_type, reason))
+    result = await asyncio.to_thread(partial(_create_edge_sync, source_id, target_id, edge_type, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -1139,8 +1135,7 @@ async def _create_edge_async(source_id, target_id, edge_type="uses", reason=None
 
 
 async def _delete_edge_async(edge_id, reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_delete_edge_sync, edge_id, reason))
+    result = await asyncio.to_thread(partial(_delete_edge_sync, edge_id, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -1154,9 +1149,8 @@ async def _delete_edge_async(edge_id, reason=None):
 
 
 async def _update_edge_async(edge_id, edge_type=None, label=None, reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None, partial(_update_edge_sync, edge_id, edge_type, label, reason)
+    result = await asyncio.to_thread(
+        partial(_update_edge_sync, edge_id, edge_type, label, reason)
     )
     try:
         data = json.loads(result)
@@ -1170,8 +1164,7 @@ async def _update_edge_async(edge_id, edge_type=None, label=None, reason=None):
 
 
 async def _batch_create_nodes_async(nodes_data, reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_batch_create_nodes_sync, nodes_data, reason))
+    result = await asyncio.to_thread(partial(_batch_create_nodes_sync, nodes_data, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)
@@ -1185,8 +1178,7 @@ async def _batch_create_nodes_async(nodes_data, reason=None):
 
 
 async def _batch_create_edges_async(edges_data, reason=None):
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_batch_create_edges_sync, edges_data, reason))
+    result = await asyncio.to_thread(partial(_batch_create_edges_sync, edges_data, reason))
     # 触发画布更新事件
     try:
         data = json.loads(result)

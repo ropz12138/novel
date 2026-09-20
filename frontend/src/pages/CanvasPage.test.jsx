@@ -7,22 +7,31 @@ const apiMocks = vi.hoisted(() => ({
   fetchWorks: vi.fn(),
   createWork: vi.fn(),
   deleteWork: vi.fn(),
+  fetchContentDiffs: vi.fn(),
 }));
 
 vi.mock("../lib/canvasApi", () => ({
   fetchWorks: apiMocks.fetchWorks,
   createWork: apiMocks.createWork,
   deleteWork: apiMocks.deleteWork,
+  fetchContentDiffs: apiMocks.fetchContentDiffs,
 }));
 
 vi.mock("../components/Canvas", () => ({
-  default: forwardRef(function CanvasMock({ workId }, _ref) {
-    return <div data-testid="canvas-mock" data-work-id={workId} />;
+  default: forwardRef(function CanvasMock({ workId, nodeContentDiffs }, _ref) {
+    return <div data-testid="canvas-mock" data-work-id={workId}
+      data-diff-count={Object.keys(nodeContentDiffs).length} />;
   }),
 }));
 
 vi.mock("../components/AgentChat", () => ({
-  default: () => <div data-testid="agent-chat-mock" />,
+  default: ({ onNodeContentDiff, onCollapse }) => <div data-testid="agent-chat-mock">
+    <button aria-label="收起Agent侧边栏" onClick={onCollapse}>收起Agent侧边栏</button>
+    <button onClick={() => onNodeContentDiff?.("chapter-live", {
+      original_content: "旧正文", current_content: "新正文",
+      hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧正文", new_text: "新正文" }],
+    })}>模拟实时正文修改</button>
+  </div>,
 }));
 
 vi.mock("../components/ModelConfigDialog", () => ({
@@ -48,6 +57,7 @@ describe("CanvasPage delete work", () => {
       ],
     });
     apiMocks.deleteWork.mockResolvedValue(undefined);
+    apiMocks.fetchContentDiffs.mockResolvedValue([]);
   });
 
   it("shows delete button in work selector and calls deleteWork", async () => {
@@ -85,6 +95,29 @@ describe("CanvasPage delete work", () => {
     expect(screen.getByText("作品二")).toBeDefined();
   });
 
+  it("restores pending agent body diffs from the server", async () => {
+    apiMocks.fetchContentDiffs.mockResolvedValue([{
+      node_id: "chapter-1", original_content: "旧正文", current_content: "新正文",
+    }]);
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage />
+      </MemoryRouter>,
+    );
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset.diffCount).toBe("1"));
+  });
+
+  it("shows an agent body diff as soon as the live event arrives", async () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage />
+      </MemoryRouter>,
+    );
+    await screen.findByTestId("canvas-mock");
+    fireEvent.click(screen.getByRole("button", { name: "模拟实时正文修改" }));
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset.diffCount).toBe("1"));
+  });
+
   it("lets the user drag the chat panel wider", async () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -108,5 +141,23 @@ describe("CanvasPage delete work", () => {
       expect(panel.style.width).toBe(`${expectedWidth}px`);
       expect(window.localStorage.getItem("novel_canvas_chat_width")).toBe(String(expectedWidth));
     });
+  });
+
+  it("expands and collapses Agent from controls in the sidebar", async () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage />
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("agent-chat-mock");
+    expect(screen.queryByText("隐藏Agent")).toBeNull();
+    expect(screen.queryByText("显示Agent")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "收起Agent侧边栏" }));
+    expect(screen.queryByTestId("agent-chat-mock")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "展开Agent侧边栏" }));
+    expect(await screen.findByTestId("agent-chat-mock")).toBeDefined();
   });
 });

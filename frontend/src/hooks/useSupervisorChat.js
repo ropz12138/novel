@@ -525,6 +525,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
+        let ev = "";
         (async () => {
           while (true) {
             const { done, value } = await reader.read();
@@ -532,7 +533,6 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
             buf += dec.decode(value, { stream: true });
             const lines = buf.split("\n");
             buf = lines.pop() || "";
-            let ev = "";
             for (const ln of lines) {
               if (ln.startsWith("event: ")) {
                 ev = ln.slice(7).trim();
@@ -542,6 +542,8 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
                 } catch {
                   /* ignore */
                 }
+              } else if (ln.trim() === "") {
+                ev = "";
               }
             }
           }

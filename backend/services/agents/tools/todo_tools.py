@@ -102,8 +102,7 @@ def _update_todolist_sync(
 
 
 async def _write_todolist_async(tasks: list[str]) -> str:
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, partial(_write_todolist_sync, tasks))
+    result = await asyncio.to_thread(partial(_write_todolist_sync, tasks))
     await _emit_events(result.events)
     return result.message
 
@@ -121,9 +120,7 @@ async def _update_todolist_async(
             f"状态：{gate.get('status') or 'unknown'}；"
             f"门禁：{gate.get('code') or 'unknown'}"
         )
-    loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(
-        None,
+    result = await asyncio.to_thread(
         partial(_update_todolist_sync, action, task_id, task, tasks),
     )
     await _emit_events(result.events)

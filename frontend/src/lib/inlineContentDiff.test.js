@@ -20,6 +20,16 @@ import {
 const ORIGINAL = "第一段。\n\n第二段。\n\n第三段。";
 
 describe("inlineContentDiff", () => {
+  it("restores the net unreviewed diff from a server baseline", () => {
+    const restored = accumulateNodeContentDiff(null, {
+      original_content: "旧段落",
+      current_content: "新段落",
+      hunks: buildContentDiffFromContents("旧段落", "新段落"),
+    });
+    expect(pendingHunksFromBatches(restored.batches)).toEqual([
+      { type: "replace", paragraph_index: 1, old_text: "旧段落", new_text: "新段落" },
+    ]);
+  });
   it("applies replace/insert/delete like the backend paragraph editor", () => {
     const hunks = [
       { type: "replace", paragraph_index: 2, old_text: "第二段。", new_text: "第二段改。" },
@@ -75,10 +85,10 @@ describe("inlineContentDiff", () => {
       { type: "replace", paragraph_index: 2, old_text: "第二段。", new_text: "中段改。" },
     ];
     const afterAcceptFirst = setHunkStatus(hunks, 0, "accepted");
-    expect(contentAfterDecisions(ORIGINAL, afterAcceptFirst)).toBe("开场改。\n\n中段改。");
+    expect(contentAfterDecisions(ORIGINAL, afterAcceptFirst)).toBe("开场改。\n\n中段改。\n\n第三段。");
 
     const afterRejectSecond = setHunkStatus(afterAcceptFirst, 1, "rejected");
-    expect(contentAfterDecisions(ORIGINAL, afterRejectSecond)).toBe("开场改。\n\n第二段。");
+    expect(contentAfterDecisions(ORIGINAL, afterRejectSecond)).toBe("开场改。\n\n第二段。\n\n第三段。");
     expect(pendingHunks(afterRejectSecond)).toEqual([]);
 
     expect(contentAfterDecisions(ORIGINAL, setAllHunkStatus(hunks, "rejected"))).toBe(ORIGINAL);
