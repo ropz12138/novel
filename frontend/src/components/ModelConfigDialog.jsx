@@ -82,10 +82,14 @@ export default function ModelConfigDialog({ open, onClose }) {
         ) : (
           <div className="space-y-4">
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
+              <label
+                htmlFor="primary-model"
+                className="mb-1 block text-sm font-medium text-slate-700"
+              >
                 主模型
               </label>
               <select
+                id="primary-model"
                 value={primary ?? ""}
                 onChange={(e) => setPrimary(e.target.value || null)}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
@@ -100,15 +104,23 @@ export default function ModelConfigDialog({ open, onClose }) {
             </div>
 
             <div>
-              <label className="mb-1 block text-sm font-medium text-slate-700">
+              <label
+                htmlFor="fallback-model"
+                className="mb-1 block text-sm font-medium text-slate-700"
+              >
                 备模型（主模型 429 限流时自动切换）
               </label>
               <select
-                value={fallback ?? ""}
-                onChange={(e) => setFallback(e.target.value || null)}
+                id="fallback-model"
+                value={fallback ?? "__default__"}
+                onChange={(e) => {
+                  const value = e.target.value;
+                  setFallback(value === "__default__" ? null : value);
+                }}
                 className="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:border-blue-500 focus:outline-none"
               >
-                <option value="">使用默认（{defaultFallback || "无"}）</option>
+                <option value="__default__">使用默认（{defaultFallback || "无"}）</option>
+                <option value="">无备用模型</option>
                 {available.map((m) => (
                   <option key={m} value={m}>
                     {labelOf(m, false)}

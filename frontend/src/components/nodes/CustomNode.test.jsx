@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { fireEvent, render, screen } from "@testing-library/react";
 
 vi.mock("@xyflow/react", () => ({
@@ -61,22 +61,15 @@ describe("CustomNode chapter status", () => {
     expect(screen.queryByText("同步通过")).toBeNull();
   });
 
-  it("uses a dedicated button to toggle related edges without opening the node", () => {
-    const onNodeClick = vi.fn();
-    const onFocusEdges = vi.fn();
+  it("does not show a related-edges toggle", () => {
     render(
       <CustomNode
         id="chapter-3"
         data={{ type: "chapter", label: "第三章", content: "", extra_data: {} }}
-        onNodeClick={onNodeClick}
-        onFocusEdges={onFocusEdges}
-        isEdgesFocused={false}
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "只显示相关连线" }));
-    expect(onFocusEdges).toHaveBeenCalledWith("chapter-3");
-    expect(onNodeClick).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "只显示相关连线" })).toBeNull();
   });
 
   it("does not show collapse toggle on element nodes", () => {
@@ -299,5 +292,74 @@ describe("CustomNode character scope badge", () => {
     );
     expect(screen.getByText("力量线")).toBeDefined();
     expect(screen.getByText("心境线")).toBeDefined();
+  });
+});
+
+describe("CustomNode 长按", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("fires onNodeLongPress after holding still and skips the following click", () => {
+    const onNodeClick = vi.fn();
+    const onNodeLongPress = vi.fn();
+    const { container } = render(
+      <CustomNode
+        id="chapter-1"
+        data={{ type: "chapter", label: "第一章", content: "", extra_data: {} }}
+        onNodeClick={onNodeClick}
+        onNodeLongPress={onNodeLongPress}
+        appMode
+      />,
+    );
+    const node = container.firstChild;
+
+    fireEvent.mouseDown(node, { clientX: 40, clientY: 20 });
+    vi.advanceTimersByTime(500);
+    expect(onNodeLongPress).toHaveBeenCalledWith(
+      expect.objectContaining({ clientX: 40, clientY: 20 }),
+      { id: "chapter-1", data: expect.objectContaining({ label: "第一章" }) },
+    );
+
+    fireEvent.mouseUp(node, { clientX: 40, clientY: 20 });
+    fireEvent.click(node);
+    expect(onNodeClick).not.toHaveBeenCalled();
+  });
+
+  it("cancels long press when the pointer moves", () => {
+    const onNodeLongPress = vi.fn();
+    const { container } = render(
+      <CustomNode
+        id="chapter-1"
+        data={{ type: "chapter", label: "第一章", content: "", extra_data: {} }}
+        onNodeLongPress={onNodeLongPress}
+        appMode
+      />,
+    );
+    const node = container.firstChild;
+
+    fireEvent.mouseDown(node, { clientX: 40, clientY: 20 });
+    fireEvent.mouseMove(node, { clientX: 60, clientY: 20 });
+    vi.advanceTimersByTime(500);
+    expect(onNodeLongPress).not.toHaveBeenCalled();
+  });
+
+  it("does not start a long press on the web canvas", () => {
+    const onNodeLongPress = vi.fn();
+    const { container } = render(
+      <CustomNode
+        id="chapter-1"
+        data={{ type: "chapter", label: "第一章", content: "", extra_data: {} }}
+        onNodeLongPress={onNodeLongPress}
+      />,
+    );
+    const node = container.firstChild;
+    fireEvent.mouseDown(node, { clientX: 40, clientY: 20 });
+    vi.advanceTimersByTime(500);
+    expect(onNodeLongPress).not.toHaveBeenCalled();
   });
 });

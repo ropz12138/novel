@@ -14,8 +14,25 @@ export const sessionApi = {
     return postRpc("/supervisor-sessions/list", workId ? { work_id: workId } : {});
   },
 
-  getSupervisorMessages(sessionId) {
-    return postRpc("/supervisor-sessions/messages", { session_id: sessionId });
+  getSupervisorMessages(sessionId, { beforeSortOrder } = {}) {
+    const body = { session_id: sessionId };
+    if (beforeSortOrder != null) body.before_sort_order = beforeSortOrder;
+    return postRpc("/supervisor-sessions/messages", body);
+  },
+
+  getSupervisorDiffDetail(sessionId, messageId) {
+    return postRpc("/supervisor-sessions/messages/diff", {
+      session_id: sessionId,
+      message_id: messageId,
+    });
+  },
+
+  stopSupervisor(sessionId) {
+    return postRpc("/supervisor/stop", { session_id: sessionId });
+  },
+
+  getSupervisor(sessionId) {
+    return postRpc("/supervisor-sessions/get", { session_id: sessionId });
   },
 
   deleteSupervisor(sessionId) {

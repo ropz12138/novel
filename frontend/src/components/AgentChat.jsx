@@ -1,15 +1,23 @@
-import { useRef, useState, useCallback, useEffect, useMemo } from "react";
-import { Bot, Send, Sparkles, Plus, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
+import { forwardRef, useRef, useState, useCallback, useEffect, useLayoutEffect, useImperativeHandle, useMemo } from "react";
+import { Bot, Send, Square, Sparkles, Plus, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "./supervisor/ChatTimeline";
 import { useSmartScroll } from "../hooks/useSmartScroll";
 import { sessionApi } from "../lib/api";
+import { getChapterReviewIntensity, putChapterReviewIntensity } from "../lib/canvasApi";
 import { getLatestSupervisorSession } from "../lib/supervisorSession";
+import { useKeyboardInset } from "../lib/keyboardInset";
+import ModifiedNodeCapsules from "./ModifiedNodeCapsules";
+import { attachModifiedNodes } from "../lib/modifiedNodeDraft";
+
+export function scrollTopAfterPrepend(previousTop, previousHeight, nextHeight) {
+  return previousTop + (nextHeight - previousHeight);
+}
 
 const CHAPTER_REVIEW_INTENSITIES = [
-  { value: "low", shortLabel: "低", label: "低 · 不评审连续性和对白" },
-  { value: "medium", shortLabel: "中", label: "中 · 各评审一次" },
-  { value: "high", shortLabel: "高", label: "高 · 按需复评" },
+  { value: "low", shortLabel: "低", label: "低 · 不评审，不去 AI 味" },
+  { value: "medium", shortLabel: "中", label: "中 · 各评审一次，并去 AI 味" },
+  { value: "high", shortLabel: "高", label: "高 · 按需复评，并去 AI 味" },
 ];
 
 function snapIntensityIndex(ratio) {
@@ -27,7 +35,21 @@ const NODE_PILL_COLORS = {
   element: "#d97706",
 };
 
-export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onRunningChange, insertPillRef, onCollapse }) {
+function latestStreamLine(chat) {
+  const runningStep = [...chat.timeline]
+    .reverse()
+    .find((item) => item.kind === "step" && item.status === "running");
+  const source = chat.assistantDraft
+    || runningStep?.stream
+    || runningStep?.reasoningStream
+    || chat.assistantReasoningDraft
+    || runningStep?.label
+    || (chat.running ? "连接中…" : "");
+  return String(source).split(/\r?\n/).filter((line) => line.trim()).at(-1) || "";
+}
+
+const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftChange, modifiedNodes = [], onRemoveModifiedNode, onModifiedNodesSent, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onOpenNodeDetail, onRunningChange, onStateChange, insertPillRef, onCollapse, appMode = false }, ref) {
+  const keyboardInset = useKeyboardInset();
   const chat = useSupervisorChat({
     workId,
     callbacks: {
@@ -45,7 +67,9 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
 
   const inputRef = useRef(null);
   const [hasInput, setHasInput] = useState(false);
-  const [chapterReviewIntensity, setChapterReviewIntensity] = useState("low");
+  const pendingMessages = chat.pendingMessages || [];
+  const [chapterReviewIntensity, setChapterReviewIntensity] = useState("medium");
+  const [intensityReady, setIntensityReady] = useState(false);
   const [intensityDragRatio, setIntensityDragRatio] = useState(null);
   const intensityTrackRef = useRef(null);
   const intensityDragRef = useRef({ active: false, moved: false });
@@ -70,16 +94,47 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     setIntensityDragRatio(ratioFromIntensityPointer(event.clientX));
   }, [ratioFromIntensityPointer]);
 
+  const intensityChosen = useRef(false);
+
+  const persistChapterReviewIntensity = useCallback((value) => {
+    intensityChosen.current = true;
+    setChapterReviewIntensity(value);
+    putChapterReviewIntensity({ chapter_review_intensity: value }).catch((error) => {
+      setSessionError(error?.message || "保存评审强度失败");
+    });
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    getChapterReviewIntensity()
+      .then((data) => {
+        const value = data?.chapter_review_intensity;
+        if (cancelled) return;
+        if (!CHAPTER_REVIEW_INTENSITIES.some((item) => item.value === value)) {
+          setSessionError("评审强度无效");
+          return;
+        }
+        if (!intensityChosen.current) setChapterReviewIntensity(value);
+        setIntensityReady(true);
+      })
+      .catch((error) => {
+        if (!cancelled) setSessionError(error?.message || "加载评审强度失败");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const onIntensityPointerUp = useCallback((event) => {
     if (!intensityDragRef.current.active) return;
     const moved = intensityDragRef.current.moved;
     intensityDragRef.current = { active: false, moved: false };
     if (moved) {
       const snapped = snapIntensityIndex(ratioFromIntensityPointer(event.clientX));
-      setChapterReviewIntensity(CHAPTER_REVIEW_INTENSITIES[snapped].value);
+      persistChapterReviewIntensity(CHAPTER_REVIEW_INTENSITIES[snapped].value);
     }
     setIntensityDragRatio(null);
-  }, [ratioFromIntensityPointer]);
+  }, [persistChapterReviewIntensity, ratioFromIntensityPointer]);
 
   const serializeContentEditable = useCallback((el) => {
     let result = "";
@@ -137,6 +192,7 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
         || el.querySelector("[data-uuid]");
       if (!hasVisibleContent) el.setAttribute("data-empty", "");
       setHasInput(Boolean(hasVisibleContent));
+      onDraftChange?.(serializeContentEditable(el));
       el.focus();
     };
 
@@ -183,9 +239,22 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     }
     el.removeAttribute("data-empty");
     setHasInput(true);
-  }, []);
+    onDraftChange?.(serializeContentEditable(el));
+    const focusComposer = () => {
+      el.focus();
+      const nextSel = window.getSelection();
+      if (!nextSel) return;
+      const caret = document.createRange();
+      caret.setStart(caretNode, caretNode.length);
+      caret.collapse(true);
+      nextSel.removeAllRanges();
+      nextSel.addRange(caret);
+    };
+    focusComposer();
+    requestAnimationFrame(focusComposer);
+  }, [onDraftChange, serializeContentEditable]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     if (insertPillRef) {
       insertPillRef.current = insertPill;
     }
@@ -196,16 +265,25 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     };
   }, [insertPillRef, insertPill]);
 
+  const sendOrQueue = useCallback((message, intensity = chapterReviewIntensity) => {
+    const text = String(message || "").trim();
+    if (!text) return;
+    const content = attachModifiedNodes(text, modifiedNodes, chat.sessionId);
+    onModifiedNodesSent?.();
+    chat.handleSend(content, intensity);
+  }, [chat.running, chat.handleSend, chat.sessionId, chapterReviewIntensity, modifiedNodes, onModifiedNodesSent]);
+
   const handleContentEditableSend = useCallback(() => {
     const el = inputRef.current;
-    if (!el || chat.running) return;
+    if (!el) return;
     const serialized = serializeContentEditable(el);
-    if (!serialized.trim()) return;
+    if (!intensityReady || !serialized.trim()) return;
     el.innerHTML = "";
     el.setAttribute("data-empty", "");
     setHasInput(false);
-    chat.handleSend(serialized, chapterReviewIntensity);
-  }, [chat.running, chat.handleSend, chapterReviewIntensity, serializeContentEditable]);
+    onDraftChange?.("");
+    sendOrQueue(serialized, chapterReviewIntensity);
+  }, [chapterReviewIntensity, intensityReady, onDraftChange, sendOrQueue, serializeContentEditable]);
 
   const onInput = useCallback(() => {
     const el = inputRef.current;
@@ -214,14 +292,51 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     if (el) {
       if (empty) el.setAttribute("data-empty", "");
       else el.removeAttribute("data-empty");
+      onDraftChange?.(serializeContentEditable(el));
     }
-  }, []);
+  }, [onDraftChange, serializeContentEditable]);
+
+  useLayoutEffect(() => {
+    const el = inputRef.current;
+    if (!el || serializeContentEditable(el) === draft) return;
+    el.textContent = draft;
+    const empty = !draft.trim();
+    if (empty) el.setAttribute("data-empty", "");
+    else el.removeAttribute("data-empty");
+    setHasInput(!empty);
+  }, [draft, serializeContentEditable]);
 
   const scrollContainerRef = useRef(null);
+  const loadingOlderRef = useRef(false);
+  const preserveScrollRef = useRef(null);
   const { stickToBottom, scrollToBottom } = useSmartScroll(scrollContainerRef, [
     chat.timeline, chat.assistantReasoningDraft, chat.assistantDraft,
     chat.running,
   ]);
+
+  const requestOlderMessages = useCallback(() => {
+    const el = scrollContainerRef.current;
+    if (!el || loadingOlderRef.current || !chat.hasMoreHistory || !chat.loadOlderMessages) return;
+    loadingOlderRef.current = true;
+    preserveScrollRef.current = { top: el.scrollTop, height: el.scrollHeight };
+    Promise.resolve(chat.loadOlderMessages()).finally(() => {
+      loadingOlderRef.current = false;
+    });
+  }, [chat.hasMoreHistory, chat.loadOlderMessages]);
+
+  useLayoutEffect(() => {
+    const el = scrollContainerRef.current;
+    const snap = preserveScrollRef.current;
+    if (!el || !snap) return;
+    el.scrollTop = scrollTopAfterPrepend(snap.top, snap.height, el.scrollHeight);
+    preserveScrollRef.current = null;
+  }, [chat.timeline]);
+
+  useEffect(() => {
+    const el = scrollContainerRef.current;
+    if (!el || !chat.hasMoreHistory || loadingOlderRef.current) return;
+    if (el.clientHeight > 0 && el.scrollHeight <= el.clientHeight + 1) requestOlderMessages();
+  }, [chat.timeline, chat.hasMoreHistory, requestOlderMessages]);
 
   // Session 下拉框状态
   const [sessions, setSessions] = useState([]);
@@ -229,6 +344,8 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
   const [sessionListOpen, setSessionListOpen] = useState(false);
   const dropdownRef = useRef(null);
   const latestSessionLoadedForWorkRef = useRef(null);
+  const [sessionReady, setSessionReady] = useState(false);
+
 
   const loadSessions = useCallback(async () => {
     setSessionError("");
@@ -248,10 +365,14 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     if (latestSessionLoadedForWorkRef.current === workId) return;
 
     let cancelled = false;
+    setSessionReady(false);
     (async () => {
       const list = await loadSessions();
       if (cancelled) return;
-      if (list === null) return;
+      if (list === null) {
+        setSessionReady(true);
+        return;
+      }
 
       latestSessionLoadedForWorkRef.current = workId;
       const latest = getLatestSupervisorSession(list);
@@ -260,6 +381,7 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
       } else {
         chat.resetState();
       }
+      if (!cancelled) setSessionReady(true);
     })();
 
     return () => {
@@ -279,8 +401,8 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
         setSessionListOpen(false);
       }
     };
-    if (sessionListOpen) document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
+    if (sessionListOpen) document.addEventListener("pointerdown", handleClick);
+    return () => document.removeEventListener("pointerdown", handleClick);
   }, [sessionListOpen]);
 
   const currentSessionTitle = useMemo(() => {
@@ -292,6 +414,7 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
   const handleNewSession = useCallback(() => {
     if (chat.running) return;
     chat.resetState();
+    setSessionReady(true);
     setSessionListOpen(false);
   }, [chat]);
 
@@ -314,8 +437,51 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
     }
   }, [chat, handleNewSession]);
 
+  const streamLine = useMemo(() => latestStreamLine(chat), [
+    chat.timeline,
+    chat.assistantDraft,
+    chat.assistantReasoningDraft,
+    chat.running,
+  ]);
+
+  useImperativeHandle(ref, () => ({
+    ready: sessionReady,
+    running: chat.running,
+    streamLine,
+    send: (message) => {
+      if (sessionReady && intensityReady) sendOrQueue(message, chapterReviewIntensity);
+    },
+    stop: () => {
+      chat.handleStop();
+    },
+    setIntensity: (value) => {
+      if (CHAPTER_REVIEW_INTENSITIES.some((item) => item.value === value)) {
+        persistChapterReviewIntensity(value);
+      }
+    },
+    newSession: handleNewSession,
+    selectSession: handleSelectSession,
+    refresh: chat.refreshCurrentSession,
+  }), [sessionReady, intensityReady, chat.running, chat.handleStop, chat.refreshCurrentSession, chapterReviewIntensity, persistChapterReviewIntensity, handleNewSession, handleSelectSession, sendOrQueue, streamLine]);
+
+  useEffect(() => {
+    onStateChange?.({
+      ready: sessionReady,
+      running: chat.running,
+      streamLine,
+      sessions,
+      sessionId: chat.sessionId,
+      chapterReviewIntensity,
+      pendingMessages,
+    });
+  }, [onStateChange, sessionReady, chat.running, streamLine, sessions, chat.sessionId, chapterReviewIntensity, pendingMessages]);
+
   return (
-    <div className="flex flex-col h-full bg-white border-l border-gray-200">
+    <div
+      data-testid="agent-chat"
+      className="flex h-full flex-col border-l border-gray-200 bg-white"
+      style={{ paddingBottom: `${keyboardInset}px` }}
+    >
       {/* Header — 下拉选择器 */}
       <div ref={dropdownRef} className="relative shrink-0 border-b border-gray-200">
         <div className="flex items-center justify-between px-3 py-2">
@@ -388,7 +554,13 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
       </div>
 
       {/* 消息列表 */}
-      <div ref={scrollContainerRef} className="flex-1 overflow-y-auto p-4">
+      <div
+        ref={scrollContainerRef}
+        className="flex-1 overflow-y-auto p-4"
+        onScroll={(event) => {
+          if (event.currentTarget.scrollTop <= 48) requestOlderMessages();
+        }}
+      >
         <div className="space-y-4">
           {chat.timeline.length === 0 && !chat.running && (
             <div className="text-center text-gray-400 mt-12">
@@ -433,6 +605,9 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
             running={chat.running}
             onToggleStep={chat.toggleStepPanel}
             onEditMessage={(messageId, content) => chat.handleEditResend(messageId, content, chapterReviewIntensity)}
+            onExpandDiff={chat.expandDiffDetail}
+            onCollapseDiff={chat.collapseDiffDetail}
+            onOpenDiffNode={appMode ? undefined : onOpenNodeDetail}
           />
 
           {chat.running && !chat.timeline.some((item) => item.kind === "step" && item.status === "running") && !chat.assistantDraft && !chat.assistantReasoningDraft && (
@@ -457,12 +632,20 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
 
       {/* 输入框 */}
       <div className="shrink-0 px-3 py-3 border-t border-gray-200 bg-gray-50">
+        <ModifiedNodeCapsules nodes={chat.sessionId ? modifiedNodes : []} onRemove={onRemoveModifiedNode} />
+        {pendingMessages.length > 0 && (
+          <div aria-label="待发送消息" className="mb-2 max-h-24 space-y-1 overflow-y-auto rounded-lg border border-blue-100 bg-blue-50 p-2">
+            {pendingMessages.map((message) => (
+              <div key={message.id} className="truncate text-xs text-blue-700">等待发送：{message.content}</div>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <div
             ref={inputRef}
             role="textbox"
             aria-label="创作指令"
-            contentEditable={!chat.running}
+            contentEditable
             onInput={onInput}
             onKeyDown={(e) => {
               if (e.key === "Backspace") {
@@ -487,7 +670,7 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
                   }
                 }
               }
-              if (e.key === "Enter" && !e.shiftKey) {
+              if (e.key === "Enter" && !appMode && !e.shiftKey) {
                 e.preventDefault();
                 handleContentEditableSend();
               }
@@ -498,17 +681,19 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
               document.execCommand("insertText", false, text);
             }}
             data-placeholder="输入指令..."
-            className={`ce-input flex-1 px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm whitespace-pre-wrap break-words min-h-[2.5rem] max-h-32 overflow-y-auto ${
-              chat.running ? "bg-gray-100 cursor-not-allowed" : "bg-white"
-            }`}
+            className="ce-input flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm whitespace-pre-wrap break-words min-h-[2.5rem] max-h-32 overflow-y-auto"
           />
           <button
-            onClick={handleContentEditableSend}
-            disabled={chat.running || !hasInput}
-            aria-label="发送"
-            className="h-10 w-10 shrink-0 rounded-full flex items-center justify-center bg-blue-500 text-white transition-colors hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300"
+            onClick={chat.running && !hasInput ? chat.handleStop : handleContentEditableSend}
+            disabled={!chat.running && (!hasInput || !intensityReady)}
+            aria-label={chat.running && !hasInput ? "中止" : "发送"}
+            className={`h-10 w-10 shrink-0 rounded-full flex items-center justify-center text-white transition-colors ${
+              chat.running && !hasInput
+                ? "bg-red-500 hover:bg-red-600"
+                : "bg-blue-500 hover:bg-blue-600 disabled:cursor-not-allowed disabled:bg-gray-300"
+            }`}
           >
-            <Send className="h-4 w-4" />
+            {chat.running && !hasInput ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
         <div className="mt-2 flex justify-end">
@@ -556,4 +741,9 @@ export default function AgentChat({ workId, onNodesUpdate, onNodeContentDiff, on
       </div>
     </div>
   );
-}
+});
+
+AgentChat.displayName = "AgentChat";
+
+export { latestStreamLine };
+export default AgentChat;

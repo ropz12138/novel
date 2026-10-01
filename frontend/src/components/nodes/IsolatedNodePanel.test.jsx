@@ -88,4 +88,17 @@ describe("IsolatedNodePanel", () => {
     expect(screen.getByText("林川")).toBeDefined();
     expect(screen.getByRole("button", { name: "收起角色与设定侧栏" })).toBeDefined();
   });
+
+  it("支持为 App 设置初始收起状态", () => {
+    render(<IsolatedNodePanel nodes={nodes} initialCollapsed />);
+
+    expect(screen.queryByText("林川")).toBeNull();
+    expect(screen.getByRole("button", { name: "展开角色与设定侧栏" })).toBeDefined();
+  });
+
+  it("展开时叠在节点详情之上", () => {
+    render(<IsolatedNodePanel nodes={nodes} />);
+    expect(screen.getByTestId("isolated-node-panel").className).toContain("z-[55]");
+  });
+
 });

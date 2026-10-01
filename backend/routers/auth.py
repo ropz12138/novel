@@ -17,6 +17,12 @@ def get_current_user(
     return auth_service.get_current_user(db, credentials.credentials)
 
 
+def require_admin(user=Depends(get_current_user)):
+    if user.role != "admin":
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="仅管理员可访问")
+    return user
+
+
 @router.post("/auth/login", response_model=TokenResponse)
 def login(payload: LoginRequest, db: Session = Depends(get_db)):
     return auth_service.login(db, payload.email, payload.password)

@@ -1,4 +1,4 @@
-import { memo, useCallback } from "react";
+import { memo, useCallback, useRef } from "react";
 import { Handle, Position } from "@xyflow/react";
 import { Lock } from "lucide-react";
 import { BOUNDARY_HANDLE_STYLES, ELEMENT_SIZE } from "../../lib/nodeDimensions";
@@ -23,6 +23,8 @@ const nodeStyles = {
 };
 
 const DEFAULT_STYLE = { bg: "#f1f5f9", border: "#94a3b8", icon: "📄", label: "节点" };
+export const NODE_LONG_PRESS_MS = 500;
+const NODE_LONG_PRESS_MOVE_PX = 8;
 
 // character 按 scope 做视觉区分：边框色 + 角色徽章（temp 用虚线弱化）
 const CHARACTER_SCOPE_STYLE = {
@@ -37,13 +39,13 @@ const CustomNode = memo(({
   data,
   selected,
   onNodeClick,
-  onFocusEdges,
-  isEdgesFocused,
   isExpanded,
   hasChildren,
   hiddenDescendantCount = 0,
   hiddenDescendantText = "",
   onCollapseToggle,
+  onNodeLongPress,
+  appMode = false,
 }) => {
   const style = nodeStyles[data.type] || DEFAULT_STYLE;
   const isCharacter = data.type === "character";
@@ -59,15 +61,71 @@ const CustomNode = memo(({
     ? (Array.isArray(data.extra_data?.characters) ? data.extra_data.characters : [])
     : [];
 
+  const longPressTimerRef = useRef(null);
+  const longPressStartRef = useRef(null);
+  const suppressClickRef = useRef(false);
+
+  const clearLongPress = useCallback(() => {
+    if (longPressTimerRef.current != null) {
+      clearTimeout(longPressTimerRef.current);
+      longPressTimerRef.current = null;
+    }
+  }, []);
+
   const handleClick = useCallback((e) => {
     e.stopPropagation();
+    if (suppressClickRef.current) {
+      suppressClickRef.current = false;
+      return;
+    }
     onNodeClick?.({ id, ...data });
   }, [id, data, onNodeClick]);
 
-  const handleFocusEdges = useCallback((e) => {
-    e.stopPropagation();
-    onFocusEdges?.(id);
-  }, [id, onFocusEdges]);
+  const handlePointerDown = useCallback((event) => {
+    if (event.button != null && event.button !== 0) return;
+    longPressStartRef.current = { x: event.clientX, y: event.clientY };
+    suppressClickRef.current = false;
+    clearLongPress();
+    const pressEvent = {
+      preventDefault: () => event.preventDefault(),
+      clientX: event.clientX,
+      clientY: event.clientY,
+      target: event.currentTarget,
+      currentTarget: event.currentTarget,
+    };
+    longPressTimerRef.current = setTimeout(() => {
+      longPressTimerRef.current = null;
+      suppressClickRef.current = true;
+      onNodeLongPress?.(pressEvent, { id, data });
+    }, NODE_LONG_PRESS_MS);
+  }, [clearLongPress, data, id, onNodeLongPress]);
+
+  const handlePointerMove = useCallback((event) => {
+    const start = longPressStartRef.current;
+    if (!start) return;
+    const dx = event.clientX - start.x;
+    const dy = event.clientY - start.y;
+    if ((dx * dx) + (dy * dy) > NODE_LONG_PRESS_MOVE_PX * NODE_LONG_PRESS_MOVE_PX) {
+      clearLongPress();
+    }
+  }, [clearLongPress]);
+
+  const handlePointerUp = useCallback(() => {
+    clearLongPress();
+    longPressStartRef.current = null;
+  }, [clearLongPress]);
+
+  const longPressProps = appMode
+    ? {
+      onPointerDown: handlePointerDown,
+      onPointerMove: handlePointerMove,
+      onPointerUp: handlePointerUp,
+      onPointerCancel: handlePointerUp,
+      onMouseDown: handlePointerDown,
+      onMouseMove: handlePointerMove,
+      onMouseUp: handlePointerUp,
+    }
+    : {};
 
   const handleCollapseToggle = useCallback((e) => {
     e.stopPropagation();
@@ -89,6 +147,7 @@ const CustomNode = memo(({
           "--element-fill-opacity": "0.76",
         }}
         onClick={handleClick}
+        {...longPressProps}
       >
         {ELEMENT_SIDES.map((side) => (
           <Handle
@@ -141,6 +200,7 @@ const CustomNode = memo(({
         borderColor: isLocked ? "#0ea5e9" : (charScope ? charScope.border : style.border),
       }}
       onClick={handleClick}
+      {...longPressProps}
     >
       {isLocked && (
         <span
@@ -175,19 +235,6 @@ const CustomNode = memo(({
             {isExpanded ? "▾" : "▸"}
           </button>
         )}
-        <button
-          type="button"
-          aria-label={isEdgesFocused ? "显示全部连线" : "只显示相关连线"}
-          title={isEdgesFocused ? "显示全部连线" : "只显示相关连线"}
-          className={`nodrag ${!hasChildren ? "ml-auto" : ""} rounded px-1.5 py-0.5 text-xs transition-colors ${
-            isEdgesFocused
-              ? "bg-slate-700 text-white"
-              : "bg-white/70 text-slate-500 hover:bg-white"
-          }`}
-          onClick={handleFocusEdges}
-        >
-          ⤢
-        </button>
       </div>
 
       {data.content && !(isCharacter && (data.extra_data?.storylines || []).length) && (

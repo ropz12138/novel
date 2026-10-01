@@ -1,4 +1,5 @@
 """Session 存储 — 使用 PostgreSQL 持久化"""
+import json
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -138,7 +139,7 @@ class SessionStore:
         finally:
             db.close()
 
-    def add_message(self, session_id: str, role: str, content: str, meta: Optional[dict] = None, work_id: Optional[str] = None) -> Optional[dict]:
+    def add_message(self, session_id: str, role: str, content: str, meta: Optional[dict] = None, work_id: Optional[str] = None, *, before_message_id: str | None = None) -> Optional[dict]:
         """添加消息"""
         db = self._get_db()
         try:
@@ -147,6 +148,15 @@ class SessionStore:
                 SupervisorMessage.session_id == session_id
             ).order_by(SupervisorMessage.sort_order.desc()).first()
             next_order = (max_order[0] + 1) if max_order else 0
+            if before_message_id is not None:
+                anchor = db.query(SupervisorMessage).filter_by(
+                    id=before_message_id, session_id=session_id,
+                ).with_for_update().one()
+                next_order = anchor.sort_order
+                db.query(SupervisorMessage).filter(
+                    SupervisorMessage.session_id == session_id,
+                    SupervisorMessage.sort_order >= next_order,
+                ).update({SupervisorMessage.sort_order: SupervisorMessage.sort_order + 1}, synchronize_session=False)
 
             message = SupervisorMessage(
                 session_id=session_id,
@@ -283,6 +293,45 @@ class SessionStore:
                     db.commit()
                     return True
             return False
+        except Exception as e:
+            db.rollback()
+            raise e
+        finally:
+            db.close()
+
+    def discard_unpaired_tool_calls(self, session_id: str) -> None:
+        """删除没有对应 tool_result 的 tool_call，避免中断后历史消息对不齐。"""
+        db = self._get_db()
+        try:
+            messages = (
+                db.query(SupervisorMessage)
+                .filter_by(session_id=session_id)
+                .order_by(SupervisorMessage.sort_order)
+                .all()
+            )
+            result_ids = {
+                (message.meta or {}).get("tool_call_id")
+                for message in messages
+                if message.role == "tool_result" and (message.meta or {}).get("tool_call_id")
+            }
+            for message in messages:
+                if message.role == "model_assistant":
+                    payload = json.loads(message.content)
+                    calls = payload.get("tool_calls", [])
+                    completed = [call for call in calls if call["id"] in result_ids]
+                    if len(completed) != len(calls):
+                        payload["tool_calls"] = completed
+                        if not completed and not payload["content"] and not payload.get("additional_kwargs"):
+                            db.delete(message)
+                        else:
+                            message.content = json.dumps(payload, ensure_ascii=False)
+                    continue
+                if message.role != "tool_call":
+                    continue
+                call_id = (message.meta or {}).get("tool_call_id")
+                if not call_id or call_id not in result_ids:
+                    db.delete(message)
+            db.commit()
         except Exception as e:
             db.rollback()
             raise e

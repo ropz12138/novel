@@ -2,6 +2,7 @@
 import json
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import List, Optional, Literal
 
@@ -15,14 +16,34 @@ from models.work import CanvasWork
 from routers.auth import get_current_user
 from services.agents.supervisor import supervisor_agent
 from services.agents.chapter_review_policy import ChapterReviewPolicy, current_chapter_review_policy
+from services.chapter_review_preference import save_chapter_review_intensity
 from services.canvas_checkpoint_service import capture_canvas_checkpoint, prepare_edit_resend
 from services.session_store import session_store
 from services.supervisor_event_persist import persist_supervisor_event_safe
+from services.supervisor_stream_broker import supervisor_stream_broker
+from services.supervisor_run_queue import supervisor_run_queue
 from services import user_action_service as action_svc
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/supervisor", tags=["supervisor"])
+_background_supervisor_tasks = supervisor_run_queue.tasks
+
+
+async def stop_supervisor_run(session_id: str) -> dict:
+    """取消指定会话正在跑的 Supervisor 后台任务。"""
+    stopped = await supervisor_run_queue.stop(session_id)
+    return {"success": True, "stopped": stopped}
+
+
+def _queue_state(session_id):
+    return {
+        "running": supervisor_run_queue.running(session_id),
+        "pending_messages": [
+            {"id": item["id"], "content": item["content"]}
+            for item in supervisor_run_queue.pending(session_id)
+        ],
+    }
 
 
 def _require_owned_work(work_id: Optional[str], user_id: str) -> None:
@@ -45,14 +66,14 @@ class SupervisorStartRequest(BaseModel):
     message: str
     work_id: Optional[str] = None
     context_node_ids: Optional[List[str]] = None
-    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
+    chapter_review_intensity: Literal["low", "medium", "high"] = "medium"
 
 
 class SupervisorResumeRequest(BaseModel):
     session_id: str
     message: str
     context_node_ids: Optional[List[str]] = None
-    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
+    chapter_review_intensity: Literal["low", "medium", "high"] = "medium"
 
 
 class SupervisorEditResendRequest(BaseModel):
@@ -60,14 +81,22 @@ class SupervisorEditResendRequest(BaseModel):
     message_id: str
     message: str
     context_node_ids: Optional[List[str]] = None
-    chapter_review_intensity: Literal["low", "medium", "high"] = "low"
+    chapter_review_intensity: Literal["low", "medium", "high"] = "medium"
+
+
+class SupervisorStreamResumeRequest(BaseModel):
+    session_id: str
+
+
+class SupervisorStopRequest(BaseModel):
+    session_id: str
 
 
 def _sse_format(event: str, data: dict) -> str:
     return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
 
 
-def _wrap_emit(session_id: str, queue_put):
+def _wrap_emit(session_id: str):
     """包装 emit：SSE 推送 + Todolist 持久化。"""
 
     async def emit(event: str, data: dict):
@@ -76,7 +105,7 @@ def _wrap_emit(session_id: str, queue_put):
                 persist_supervisor_event_safe(session_id, event, data)
             except Exception:
                 logger.exception("persist supervisor event failed: %s", event)
-        await queue_put((event, data))
+        await supervisor_stream_broker.publish(session_id, event, data)
 
     return emit
 
@@ -129,7 +158,7 @@ async def _execute_supervisor_run(
     wrapped_emit,
 ) -> None:
     review_policy_token = current_chapter_review_policy.set(
-        ChapterReviewPolicy(context.get("chapter_review_intensity", "low"))
+        ChapterReviewPolicy(context.get("chapter_review_intensity", "medium"))
     )
     try:
         result = await supervisor_agent.run(
@@ -145,6 +174,7 @@ async def _execute_supervisor_run(
         _advance_watermark_from_context(context)
     except asyncio.CancelledError:
         session_store.mark_session_interrupted(session_id)
+        _advance_watermark_from_context(context)
         try:
             await wrapped_emit("supervisor_interrupted", {"reason": "cancelled"})
         except Exception:
@@ -181,35 +211,69 @@ def _stream_supervisor_run(
     work_id: Optional[str],
     user_id: str,
     context_node_ids: Optional[List[str]],
-    chapter_review_intensity: Literal["low", "medium", "high"] = "low",
+    chapter_review_intensity: Literal["low", "medium", "high"] = "medium",
     emit_session_created: bool = True,
     user_message_id: Optional[str] = None,
     user_actions_message: Optional[dict] = None,
     pre_run_events: Optional[list[tuple[str, dict]]] = None,
 ):
-    queue: asyncio.Queue = asyncio.Queue()
-    wrapped_emit = _wrap_emit(session_id, queue.put)
+    db = SessionLocal()
+    try:
+        save_chapter_review_intensity(db, user_id, chapter_review_intensity)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    finally:
+        db.close()
+    if not supervisor_run_queue.running(session_id):
+        supervisor_stream_broker.begin(session_id)
 
-    run_started_at = datetime.utcnow()
+    async def run_agent(item):
+        sid = item["session_id"]
+        wrapped_emit = _wrap_emit(sid)
+        terminal = None
 
-    async def run_agent():
+        async def emit(event, data):
+            nonlocal terminal
+            if event in {"supervisor_done", "supervisor_interrupted", "error"}:
+                terminal = (event, data)
+            else:
+                await wrapped_emit(event, data)
+
+        msg_id = item["user_message_id"]
+        if msg_id is None:
+            msg = session_store.add_message(sid, "user", item["content"], work_id=item["work_id"])
+            msg_id = msg["id"]
+            _capture_checkpoint_before_agent(sid, item["work_id"], msg)
+        session_store.update_session(sid, stage="running", status="running")
+        await wrapped_emit("queue_updated", _queue_state(sid))
+        await wrapped_emit("queued_message_started", {"message_id": msg_id, "content": item["content"]})
+        context = {
+            "user_id": item["user_id"],
+            "work_id": item["work_id"],
+            "session_id": sid,
+            "context_node_ids": item["context_node_ids"],
+            "chapter_review_intensity": item["intensity"],
+            "run_started_at": datetime.utcnow(),
+        }
         try:
-            context = {
-                "user_id": user_id,
-                "work_id": work_id,
-                "session_id": session_id,
-                "context_node_ids": context_node_ids,
-                "chapter_review_intensity": chapter_review_intensity,
-                "run_started_at": run_started_at,
-            }
             await _execute_supervisor_run(
-                session_id=session_id,
-                user_message=user_message,
-                context=context,
-                wrapped_emit=wrapped_emit,
+                session_id=sid, user_message=item["content"], context=context, wrapped_emit=emit,
             )
         finally:
-            await queue.put(None)
+            more = bool(supervisor_run_queue.pending(sid))
+            if more:
+                session_store.update_session(sid, stage="running", status="running")
+            if terminal:
+                event, data = terminal
+                if more:
+                    event = "supervisor_turn_done" if event == "supervisor_done" else "supervisor_turn_error"
+                await wrapped_emit(event, data)
+
+    supervisor_run_queue.submit(session_id, {
+        "id": str(uuid.uuid4()), "session_id": session_id, "content": user_message,
+        "work_id": work_id, "user_id": user_id, "context_node_ids": context_node_ids,
+        "intensity": chapter_review_intensity, "user_message_id": user_message_id,
+    }, run_agent)
 
     async def event_generator():
         if emit_session_created:
@@ -221,24 +285,12 @@ def _stream_supervisor_run(
         if pre_run_events:
             for event, data in pre_run_events:
                 yield _sse_format(event, data)
-        task = asyncio.create_task(run_agent())
-        try:
-            while True:
-                item = await queue.get()
-                if item is None:
-                    break
-                event, data = item
-                if event == "session_created":
-                    continue
+        yield _sse_format("queue_updated", _queue_state(session_id))
+        async for event, data in supervisor_stream_broker.subscribe(
+            session_id,
+        ):
+            if event != "session_created":
                 yield _sse_format(event, data)
-        except asyncio.CancelledError:
-            if not task.done():
-                task.cancel()
-                try:
-                    await task
-                except asyncio.CancelledError:
-                    pass
-            raise
 
     return StreamingResponse(
         event_generator(),
@@ -251,6 +303,49 @@ def _stream_supervisor_run(
     )
 
 
+@router.post("/stream")
+async def resume_supervisor_stream(
+    payload: SupervisorStreamResumeRequest,
+    user: User = Depends(get_current_user),
+):
+    """从客户端最后确认的数据块之后恢复当前 Supervisor 流。"""
+    session = session_store.get_session(payload.session_id)
+    if not session or session["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    if not supervisor_stream_broker.has_stream(payload.session_id):
+        raise HTTPException(status_code=409, detail="当前会话没有可恢复的流")
+
+    async def event_generator():
+        yield _sse_format("queue_updated", _queue_state(payload.session_id))
+        async for event, data in supervisor_stream_broker.subscribe(
+            payload.session_id,
+        ):
+            yield _sse_format(event, data)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@router.post("/stop")
+async def stop_supervisor(
+    payload: SupervisorStopRequest,
+    user: User = Depends(get_current_user),
+):
+    """主动中断当前 Supervisor 运行：已完成的入库，进行中的工具整笔丢弃。"""
+    session = session_store.get_session(payload.session_id)
+    if not session or session["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    _require_owned_work(session.get("work_id"), user.id)
+    return await stop_supervisor_run(payload.session_id)
+
+
 @router.post("/start")
 async def start_supervisor(
     payload: SupervisorStartRequest,
@@ -261,7 +356,8 @@ async def start_supervisor(
     session = session_store.create_session(user_id=user.id, work_id=payload.work_id)
     session_id = session["id"]
 
-    user_actions_message = _store_user_actions_message(session_id, payload.work_id)
+    # 新会话没有可供 Agent 延续理解的历史轮次，不注入此前积累的画布操作气泡。
+    user_actions_message = None
     user_msg = session_store.add_message(session_id, "user", payload.message, work_id=payload.work_id)
     _capture_checkpoint_before_agent(session_id, payload.work_id, user_msg)
 
@@ -291,14 +387,9 @@ async def resume_supervisor(
     _require_owned_work(session.get("work_id"), user.id)
 
     session_id = payload.session_id
-    user_actions_message = _store_user_actions_message(
-        session_id, session.get("work_id")
-    )
-    user_msg = session_store.add_message(
-        session_id, "user", payload.message, work_id=session.get("work_id"),
-    )
+    user_actions_message = None
+    user_msg = None
     session_store.update_session(session_id, stage="running", status="running")
-    _capture_checkpoint_before_agent(session_id, session.get("work_id"), user_msg)
 
     return _stream_supervisor_run(
         session_id=session_id,
@@ -311,6 +402,23 @@ async def resume_supervisor(
         user_message_id=user_msg["id"] if user_msg else None,
         user_actions_message=user_actions_message,
     )
+
+
+@router.post("/enqueue")
+async def enqueue_supervisor(payload: SupervisorResumeRequest, user: User = Depends(get_current_user)):
+    started_new_stream = not supervisor_run_queue.running(payload.session_id)
+    await resume_supervisor(payload, user)
+    state = _queue_state(payload.session_id)
+    await supervisor_stream_broker.publish(payload.session_id, "queue_updated", state)
+    return {**state, "started_new_stream": started_new_stream}
+
+
+@router.get("/queue/{session_id}")
+async def get_supervisor_queue(session_id: str, user: User = Depends(get_current_user)):
+    session = session_store.get_session(session_id)
+    if not session or session["user_id"] != user.id:
+        raise HTTPException(status_code=404, detail="会话不存在")
+    return _queue_state(session_id)
 
 
 @router.post("/edit-resend")
@@ -326,6 +434,8 @@ async def edit_resend_supervisor(
         raise HTTPException(status_code=404, detail="会话不存在")
 
     work_id = session.get("work_id")
+    if supervisor_run_queue.running(payload.session_id):
+        raise HTTPException(status_code=409, detail="任务运行中，请等待队列完成后编辑历史消息")
     if not work_id:
         raise HTTPException(status_code=400, detail="会话未绑定作品，无法恢复画布")
     _require_owned_work(work_id, user.id)
@@ -354,6 +464,7 @@ async def edit_resend_supervisor(
         context_node_ids=payload.context_node_ids,
         chapter_review_intensity=payload.chapter_review_intensity,
         emit_session_created=False,
+        user_message_id=new_msg["id"],
         pre_run_events=[
             ("canvas_restored", {"message_id": payload.message_id}),
             ("messages_truncated", {"from_message_id": payload.message_id}),

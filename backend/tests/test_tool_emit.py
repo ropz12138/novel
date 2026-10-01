@@ -140,6 +140,71 @@ def test_create_node_async_emits_nodes_updated(monkeypatch):
         _clear_context()
 
 
+def test_draft_write_records_diff_before_commit_so_keep_all_matches(monkeypatch):
+    """章节打开时，草稿先写入节点；全部保留必须对上这次写入前的正文。"""
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db)
+        chapter = Node(work_id=work.id, type="chapter", title="第一章", content="原正文", sort_order=1)
+        db.add(chapter)
+        db.commit()
+        work_id, chapter_id = work.id, chapter.id
+    finally:
+        db.close()
+
+    collect, events = _make_collector()
+    _inject_emit(work_id, collect)
+    try:
+        asyncio.run(sat._write_draft_to_existing_chapter(work_id, chapter_id, "新正文"))
+        diffs = [data for event, data in events if event == "chapter_edit_diff"]
+        assert len(diffs) == 1
+        assert diffs[0]["original_content"] == "原正文"
+        assert diffs[0]["current_content"] == "新正文"
+        assert diffs[0]["diff"]["hunks"]
+    finally:
+        _clear_context()
+
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import sessionmaker
+
+    from database import Base
+    from models.node_content_diff_state import NodeContentDiffState
+    from models.session import SupervisorMessage, SupervisorSession
+    from services.node_content_diff_state import save_decision
+    from services.supervisor_event_persist import persist_supervisor_event
+
+    engine = create_engine("sqlite:///:memory:")
+    Base.metadata.create_all(engine, tables=[
+        Node.__table__, NodeContentDiffState.__table__,
+        SupervisorSession.__table__, SupervisorMessage.__table__,
+    ])
+    db = sessionmaker(bind=engine)()
+    try:
+        db.add(Node(
+            id=chapter_id, work_id=work_id, type="chapter", title="第一章",
+            content="新正文", sort_order=1,
+        ))
+        session = SupervisorSession(
+            user_id="user-1", work_id=work_id, title="测试", stage="running", status="running",
+        )
+        db.add(session)
+        db.commit()
+        assert persist_supervisor_event(db, session.id, "chapter_edit_diff", diffs[0]) is True
+        assert diffs[0]["baseline_content"] == "原正文"
+        chapter = db.get(Node, chapter_id)
+        save_decision(
+            db, chapter,
+            expected_content="新正文",
+            expected_baseline="原正文",
+            baseline_content="新正文",
+            current_content="新正文",
+        )
+        assert chapter.content == "新正文"
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_commit_chapter_emits_single_nodes_updated_event(monkeypatch):
     db = database.SessionLocal()
     try:

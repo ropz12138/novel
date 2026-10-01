@@ -15,7 +15,7 @@ import { buildContentDiffFromContents } from "../lib/inlineContentDiff";
  * @param {Function}    [options.callbacks.onChapterUpdated]
  * @param {Function}    [options.callbacks.onNodesUpdate]
  */
-export function useSupervisorChat({ workId, callbacks = {} }) {
+export function useSupervisorChat({ workId, callbacks = {}, disconnectPollIntervalMs = 1000 }) {
   const {
     onChapterUpdated,
     onNodesUpdate,
@@ -27,6 +27,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 
   const [timeline, setTimeline] = useState([]);
   const [input, setInput] = useState("");
+  const [pendingMessages, setPendingMessages] = useState([]);
   const [running, setRunning] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const activeSessionIdRef = useRef(null);
@@ -38,6 +39,12 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
   const timelineIdRef = useRef(0);
   const sseRef = useRef(null);
   const sseCompletedRef = useRef(false);
+  const disconnectRecoveryRef = useRef(null);
+  const resumeStreamRef = useRef(null);
+  const historyCursorRef = useRef(null);
+  const hasMoreHistoryRef = useRef(false);
+  const historyGenRef = useRef(0);
+  const [hasMoreHistory, setHasMoreHistory] = useState(false);
 
   const syncSessionId = useCallback((id) => {
     activeSessionIdRef.current = id;
@@ -102,17 +109,31 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     const draft = assistantDraftRef.current;
     const reasoning = assistantReasoningDraftRef.current;
     const visibleDraft = isPlaceholderEllipsisContent(draft) ? "" : (draft || "");
-    if ((visibleDraft && visibleDraft.trim()) || (reasoning && reasoning.trim())) {
-      const id = ++timelineIdRef.current;
-      setTimeline((prev) => [...prev, {
-        kind: "message",
-        id,
-        role: "assistant",
-        content: visibleDraft,
-        reasoningContent: reasoning || "",
-        ...meta,
-        timestamp: Date.now(),
-      }]);
+    const hasVisible = Boolean(visibleDraft && visibleDraft.trim());
+    const hasReasoning = Boolean(reasoning && reasoning.trim());
+    if (hasVisible || hasReasoning) {
+      setTimeline((prev) => {
+        const last = [...prev].reverse().find(
+          (item) => item.kind === "message" && item.role === "assistant",
+        );
+        if (
+          last
+          && (last.content || "") === visibleDraft
+          && (last.reasoningContent || "") === (reasoning || "")
+        ) {
+          return prev;
+        }
+        const id = ++timelineIdRef.current;
+        return [...prev, {
+          kind: "message",
+          id,
+          role: "assistant",
+          content: visibleDraft,
+          reasoningContent: reasoning || "",
+          ...meta,
+          timestamp: Date.now(),
+        }];
+      });
     }
     setAssistantDraft("");
     assistantDraftRef.current = "";
@@ -120,33 +141,137 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     assistantReasoningDraftRef.current = "";
   }, []);
 
+  const rememberHistoryPage = useCallback((page) => {
+    const messages = page.messages;
+    hasMoreHistoryRef.current = page.has_more;
+    setHasMoreHistory(page.has_more);
+    const oldest = messages.reduce((min, message) => {
+      if (min == null || message.sort_order < min) return message.sort_order;
+      return min;
+    }, null);
+    if (oldest != null) historyCursorRef.current = oldest;
+    return messages;
+  }, []);
+
+  const replaceTimelineFromPage = useCallback((page) => {
+    const messages = rememberHistoryPage(page);
+    if (messages.length === 0) {
+      setTimeline([]);
+      onNodeContentDiffsReset?.();
+      return;
+    }
+    const loaded = buildTimelineFromHistoryMessages(messages, timelineIdRef);
+    const visibleTimeline = suppressSupersededChapterEditCards(loaded);
+    setTimeline(visibleTimeline);
+    restoreNodeContentDiffsFromTimeline(
+      visibleTimeline,
+      onNodeContentDiffsReset,
+      onNodeContentDiff,
+    );
+  }, [onNodeContentDiff, onNodeContentDiffsReset, rememberHistoryPage]);
+
   const reloadTimelineFromSession = useCallback(async (sid) => {
     const sessionKey = sid || activeSessionIdRef.current;
     if (!sessionKey) return;
+    const gen = ++historyGenRef.current;
     try {
-      const msgs = await sessionApi.getSupervisorMessages(sessionKey);
-      if (msgs && msgs.length > 0) {
-        const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
-        const visibleTimeline = suppressSupersededChapterEditCards(loaded);
-        setTimeline(visibleTimeline);
-        restoreNodeContentDiffsFromTimeline(
-          visibleTimeline,
-          onNodeContentDiffsReset,
-          onNodeContentDiff,
-        );
-      } else {
-        setTimeline([]);
-        onNodeContentDiffsReset?.();
-      }
+      const page = await sessionApi.getSupervisorMessages(sessionKey);
+      if (gen !== historyGenRef.current) return;
+      replaceTimelineFromPage(page);
     } catch {
       // ignore
     }
-  }, [onNodeContentDiff, onNodeContentDiffsReset]);
+  }, [replaceTimelineFromPage]);
+
+  const recoverDisconnectedRun = useCallback(async () => {
+    if (sseCompletedRef.current || disconnectRecoveryRef.current) return;
+    const sid = activeSessionIdRef.current;
+    if (!sid) {
+      finalizeAllRunningSteps();
+      setRunning(false);
+      addMessage("system", "连接中断，无法确认 Agent 执行状态", { type: "error" });
+      return;
+    }
+
+    const recovery = {};
+    disconnectRecoveryRef.current = recovery;
+    finalizeAllRunningSteps();
+    setRunning(true);
+
+    try {
+      while (disconnectRecoveryRef.current === recovery) {
+        const session = await sessionApi.getSupervisor(sid);
+        if (disconnectRecoveryRef.current !== recovery) return;
+
+        if (session.status === "running") {
+          pushExecStep("重连中...");
+          await new Promise((resolve) => setTimeout(resolve, disconnectPollIntervalMs));
+          if (disconnectRecoveryRef.current !== recovery) return;
+          disconnectRecoveryRef.current = null;
+          resumeStreamRef.current?.(sid);
+          return;
+        }
+
+        sseCompletedRef.current = true;
+        setAssistantDraft("");
+        assistantDraftRef.current = "";
+        setAssistantReasoningDraft("");
+        assistantReasoningDraftRef.current = "";
+        await reloadTimelineFromSession(sid);
+        if (disconnectRecoveryRef.current !== recovery) return;
+        onNodesUpdate?.();
+        disconnectRecoveryRef.current = null;
+        finalizeAllRunningSteps();
+        setRunning(false);
+
+        if (session.status === "interrupted") {
+          addMessage("system", "Agent 执行已中断", { type: "error" });
+        } else if (session.status === "error") {
+          addMessage("system", "Agent 执行失败", { type: "error" });
+        }
+        return;
+      }
+    } catch (error) {
+      if (disconnectRecoveryRef.current !== recovery) return;
+      disconnectRecoveryRef.current = null;
+      finalizeAllRunningSteps();
+      setRunning(false);
+      addMessage("system", `无法查询 Agent 执行状态: ${error?.message || "未知错误"}`, {
+        type: "error",
+      });
+    }
+  }, [
+    addMessage,
+    disconnectPollIntervalMs,
+    finalizeAllRunningSteps,
+    onNodesUpdate,
+    pushExecStep,
+    reloadTimelineFromSession,
+  ]);
 
   // ── SSE event handler ──
 
   const onSSE = useCallback((ev, d) => {
     switch (ev) {
+      case "queue_updated":
+        setPendingMessages(d.pending_messages || []);
+        setRunning(Boolean(d.running));
+        break;
+
+      case "queued_message_started":
+        sseCompletedRef.current = false;
+        setRunning(true);
+        setAssistantDraft("");
+        assistantDraftRef.current = "";
+        setAssistantReasoningDraft("");
+        assistantReasoningDraftRef.current = "";
+        setTimeline((prev) => {
+          if (prev.some((item) => item.dbMessageId === d.message_id)) return prev;
+          const optimistic = prev.findIndex((item) => item.role === "user" && !item.dbMessageId && item.content === d.content);
+          if (optimistic >= 0) return prev.map((item, index) => index === optimistic ? { ...item, dbMessageId: d.message_id } : item);
+          return [...prev, { kind: "message", id: ++timelineIdRef.current, role: "user", content: d.content, dbMessageId: d.message_id, timestamp: Date.now() }];
+        });
+        break;
       case "session_created":
         syncSessionId(d.session_id);
         break;
@@ -216,16 +341,19 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         break;
 
       case "tool_calls": {
+        const workTools = visibleWorkTools(d.tools || []);
+        if (workTools.length === 0) break;
         freezeDraft();
         // 一次模型响应中的所有工具调用属于同一个执行步骤；先结束上一阶段，
         // 避免“思考中”和多个旧工具步骤同时保持运行状态。
         setTimeline((prev) => appendToolCallSteps(
-          applyFinalizeAllRunningSteps(prev), d.tools || [], timelineIdRef,
+          applyFinalizeAllRunningSteps(prev), workTools, timelineIdRef,
         ));
         break;
       }
 
       case "tool_executed":
+        if (isRespondToUserTool(d.tool)) break;
         setTimeline((prev) => markToolExecuted(
           prev, d.tool, d.success !== false, d.tool_call_id,
         ));
@@ -240,6 +368,8 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
             return next;
           });
         } else {
+          // 正文已经开始输出时，思考阶段已结束，不应继续显示旋转中的“继续执行”。
+          finalizeAllRunningSteps();
           setAssistantDraft((p) => {
             const next = p + d.chunk;
             assistantDraftRef.current = next;
@@ -249,20 +379,36 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         break;
       }
 
+      case "supervisor_turn_done":
       case "supervisor_done": {
-        sseCompletedRef.current = true;
+        const finished = ev === "supervisor_done";
+        sseCompletedRef.current = finished;
         finalizeAllRunningSteps();
+        const finalText = typeof d.message === "string" ? d.message : "";
+        if (finalText.trim()) {
+          assistantDraftRef.current = finalText;
+          setAssistantDraft(finalText);
+        }
         freezeDraft();
         reconcileTodolist(activeSessionIdRef.current, setTimeline);
-        setRunning(false);
+        setRunning(!finished);
+        if (finished) setPendingMessages([]);
         break;
       }
 
       case "stage_start": {
-        freezeDraft();
         // tool_calls 已创建工具步骤，忽略配套阶段事件以免重复。
         if (d.stage === "tool" || d.stage === "tool_calling") break;
         const label = d.label || d.stage || "进行中";
+        if (d.stage === "thinking") {
+          // 新一轮思考意味着上一轮输出未被接受；丢弃它，避免最终正文继续拼接后重复显示。
+          setAssistantDraft("");
+          assistantDraftRef.current = "";
+          setAssistantReasoningDraft("");
+          assistantReasoningDraftRef.current = "";
+        } else {
+          freezeDraft();
+        }
         pushExecStep(label);
         break;
       }
@@ -328,6 +474,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
             title: d.title,
             hunks: d.diff?.hunks ?? [],
             summary: d.diff?.summary ?? {},
+            baseline_content: d.baseline_content,
             original_content: d.original_content,
             current_content: d.current_content,
             text_count: d.text_count,
@@ -345,6 +492,7 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
             title: d.title,
             hunks: d.diff?.hunks ?? [],
             summary: d.diff?.summary ?? {},
+            baseline_content: d.baseline_content,
             original_content: d.original_content,
             current_content: d.current_content,
             text_count: d.text_count,
@@ -452,20 +600,34 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
         break;
       }
 
+      case "supervisor_turn_error":
       case "error":
-        sseCompletedRef.current = true;
+        sseCompletedRef.current = ev === "error";
         finalizeAllRunningSteps();
-        addMessage("system", `错误: ${d.message}`, { type: "error" });
-        setRunning(false);
+        addMessage(
+          "system",
+          d.message === "AI额度不足，请稍后再试" ? d.message : `错误: ${d.message}`,
+          { type: "error" },
+        );
+        setRunning(ev !== "error");
+        if (ev === "error") setPendingMessages([]);
         break;
 
-      case "supervisor_interrupted":
+      case "supervisor_interrupted": {
+        setPendingMessages([]);
         sseCompletedRef.current = true;
         finalizeAllRunningSteps();
-        freezeDraft();
-        addMessage("system", "任务已被中断", { type: "interrupted" });
+        setAssistantDraft("");
+        assistantDraftRef.current = "";
+        setAssistantReasoningDraft("");
+        assistantReasoningDraftRef.current = "";
         setRunning(false);
+        onNodesUpdate?.();
+        Promise.resolve(reloadTimelineFromSession()).finally(() => {
+          addMessage("system", "任务已被中断", { type: "interrupted" });
+        });
         break;
+      }
 
       default:
         break;
@@ -478,14 +640,18 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 
   // ── SSE connection ──
 
-  const connectSSE = useCallback((url, body) => {
+  const connectSSE = useCallback((url, body, { resume = false } = {}) => {
+    sseRef.current?.close();
+    disconnectRecoveryRef.current = null;
     setRunning(true);
     sseCompletedRef.current = false;
-    setAssistantDraft("");
-    assistantDraftRef.current = "";
-    setAssistantReasoningDraft("");
-    assistantReasoningDraftRef.current = "";
-    timelineIdRef.current = 0;
+    if (!resume) {
+      setAssistantDraft("");
+      assistantDraftRef.current = "";
+      setAssistantReasoningDraft("");
+      assistantReasoningDraftRef.current = "";
+      timelineIdRef.current = 0;
+    }
 
     const ctl = new AbortController();
     authFetch(url, {
@@ -514,92 +680,112 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
           return;
         }
         if (!res.body) {
-          handleSseStreamFinished({
-            sseCompletedRef,
-            addMessage,
-            finalizeAllRunningSteps,
-            setRunning,
-          });
+          recoverDisconnectedRun();
           return;
         }
         const reader = res.body.getReader();
         const dec = new TextDecoder();
         let buf = "";
         let ev = "";
+        const consumeLines = (chunk) => {
+          buf += chunk;
+          const lines = buf.split("\n");
+          buf = lines.pop() || "";
+          for (const ln of lines) {
+            if (ln.startsWith("event: ")) {
+              ev = ln.slice(7).trim();
+            } else if (ln.startsWith("data: ")) {
+              try {
+                onSSE(ev, JSON.parse(ln.slice(6)));
+              } catch {
+                /* ignore */
+              }
+            } else if (ln.trim() === "") {
+              ev = "";
+            }
+          }
+        };
         (async () => {
           while (true) {
             const { done, value } = await reader.read();
-            if (done) break;
-            buf += dec.decode(value, { stream: true });
-            const lines = buf.split("\n");
-            buf = lines.pop() || "";
-            for (const ln of lines) {
-              if (ln.startsWith("event: ")) {
-                ev = ln.slice(7).trim();
-              } else if (ln.startsWith("data: ")) {
-                try {
-                  onSSE(ev, JSON.parse(ln.slice(6)));
-                } catch {
-                  /* ignore */
-                }
-              } else if (ln.trim() === "") {
-                ev = "";
-              }
+            if (ctl.signal.aborted) return;
+            if (value) consumeLines(dec.decode(value, { stream: !done }));
+            if (done) {
+              consumeLines(dec.decode());
+              if (buf.trim()) consumeLines("\n");
+              break;
             }
           }
-          handleSseStreamFinished({
-            sseCompletedRef,
-            addMessage,
-            finalizeAllRunningSteps,
-            setRunning,
-          });
+          if (!sseCompletedRef.current) recoverDisconnectedRun();
         })().catch(() => {
-          handleSseStreamFinished({
-            sseCompletedRef,
-            addMessage,
-            finalizeAllRunningSteps,
-            setRunning,
-          });
+          if (!ctl.signal.aborted && !sseCompletedRef.current) recoverDisconnectedRun();
         });
       })
       .catch((e) => {
-        finalizeAllRunningSteps();
-        setRunning(false);
         if (e?.name !== "AbortError") {
-          addMessage("system", `网络错误: ${e?.message || "无法连接后端"}`, { type: "error" });
+          recoverDisconnectedRun();
         }
       });
     sseRef.current = { close: () => ctl.abort() };
-  }, [addMessage, onSSE, finalizeAllRunningSteps]);
+  }, [onSSE, recoverDisconnectedRun]);
+
+  resumeStreamRef.current = (sid) => connectSSE(`${API_BASE}/supervisor/stream`, {
+    session_id: sid,
+  }, { resume: true });
 
   // ── handleSend ──
 
-  const handleSend = useCallback((overrideMsg, chapterReviewIntensity = "low") => {
-    if (running) return;
+  const handleStop = useCallback(async () => {
+    const sid = activeSessionIdRef.current;
+    if (!sid || !running) return;
+    setAssistantDraft("");
+    assistantDraftRef.current = "";
+    setAssistantReasoningDraft("");
+    assistantReasoningDraftRef.current = "";
+    await sessionApi.stopSupervisor(sid);
+  }, [running]);
 
+  const handleSend = useCallback((overrideMsg, chapterReviewIntensity = "medium") => {
     const raw = (overrideMsg ?? input).trim();
     if (!raw) return;
 
-    addMessage("user", raw);
-    setInput("");
-
     const sid = activeSessionIdRef.current;
     if (!sid) {
+      if (running) return;
+      addMessage("user", raw);
+      setInput("");
       connectSSE(`${API_BASE}/supervisor/start`, {
         message: raw,
         work_id: workId,
         chapter_review_intensity: chapterReviewIntensity,
       });
     } else {
-      connectSSE(`${API_BASE}/supervisor/resume`, {
+      void (async () => {
+      try {
+        const res = await authFetch(`${API_BASE}/supervisor/enqueue`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
         session_id: sid,
         message: raw,
         chapter_review_intensity: chapterReviewIntensity,
-      });
+          }),
+        });
+        if (!res.ok) throw new Error("消息提交失败，请重试");
+        const state = await res.json();
+        setInput("");
+        // 保留正在读取的 SSE；空闲或已结束时订阅后端任务流。
+        if (state.started_new_stream || !running || sseCompletedRef.current) {
+          connectSSE(`${API_BASE}/supervisor/stream`, { session_id: sid }, { resume: true });
+        }
+      } catch (error) {
+        addMessage("system", error.message, { type: "error" });
+      }
+      })();
     }
   }, [running, input, addMessage, connectSSE, workId]);
 
-  const handleEditResend = useCallback((dbMessageId, newContent, chapterReviewIntensity = "low") => {
+  const handleEditResend = useCallback((dbMessageId, newContent, chapterReviewIntensity = "medium") => {
     if (running) return;
     const trimmed = (newContent || "").trim();
     if (!trimmed || !dbMessageId) return;
@@ -619,6 +805,8 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
 
   const handleSelectSession = useCallback(async (session) => {
     if (running) return;
+    setPendingMessages([]);
+    disconnectRecoveryRef.current = null;
     setTimeline([]);
     setInput("");
     setAssistantDraft("");
@@ -626,31 +814,93 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
+    historyCursorRef.current = null;
+    hasMoreHistoryRef.current = false;
+    setHasMoreHistory(false);
+    const gen = ++historyGenRef.current;
 
     syncSessionId(session.id);
 
     try {
-      const msgs = await sessionApi.getSupervisorMessages(session.id);
-      if (msgs && msgs.length > 0) {
-        const loaded = buildTimelineFromHistoryMessages(msgs, timelineIdRef);
-        const visibleTimeline = suppressSupersededChapterEditCards(loaded);
-        setTimeline(visibleTimeline);
-        restoreNodeContentDiffsFromTimeline(
-          visibleTimeline,
-          onNodeContentDiffsReset,
-          onNodeContentDiff,
-        );
-      } else {
-        onNodeContentDiffsReset?.();
-      }
+      const page = await sessionApi.getSupervisorMessages(session.id);
+      if (gen !== historyGenRef.current) return;
+      replaceTimelineFromPage(page);
     } catch (error) {
       addMessage("system", `加载对话失败: ${error?.message || "未知错误"}`, {
         type: "error",
       });
     }
-  }, [running, syncSessionId, addMessage, onNodeContentDiff, onNodeContentDiffsReset]);
+
+    if (session.status === "running") {
+      sseCompletedRef.current = false;
+      recoverDisconnectedRun();
+    }
+  }, [
+    running,
+    syncSessionId,
+    addMessage,
+    onNodeContentDiff,
+    onNodeContentDiffsReset,
+    recoverDisconnectedRun,
+    replaceTimelineFromPage,
+  ]);
+
+  const loadOlderMessages = useCallback(async () => {
+    const sid = activeSessionIdRef.current;
+    const before = historyCursorRef.current;
+    if (!sid || before == null || !hasMoreHistoryRef.current) return;
+    const gen = historyGenRef.current;
+    const page = await sessionApi.getSupervisorMessages(sid, { beforeSortOrder: before });
+    if (gen !== historyGenRef.current) return;
+    const messages = page.messages;
+    const hasMore = page.has_more && messages.length > 0;
+    hasMoreHistoryRef.current = hasMore;
+    setHasMoreHistory(hasMore);
+    if (messages.length === 0) return;
+    historyCursorRef.current = messages.reduce((min, message) => {
+      if (min == null || message.sort_order < min) return message.sort_order;
+      return min;
+    }, null);
+    const loaded = buildTimelineFromHistoryMessages(messages, timelineIdRef);
+    setTimeline((prev) => suppressSupersededChapterEditCards([...loaded, ...prev]));
+  }, []);
+
+  const expandDiffDetail = useCallback(async (messageId) => {
+    const sid = activeSessionIdRef.current;
+    if (!sid || !messageId) return;
+    let alreadyLoaded = false;
+    setTimeline((prev) => {
+      const item = prev.find((entry) => entry.dbMessageId === messageId);
+      alreadyLoaded = Array.isArray(item?.chapterContentDiffCard?.hunks);
+      if (!alreadyLoaded) return prev;
+      return prev.map((entry) => (
+        entry.dbMessageId === messageId ? { ...entry, diffDetailOpen: true } : entry
+      ));
+    });
+    if (alreadyLoaded) return;
+    const detail = await sessionApi.getSupervisorDiffDetail(sid, messageId);
+    setTimeline((prev) => prev.map((entry) => {
+      if (entry.dbMessageId !== messageId) return entry;
+      return {
+        ...entry,
+        diffDetailOpen: true,
+        chapterContentDiffCard: {
+          ...entry.chapterContentDiffCard,
+          hunks: detail.hunks,
+        },
+      };
+    }));
+  }, []);
+
+  const collapseDiffDetail = useCallback((messageId) => {
+    setTimeline((prev) => prev.map((entry) => (
+      entry.dbMessageId === messageId ? { ...entry, diffDetailOpen: false } : entry
+    )));
+  }, []);
 
   const resetState = useCallback(() => {
+    disconnectRecoveryRef.current = null;
+    setPendingMessages([]);
     setTimeline([]);
     setInput("");
     setRunning(false);
@@ -660,6 +910,10 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
+    historyCursorRef.current = null;
+    hasMoreHistoryRef.current = false;
+    setHasMoreHistory(false);
+    historyGenRef.current += 1;
     onNodeContentDiffsReset?.();
     if (sseRef.current) {
       sseRef.current.close();
@@ -672,7 +926,9 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
   return {
     // state
     timeline,
+    hasMoreHistory,
     input,
+    pendingMessages,
     running,
     sessionId,
     assistantDraft,
@@ -691,8 +947,13 @@ export function useSupervisorChat({ workId, callbacks = {} }) {
     freezeDraft,
     // actions
     handleSend,
+    handleStop,
     handleEditResend,
     handleSelectSession,
+    refreshCurrentSession: reloadTimelineFromSession,
+    loadOlderMessages,
+    expandDiffDetail,
+    collapseDiffDetail,
     resetState,
     // SSE ref
     sseRef,
@@ -797,6 +1058,10 @@ export function buildTimelineFromHistoryMessages(msgs, idRef = { current: 0 }) {
       while (i < filtered.length && filtered[i].role === "tool_call") {
         const row = filtered[i];
         const toolName = row.content || "unknown";
+        if (isRespondToUserTool(toolName)) {
+          i += 1;
+          continue;
+        }
         const success = row.meta?.success !== false;
         const ts = messageTimestamp(row);
 
@@ -820,6 +1085,16 @@ export function buildTimelineFromHistoryMessages(msgs, idRef = { current: 0 }) {
   }
 
   return timeline;
+}
+
+const RESPOND_TO_USER_TOOL = "respond_to_user";
+
+export function isRespondToUserTool(tool) {
+  return toolCallName(tool) === RESPOND_TO_USER_TOOL;
+}
+
+export function visibleWorkTools(tools) {
+  return (tools || []).filter((tool) => tool && !isRespondToUserTool(tool));
 }
 
 export function appendToolCallSteps(timeline, tools, idRef) {
@@ -926,18 +1201,6 @@ export function markToolExecuted(timeline, tool, success, toolCallId = "") {
   return next;
 }
 
-export const SSE_ABNORMAL_END_MESSAGE = "连接中断，Agent 未完成执行。请继续对话重试。";
-
-export function handleSseStreamFinished({ sseCompletedRef, addMessage, finalizeAllRunningSteps, setRunning }) {
-  const abnormal = !sseCompletedRef.current;
-  finalizeAllRunningSteps();
-  setRunning(false);
-  if (abnormal) {
-    addMessage("system", SSE_ABNORMAL_END_MESSAGE, { type: "error" });
-  }
-  return abnormal;
-}
-
 export function applyFinalizeAllRunningSteps(timeline, { onlyLast = false } = {}) {
   const hasRunning = timeline.some((item) => item.kind === "step" && item.status === "running");
   if (!hasRunning) return timeline;
@@ -965,8 +1228,9 @@ export function applyFinalizeAllRunningSteps(timeline, { onlyLast = false } = {}
 async function reconcileTodolist(sessionId, setTimeline) {
   if (!sessionId) return;
   try {
-    const msgs = await sessionApi.getSupervisorMessages(sessionId);
-    if (!msgs || msgs.length === 0) return;
+    const page = await sessionApi.getSupervisorMessages(sessionId);
+    const msgs = page.messages;
+    if (msgs.length === 0) return;
 
     const serverCards = [];
     for (const m of msgs) {

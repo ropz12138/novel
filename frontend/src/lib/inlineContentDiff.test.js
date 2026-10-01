@@ -232,4 +232,26 @@ describe("inlineContentDiff", () => {
     expect(next).toBe(`${inserted}\n\n${ORIGINAL}`);
     expect(reverseHunks(next, hunks)).toBe(ORIGINAL);
   });
+
+  it("replaces a streaming preview baseline with the authoritative persisted baseline", () => {
+    const preview = accumulateNodeContentDiff(null, {
+      preview: true,
+      original_content: "第二稿",
+      current_content: "第三稿预览",
+      hunks: [{ type: "replace", paragraph_index: 1, old_text: "第二稿", new_text: "第三稿预览" }],
+    });
+
+    const finalized = accumulateNodeContentDiff(preview, {
+      baseline_content: "第一稿",
+      original_content: "第二稿",
+      current_content: "第三稿",
+      hunks: [{ type: "replace", paragraph_index: 1, old_text: "第二稿", new_text: "第三稿" }],
+    });
+
+    expect(finalized.original_content).toBe("第一稿");
+    expect(finalized.current_content).toBe("第三稿");
+    expect(finalized.hunks).toEqual([
+      expect.objectContaining({ old_text: "第一稿", new_text: "第三稿" }),
+    ]);
+  });
 });

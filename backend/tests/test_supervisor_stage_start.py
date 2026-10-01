@@ -14,7 +14,15 @@ class _FakeLLM:
     def astream(self, messages):
         async def _gen():
             yield AIMessageChunk(content="", additional_kwargs={"reasoning_content": "思考"})
-            yield AIMessageChunk(content="完成")
+            yield AIMessageChunk(
+                content="完成",
+                tool_calls=[{
+                    "name": "respond_to_user",
+                    "args": {"message": "完成"},
+                    "id": "call_end",
+                    "type": "tool_call",
+                }],
+            )
         return _gen()
 
 
@@ -30,7 +38,7 @@ def test_agent_node_emits_stage_start_before_stream(monkeypatch):
     )
     monkeypatch.setattr(
         "services.agents.supervisor.bind_tools_to_llm",
-        lambda llm, tools: llm,
+        lambda llm, tools, **kwargs: llm,
     )
 
     agent = SupervisorAgent(emit=capture)

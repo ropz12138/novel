@@ -3,7 +3,7 @@
 from models.chapter import Chapter
 
 
-def write_node_content(db, node, content: str, *, summary: str | None = None, status: str | None = None) -> None:
+def write_node_content(db, node, content: str, *, summary: str | None = None) -> None:
     node.content = content
     if node.type != "chapter":
         return
@@ -15,5 +15,3 @@ def write_node_content(db, node, content: str, *, summary: str | None = None, st
     chapter.title = node.title
     chapter.content = content
     chapter.summary = summary if summary is not None else ""
-    if status is not None:
-        chapter.status = status

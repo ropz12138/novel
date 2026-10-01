@@ -115,6 +115,97 @@ def test_execute_supervisor_run_marks_interrupted_on_cancel(db_session, monkeypa
     assert ("supervisor_interrupted", {"reason": "cancelled"}) in emitted
 
 
+def test_stop_endpoint_returns_false_when_no_running_task(db_session):
+    session = session_store.create_session(user_id=db_session.query(User).first().id)
+    resp = client.post("/api/supervisor/stop", json={"session_id": session["id"]})
+    assert resp.status_code == 200
+    assert resp.json()["success"] is True
+    assert resp.json()["stopped"] is False
+
+
+def test_stop_cancels_background_supervisor_task(db_session, monkeypatch):
+    user_id = db_session.query(User).first().id
+    session = session_store.create_session(user_id=user_id)
+    started = asyncio.Event()
+    cancelled = asyncio.Event()
+
+    async def hanging_run(**kwargs):
+        started.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
+
+    monkeypatch.setattr("routers.supervisor._execute_supervisor_run", hanging_run)
+
+    from routers import supervisor as supervisor_router
+
+    async def _run():
+        response = supervisor_router._stream_supervisor_run(
+            session_id=session["id"],
+            user_message="继续",
+            work_id=None,
+            user_id=user_id,
+            context_node_ids=None,
+        )
+        stream = response.body_iterator
+        await stream.__anext__()
+        async def consume_stream():
+            async for _ in stream:
+                pass
+        consume = asyncio.create_task(consume_stream())
+        await started.wait()
+        result = await supervisor_router.stop_supervisor_run(session["id"])
+        assert result["stopped"] is True
+        await asyncio.wait_for(cancelled.wait(), timeout=1)
+        consume.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await consume
+
+    asyncio.run(_run())
+
+
+def test_second_request_waits_and_keeps_stream_alive(db_session, monkeypatch):
+    from routers import supervisor as router
+    from services.supervisor_stream_broker import supervisor_stream_broker
+    from services.supervisor_run_queue import supervisor_run_queue
+
+    user_id = db_session.query(User).first().id
+    session = session_store.create_session(user_id=user_id)
+    sid = session["id"]
+
+    async def run():
+        gate = asyncio.Event()
+        started = []
+
+        async def fake_run(message, context, emit):
+            started.append(message)
+            if message == "改":
+                await gate.wait()
+            await emit("supervisor_done", {"message": "完成"})
+            return {"success": True}
+
+        monkeypatch.setattr(router.supervisor_agent, "run", fake_run)
+        kwargs = dict(session_id=sid, work_id=None, user_id=user_id, context_node_ids=None)
+        router._stream_supervisor_run(user_message="改", **kwargs)
+        await asyncio.sleep(0)
+        original_stream = supervisor_stream_broker._streams[sid]
+        router._stream_supervisor_run(user_message="继续", **kwargs)
+        assert started == ["改"]
+        assert supervisor_stream_broker._streams[sid] is original_stream
+        assert not original_stream.done
+        gate.set()
+        await supervisor_run_queue.tasks[sid]
+        assert started == ["改", "继续"]
+        events = [event async for event in supervisor_stream_broker.subscribe(sid)]
+        assert sum(name == "supervisor_done" for name, _ in events) == 1
+        assert sum(name == "supervisor_turn_done" for name, _ in events) == 1
+        assert original_stream.done
+
+    asyncio.run(run())
+
+
 def test_execute_supervisor_run_marks_error_when_agent_returns_failure(
     db_session,
     monkeypatch,
@@ -151,3 +242,58 @@ def test_execute_supervisor_run_marks_error_when_agent_returns_failure(
         "error",
         {"message": "主模型和备用模型均返回空响应"},
     ) in emitted
+
+
+def test_sse_disconnect_does_not_cancel_supervisor_run(db_session, monkeypatch):
+    user_id = db_session.query(User).first().id
+    session = session_store.create_session(user_id=user_id)
+    agent_started = asyncio.Event()
+    allow_agent_to_finish = asyncio.Event()
+    agent_finished = asyncio.Event()
+
+    async def detached_run(**kwargs):
+        agent_started.set()
+        await kwargs["wrapped_emit"]("stage_start", {"stage": "thinking"})
+        await allow_agent_to_finish.wait()
+        session_store.update_session(session["id"], stage="done", status="completed")
+        agent_finished.set()
+
+    monkeypatch.setattr("routers.supervisor._execute_supervisor_run", detached_run)
+
+    from routers import supervisor as supervisor_router
+
+    async def _run():
+        response = supervisor_router._stream_supervisor_run(
+            session_id=session["id"],
+            user_message="继续",
+            work_id=None,
+            user_id=user_id,
+            context_node_ids=None,
+        )
+        stream = response.body_iterator
+        await stream.__anext__()
+        await stream.__anext__()
+        await agent_started.wait()
+        await stream.aclose()
+
+        assert session_store.get_session(session["id"])["status"] == "running"
+        allow_agent_to_finish.set()
+        await asyncio.wait_for(agent_finished.wait(), timeout=1)
+
+    asyncio.run(_run())
+    assert session_store.get_session(session["id"])["status"] == "completed"
+
+
+def test_get_supervisor_session_returns_authoritative_status(db_session):
+    user_id = db_session.query(User).first().id
+    session = session_store.create_session(user_id=user_id)
+    session_store.update_session(session["id"], stage="done", status="completed")
+
+    response = client.post(
+        "/api/supervisor-sessions/get",
+        json={"session_id": session["id"]},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["id"] == session["id"]
+    assert response.json()["status"] == "completed"

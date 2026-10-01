@@ -15,6 +15,6 @@ description: 对章节正文进行自然化编辑，改善句法、节奏、对�
 
 1. `assemble_chapter_context` 与 `stage_existing_chapter_draft` 建立完整输入。必须传入已有 `chapter_node_id`，不得使用新建章节参数。
 2. 调用 `humanize_chapter_draft`，工具完整加载自然化规则、更新真实章节节点并记录新版本。
-3. 调用 `review_fiction_quality`；对白改动明显时同时调用 `review_chapter_dialogue`。
-4. 根据质量门修订并复检最新版本。
+3. 调用 `review_fiction_quality`；对白改动明显时同时调用 `review_chapter_dialogue`。Supervisor 阅读自然语言建议，决定值得采纳的修改项。
+4. 对最新草稿调用 `review_chapter_ai_taste`。决定采纳建议时调用 `decide_chapter_revision` 并按其结果修订。调用次数遵守当前评审强度。
 5. 生成摘要，固化状态并回读核对。

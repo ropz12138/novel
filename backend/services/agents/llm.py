@@ -38,9 +38,9 @@ def context_model_pref_kwargs() -> dict:
     return {"primary": pref.get("primary"), "fallback": pref.get("fallback")}
 
 
-def bind_tools_to_llm(llm, tools: list):
+def bind_tools_to_llm(llm, tools: list, tool_choice=None):
     from services.llm_stream import bind_agent_llm_with_tools
-    return bind_agent_llm_with_tools(llm, tools)
+    return bind_agent_llm_with_tools(llm, tools, tool_choice=tool_choice)
 
 
 def should_continue(state: dict) -> str:

@@ -73,6 +73,8 @@ async def _write_draft_to_existing_chapter(work_id: str | None, chapter_node_id:
         ).first()
         if chapter is None:
             raise ValueError("草稿对应的真实章节节点不存在")
+        old_content = chapter.content or ""
+        chapter_title = chapter.title or ""
         write_node_content(db, chapter, content)
         db.commit()
     except Exception:
@@ -86,6 +88,21 @@ async def _write_draft_to_existing_chapter(work_id: str | None, chapter_node_id:
             "action": "chapter_draft_write", "chapter_node_id": chapter_node_id,
             "content_changed": True,
         })
+        if old_content != content:
+            from services.chapter_edit_service import build_content_diff
+            from services.agents.tools.node_tools import _content_diff_event
+
+            content_diff = {
+                "diff": build_content_diff(old_content, content),
+                "old_content": old_content,
+                "new_content": content,
+            }
+            if content_diff["diff"].get("hunks"):
+                event_name, event_data = _content_diff_event(
+                    {"id": chapter_node_id, "type": "chapter", "title": chapter_title},
+                    content_diff,
+                )
+                await emit(event_name, event_data)
 
 
 def _record_workflow_gate(*, passed: bool, code: str, status: str) -> None:
@@ -284,6 +301,15 @@ class _JsonContentStreamDecoder:
         return "".join(output)
 
 
+async def _emit_specialist_llm_chunk(chunk) -> None:
+    emit = _get_emit()
+    if not emit:
+        return
+    from services.llm_stream import emit_llm_stream_deltas
+
+    await emit_llm_stream_deltas(emit, "chapter_edit_stream", chunk)
+
+
 async def _invoke_json_agent(
     prompt_name: str,
     user_content: str,
@@ -297,25 +323,60 @@ async def _invoke_json_agent(
     prompt = f"{prompt}\n\n{_load_json_output_rules()}"
     llm = llm_module.get_llm(temperature=0.5, streaming=False, **llm_module.context_model_pref_kwargs())
     messages = [SystemMessage(content=prompt), HumanMessage(content=user_content)]
-    if content_delta_callback is None:
-        response = await llm.ainvoke(messages)
-    else:
-        decoder = _JsonContentStreamDecoder()
-        aggregated = None
-        async for chunk in llm.astream(messages):
-            aggregated = chunk if aggregated is None else aggregated + chunk
-            delta = decoder.feed(_response_text(chunk))
-            if delta:
-                callback_result = content_delta_callback(delta)
-                if inspect.isawaitable(callback_result):
-                    await callback_result
-        if aggregated is None:
-            raise RuntimeError("LLM 未返回任何响应")
-        response = aggregated
+    decoder = _JsonContentStreamDecoder() if content_delta_callback is not None else None
+    aggregated = None
+    async for chunk in llm.astream(messages):
+        aggregated = chunk if aggregated is None else aggregated + chunk
+        await _emit_specialist_llm_chunk(chunk)
+        if decoder is None:
+            continue
+        delta = decoder.feed(_response_text(chunk))
+        if delta:
+            callback_result = content_delta_callback(delta)
+            if inspect.isawaitable(callback_result):
+                await callback_result
+    if aggregated is None:
+        raise RuntimeError("LLM 未返回任何响应")
+    response = aggregated
     data = json.loads(_strip_fences(_response_text(response)))
     if not isinstance(data, dict):
         raise ValueError("专职 Agent 返回结果不是 JSON 对象")
     return data
+
+
+async def _invoke_text_agent(
+    prompt_name: str,
+    user_content: str,
+    *,
+    system_prompt: str | None = None,
+) -> str:
+    from services.agents import llm as llm_module
+
+    prompt = system_prompt or (PROMPT_ROOT / prompt_name).read_text(encoding="utf-8")
+    llm = llm_module.get_llm(temperature=0.5, streaming=False, **llm_module.context_model_pref_kwargs())
+    messages = [SystemMessage(content=prompt), HumanMessage(content=user_content)]
+    aggregated = None
+    async for chunk in llm.astream(messages):
+        aggregated = chunk if aggregated is None else aggregated + chunk
+        await _emit_specialist_llm_chunk(chunk)
+    if aggregated is None:
+        raise RuntimeError("LLM 未返回任何响应")
+    advice = _response_text(aggregated).strip()
+    if not advice:
+        raise ValueError("评审 Agent 未返回建议")
+    return advice
+
+
+def _review_system_prompt(prompt_name: str) -> str:
+    prompt = (PROMPT_ROOT / prompt_name).read_text(encoding="utf-8")
+    policy = _get_chapter_review_policy()
+    if policy and policy.intensity == "high":
+        prompt += (
+            "\n\n本次为高强度评审。你是一位严苛的读者，"
+            "请以更高标准审视文本，给出值得执行的优化建议；"
+            "当文本已经优秀时，明确说明当前无需继续优化。"
+        )
+    return prompt
 
 
 async def _emit_content_preview_start(context: WorkflowArtifact) -> dict:
@@ -572,17 +633,6 @@ async def _assemble_chapter_context(
         previous_chapters = chapters[:chapter_index]
         context_data = {
             "work": {"id": work_id, "title": work.title if work else ""},
-            "target_chapter": {
-                "id": chapter.id,
-                "title": chapter.title,
-                "sort_order": chapter.sort_order,
-                "content": chapter.content or "",
-                "chapter_elements": (chapter.extra_data or {}).get("chapter_elements", []),
-                "characters": (chapter.extra_data or {}).get("characters", []),
-            },
-            "target_words": target_words,
-            "source_content_sha256": _content_sha256(chapter.content),
-            "user_instruction": user_instruction,
             "story_structure": [
                 {"id": item.id, "type": item.type, "title": item.title, "content": item.content or ""}
                 for item in structure
@@ -609,6 +659,17 @@ async def _assemble_chapter_context(
                 {"id": previous.id, "title": previous.title, "content": previous.content or ""}
                 if previous else None
             ),
+            "target_chapter": {
+                "id": chapter.id,
+                "title": chapter.title,
+                "sort_order": chapter.sort_order,
+                "content": chapter.content or "",
+                "chapter_elements": (chapter.extra_data or {}).get("chapter_elements", []),
+                "characters": (chapter.extra_data or {}).get("characters", []),
+            },
+            "target_words": target_words,
+            "source_content_sha256": _content_sha256(chapter.content),
+            "user_instruction": user_instruction,
         }
         artifact = _create_artifact(
             work_id,
@@ -663,9 +724,50 @@ async def _plan_chapter_scenes(context_artifact_id: str, reason=None) -> str:
         scenes = result.get("scenes")
         if not isinstance(scenes, list) or not scenes:
             raise ValueError("场景规划缺少 scenes")
+        forbidden_plan_fields = {"emotional_progression", "emotional_shift", "ending_hook"}
+        present_forbidden = forbidden_plan_fields.intersection(result)
+        if present_forbidden:
+            raise ValueError(f"场景规划包含抽象情绪字段：{'、'.join(sorted(present_forbidden))}")
+        for required in ("opening_state", "ending_state"):
+            if not str(result.get(required) or "").strip():
+                raise ValueError(f"场景规划缺少 {required}")
         orders = [item.get("order") for item in scenes if isinstance(item, dict)]
         if orders != list(range(1, len(scenes) + 1)):
             raise ValueError("场景序号需要从 1 连续递增")
+        required_beat_fields = {
+            "event",
+            "character_goal",
+            "known_information",
+            "choice",
+            "consequence",
+            "dialogue_goal",
+        }
+        for scene_index, scene in enumerate(scenes):
+            if isinstance(scene, dict) and forbidden_plan_fields.intersection(scene):
+                raise ValueError(f"scenes[{scene_index}] 包含抽象情绪字段")
+            if not isinstance(scene, dict) or not str(scene.get("state_change") or "").strip():
+                raise ValueError(f"scenes[{scene_index}] 缺少 state_change")
+            beats = scene.get("beats") if isinstance(scene, dict) else None
+            if not isinstance(beats, list) or not beats:
+                raise ValueError(f"scenes[{scene_index}].beats 需要非空对象数组")
+            for beat_index, beat in enumerate(beats):
+                missing = required_beat_fields.difference(beat) if isinstance(beat, dict) else required_beat_fields
+                if missing:
+                    fields = "、".join(sorted(missing))
+                    raise ValueError(
+                        f"scenes[{scene_index}].beats[{beat_index}] 缺少事实规划字段：{fields}"
+                    )
+                verbose = [
+                    field for field in required_beat_fields
+                    if len(str(beat.get(field) or "")) > 80
+                ]
+                if verbose:
+                    raise ValueError(
+                        f"scenes[{scene_index}].beats[{beat_index}] 展开为正文步骤："
+                        f"{'、'.join(sorted(verbose))}"
+                    )
+        if len(json.dumps(result, ensure_ascii=False)) > 5000:
+            raise ValueError("场景计划超过最小事实骨架的密度上限")
         artifact = _create_artifact(
             context.work_id,
             context.chapter_node_id,
@@ -676,7 +778,7 @@ async def _plan_chapter_scenes(context_artifact_id: str, reason=None) -> str:
         public_result = {
             "chapter_goal": result.get("chapter_goal", ""),
             "opening_carryover": result.get("opening_carryover", ""),
-            "emotional_progression": result.get("emotional_progression", ""),
+            "opening_state": result.get("opening_state", ""),
             "scene_count": len(scenes),
             "estimated_words": sum(int(item.get("approximate_words") or 0) for item in scenes),
             "scenes": [
@@ -687,15 +789,15 @@ async def _plan_chapter_scenes(context_artifact_id: str, reason=None) -> str:
                     "characters": item.get("characters", []),
                     "estimated_words": item.get("approximate_words", 0),
                     "dialogue_purpose": "；".join(
-                        str(beat.get("dialogue_purpose", ""))
+                        str(beat.get("dialogue_goal", ""))
                         for beat in item.get("beats", [])
-                        if isinstance(beat, dict) and beat.get("dialogue_purpose")
+                        if isinstance(beat, dict) and beat.get("dialogue_goal")
                     ),
-                    "emotional_shift": item.get("emotional_shift", ""),
+                    "state_change": item.get("state_change", ""),
                 }
                 for item in scenes
             ],
-            "ending_hook": result.get("ending_hook", ""),
+            "ending_state": result.get("ending_state", ""),
         }
         return _envelope(
             status="completed",
@@ -846,9 +948,9 @@ async def _write_chapter_draft(context_artifact_id: str, scene_plan_artifact_id:
             if target_words else ""
         )
         user_content = (
-            f"{length_instruction}"
             f"======= 完整作品上下文 =======\n{context.content}\n\n"
-            f"======= 完整场景计划 =======\n{plan.content}"
+            f"======= 完整场景计划 =======\n{plan.content}\n\n"
+            f"{length_instruction}"
         )
         preview = await _emit_content_preview_start(context)
         result = await _invoke_json_agent(
@@ -931,11 +1033,10 @@ async def _write_chapter_draft(context_artifact_id: str, scene_plan_artifact_id:
 class ReviewInput(BaseModel):
     context_artifact_id: str
     draft_artifact_id: str
-    minimum_score: int = Field(default=7, ge=1, le=10)
     reason: Optional[str] = None
 
 
-async def _run_review(kind: str, prompt: str, context_id: str, draft_id: str, minimum_score: int) -> str:
+async def _run_review(kind: str, prompt: str, context_id: str, draft_id: str) -> str:
     try:
         policy = _get_chapter_review_policy()
         if policy and policy.intensity == "low":
@@ -953,41 +1054,37 @@ async def _run_review(kind: str, prompt: str, context_id: str, draft_id: str, mi
                 gate_code=f"{kind}_review_limit_reached", passed=True,
             )
         user_content = f"======= 完整作品上下文 =======\n{context.content}\n\n======= 完整章节草稿 =======\n{draft.content}"
-        result = await _invoke_json_agent(prompt, user_content)
-        score = int(result.get("score") or 0)
-        issues = result.get("issues") or []
-        passed = score >= minimum_score and not any(
-            isinstance(item, dict) and item.get("severity") in {"major", "moderate", "medium"}
-            for item in issues
+        advice = await _invoke_text_agent(
+            prompt,
+            user_content,
+            system_prompt=_review_system_prompt(prompt),
         )
-        if policy:
-            policy.record_result(kind, draft.chapter_node_id or draft.id, passed=passed)
         artifact = _create_artifact(
             draft.work_id,
             draft.chapter_node_id,
             f"{kind}_review",
-            json.dumps(result, ensure_ascii=False),
+            advice,
             parent_artifact_id=draft.id,
         )
         return _envelope(
-            status="completed" if passed else "needs_revision",
+            status="completed",
             agent=f"{kind}_review",
             artifact=artifact,
             inputs=[context, draft],
-            result=result,
-            gate_code=f"{kind}_passed" if passed else f"{kind}_revision_required",
-            passed=passed,
+            result={"advice": advice},
+            gate_code=f"{kind}_review_completed",
+            passed=True,
         )
     except Exception as exc:
         return _failure(f"{kind}_review", str(exc), f"{kind}_review_failed")
 
 
-async def _review_chapter_continuity(context_artifact_id: str, draft_artifact_id: str, minimum_score=7, reason=None) -> str:
-    return await _run_review("continuity", "continuity_review.txt", context_artifact_id, draft_artifact_id, minimum_score)
+async def _review_chapter_continuity(context_artifact_id: str, draft_artifact_id: str, reason=None) -> str:
+    return await _run_review("continuity", "continuity_review.txt", context_artifact_id, draft_artifact_id)
 
 
-async def _review_chapter_dialogue(context_artifact_id: str, draft_artifact_id: str, minimum_score=7, reason=None) -> str:
-    return await _run_review("dialogue", "dialogue_review.txt", context_artifact_id, draft_artifact_id, minimum_score)
+async def _review_chapter_dialogue(context_artifact_id: str, draft_artifact_id: str, reason=None) -> str:
+    return await _run_review("dialogue", "dialogue_review.txt", context_artifact_id, draft_artifact_id)
 
 
 class ReviseDraftInput(BaseModel):
@@ -1056,24 +1153,36 @@ async def _revise_chapter_draft(draft_artifact_id: str, review_artifact_ids: lis
 
 class RevisionDecisionInput(BaseModel):
     context_artifact_id: str
-    scene_plan_artifact_id: str
     draft_artifact_id: str
     feedback: str
+    scene_plan_artifact_id: Optional[str] = None
     review_artifact_ids: list[str] = Field(default_factory=list)
     reason: Optional[str] = None
 
 
+def _scene_plan_section(plan: WorkflowArtifact | None) -> str:
+    if plan is not None:
+        return f"======= 当前场景计划 =======\n{plan.content}\n\n"
+    return (
+        "======= 当前场景计划 =======\n"
+        "无。本次没有场景计划，strategy 只能是 local_edit。"
+        "禁止 replan、rewrite。\n\n"
+    )
+
+
 async def _decide_chapter_revision(
     context_artifact_id: str,
-    scene_plan_artifact_id: str,
     draft_artifact_id: str,
     feedback: str,
+    scene_plan_artifact_id: Optional[str] = None,
     review_artifact_ids: list[str] | None = None,
     reason=None,
 ) -> str:
     try:
         context = _load_artifact(context_artifact_id, "chapter_context")
-        plan = _load_artifact(scene_plan_artifact_id, "scene_plan")
+        plan = None
+        if scene_plan_artifact_id:
+            plan = _load_artifact(scene_plan_artifact_id, "scene_plan")
         draft = _load_artifact(draft_artifact_id, "chapter_draft")
         reviews = [_load_artifact(item) for item in review_artifact_ids or []]
         if not feedback.strip() and not reviews:
@@ -1084,13 +1193,15 @@ async def _decide_chapter_revision(
         result = await _invoke_json_agent(
             "chapter_revision_decision.txt",
             f"======= 完整作品上下文 =======\n{context.content}\n\n"
-            f"======= 当前场景计划 =======\n{plan.content}\n\n"
+            f"{_scene_plan_section(plan)}"
             f"======= 当前章节草稿 =======\n{draft.content}\n\n"
             f"======= 本轮完整反馈 =======\n{full_feedback}",
         )
         strategy = result.get("strategy")
         if strategy not in {"replan", "rewrite", "local_edit"}:
             raise ValueError(f"修订策略无效：{strategy}")
+        if plan is None and strategy != "local_edit":
+            raise ValueError(f"没有场景计划时禁止 {strategy}，只能选择 local_edit")
         if not str(result.get("reason") or "").strip() or not str(result.get("instructions") or "").strip():
             raise ValueError("修订决策缺少原因或执行要求")
         decision = {
@@ -1098,15 +1209,19 @@ async def _decide_chapter_revision(
             "reason": result["reason"],
             "instructions": result["instructions"],
             "feedback": full_feedback,
-            "scene_plan_artifact_id": plan.id,
         }
+        if plan is not None:
+            decision["scene_plan_artifact_id"] = plan.id
         artifact = _create_artifact(
             draft.work_id, draft.chapter_node_id, "chapter_revision_decision",
             json.dumps(decision, ensure_ascii=False), parent_artifact_id=draft.id,
         )
+        inputs = [context, draft, *reviews]
+        if plan is not None:
+            inputs = [context, plan, draft, *reviews]
         return _envelope(
             status="completed", agent="chapter_revision_decider", artifact=artifact,
-            inputs=[context, plan, draft, *reviews],
+            inputs=inputs,
             result={key: decision[key] for key in ("strategy", "reason", "instructions")},
             gate_code="revision_strategy_selected", passed=True,
         )
@@ -1387,7 +1502,6 @@ async def _commit_chapter_workflow_result(
             chapter,
             draft.content,
             summary=str(summary_data.get("summary") or ""),
-            status="generated",
         )
         db.commit()
         db.refresh(chapter)
@@ -1475,13 +1589,13 @@ write_chapter_draft = StructuredTool.from_function(
 review_chapter_continuity = StructuredTool.from_function(
     coroutine=_review_chapter_continuity,
     name="review_chapter_continuity",
-    description="调用连续性 Reviewer，返回证据、修改范围和结构化质量门结果。",
+    description="调用连续性 Reviewer，返回包含证据和修改目标的自然语言建议，由 Supervisor 决定是否采纳。",
     args_schema=ReviewInput,
 )
 review_chapter_dialogue = StructuredTool.from_function(
     coroutine=_review_chapter_dialogue,
     name="review_chapter_dialogue",
-    description="调用对白 Reviewer，检查人物声音、交流目的、潜台词、信息权限和互动节奏。",
+    description="调用对白 Reviewer，返回关于人物声音、交流目的、潜台词、信息权限和互动节奏的自然语言建议。",
     args_schema=ReviewInput,
 )
 revise_chapter_draft = StructuredTool.from_function(
@@ -1493,7 +1607,7 @@ revise_chapter_draft = StructuredTool.from_function(
 decide_chapter_revision = StructuredTool.from_function(
     coroutine=_decide_chapter_revision,
     name="decide_chapter_revision",
-    description="根据完整场景计划、当前草稿和修改反馈，选择重新规划、整章重写或局部修改，并说明原因。",
+    description="根据当前草稿和修改反馈选择修订策略。写章传入 scene_plan_artifact_id，可在 replan、rewrite、local_edit 中选择。改章不要传入 scene_plan_artifact_id，此时只能选择 local_edit；字数超出时用局部删减保留情节。",
     args_schema=RevisionDecisionInput,
 )
 edit_chapter_draft_locally = StructuredTool.from_function(

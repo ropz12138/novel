@@ -12,7 +12,6 @@ class Chapter(Base):
     work_id = Column(String(36), ForeignKey("canvas_works.id", ondelete="CASCADE"), nullable=False, index=True)
     title = Column(String(200), default="")
     content = Column(Text, default="")
-    status = Column(String(20), default="draft")
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
     summary = Column(Text, default="")

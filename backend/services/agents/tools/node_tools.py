@@ -151,7 +151,7 @@ class ContentReplacement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     old: str = Field(description="必须与当前正文中的连续原文完全一致，且只出现一次。")
-    new: str = Field(description="替换后的文本；删除该片段时传空字符串。")
+    new: str = Field(description="替换后的文本，必须和 old 不同；删除该片段时传空字符串。")
 
 
 class UpdateNodeInput(BaseModel):
@@ -583,21 +583,38 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.close()
 
 
+def _replacement_pair(item) -> tuple[object, object]:
+    if isinstance(item, dict):
+        return item.get("old"), item.get("new")
+    return getattr(item, "old", None), getattr(item, "new", None)
+
+
+def _identical_replacement_message(indexes: list[int]) -> str:
+    labels = "、".join(f"第 {index + 1} 条（replacements[{index}]）" for index in indexes)
+    return (
+        f"{labels}的 old 和 new 完全相同，正文不会发生任何变化。"
+        "请把修改后的文字写进 new；不需要修改的片段不要放进 replacements。"
+    )
+
+
 def _apply_content_replacements(content: str, replacements) -> str:
     if not replacements:
         raise ValueError("mode=replace 时 replacements 不能为空")
-    updated = content
+    pairs: list[tuple[str, str]] = []
+    identical_indexes: list[int] = []
     for index, item in enumerate(replacements):
-        if isinstance(item, dict):
-            old = item.get("old")
-            new = item.get("new")
-        else:
-            old = getattr(item, "old", None)
-            new = getattr(item, "new", None)
+        old, new = _replacement_pair(item)
         if not isinstance(old, str) or not old:
             raise ValueError(f"replacements[{index}] 缺少非空 old")
         if not isinstance(new, str):
             raise ValueError(f"replacements[{index}] 的 new 必须是字符串")
+        if old == new:
+            identical_indexes.append(index)
+        pairs.append((old, new))
+    if identical_indexes:
+        raise ValueError(_identical_replacement_message(identical_indexes))
+    updated = content
+    for index, (old, new) in enumerate(pairs):
         match_count = updated.count(old)
         if match_count == 0:
             raise ValueError(f"replacements[{index}] 的 old 在正文中未找到")
@@ -670,6 +687,9 @@ def _update_node_sync(
             try:
                 write_content = _apply_content_replacements(old_content, replacements)
             except ValueError as e:
+                if "old 和 new 完全相同" in str(e):
+                    from services.agents.sampling_override import arm_identical_replacement_sampling
+                    arm_identical_replacement_sampling()
                 return json.dumps({"error": str(e)}, ensure_ascii=False)
         elif replacements:
             return json.dumps({"error": "mode=overwrite 时只填写 content；局部修改使用 mode=replace"}, ensure_ascii=False)

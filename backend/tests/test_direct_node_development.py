@@ -31,6 +31,8 @@ def test_specialist_writes_only_existing_real_nodes(db_session, monkeypatch):
     async def fake_agent(prompt_name, user_content, *, system_prompt=None):
         assert node.id in user_content
         assert "真实节点" in system_prompt
+        assert user_content.index("当前画布全部节点") < user_content.index("用户完整要求")
+        assert user_content.index("当前画布全部连线") < user_content.index("本轮要完善的真实节点 ID")
         return {"nodes": [{"node_id": node.id, "content": "直接写入的内容"}]}
 
     monkeypatch.setattr(wat.sat, "_invoke_json_agent", fake_agent)

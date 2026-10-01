@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkHtmlBreaks } from "../lib/markdown";
 import {
   ArrowLeft,
   Activity,
@@ -26,6 +27,7 @@ import {
 } from "lucide-react";
 import { researchApi } from "../lib/researchApi";
 import { authFetch } from "../lib/authFetch";
+import { IS_NATIVE_APP } from "../lib/runtime-config";
 
 const STATUS_LABELS = {
   queued: "等待启动",
@@ -152,7 +154,7 @@ function EventItem({ event }) {
             className="mb-1.5 text-blue-600"
           />
           <div className="prose prose-slate max-w-none text-sm leading-6">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>
               {event.content}
             </ReactMarkdown>
           </div>
@@ -545,7 +547,11 @@ export function ResearchPage() {
           </div>
         </div>
       )}
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5">
+      <header className={`flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5 ${
+        IS_NATIVE_APP
+          ? "h-auto min-h-14 pb-3 pt-[max(2.75rem,calc(env(safe-area-inset-top)+0.75rem))]"
+          : "h-14"
+      }`}>
         <div className="flex items-center gap-3">
           <button
             onClick={() => navigate("/")}
@@ -826,7 +832,7 @@ export function ResearchPage() {
                         </div>
                       </div>
                       <div className="prose prose-slate max-w-none text-sm leading-7">
-                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                        <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>
                           {selectedArtifact.content}
                         </ReactMarkdown>
                       </div>

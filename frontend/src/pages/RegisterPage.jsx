@@ -31,6 +31,7 @@ export function RegisterPage() {
       }, "注册失败");
       localStorage.setItem("novel_token", data.token);
       localStorage.setItem("novel_user", data?.user?.username || form.username || "创作者");
+      localStorage.setItem("novel_role", data?.user?.role || "user");
       navigate("/", { replace: true });
     } catch (err) {
       setError(err.message || "注册失败");

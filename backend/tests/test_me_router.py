@@ -20,7 +20,7 @@ client = TestClient(app)
 def mock_auth():
     db = database.SessionLocal()
     try:
-        user = User(username="tester", email="t@t.t", password_hash="x")
+        user = User(username="tester", email="t@t.t", password_hash="x", role="admin")
         db.add(user)
         db.commit()
         db.refresh(user)
@@ -38,6 +38,13 @@ def test_get_models_returns_available_and_defaults():
     assert set(data["available_models"]) == set(settings.available_models)
     assert data["default_primary"] == settings.default_model
     assert data["default_fallback"] == settings.fallback_model
+
+
+def test_user_cannot_access_model_configuration(mock_auth):
+    mock_auth.role = "user"
+    assert client.get("/api/me/models").status_code == 403
+    assert client.get("/api/me/model-pref").status_code == 403
+    assert client.put("/api/me/model-pref", json={"primary": settings.default_model}).status_code == 403
 
 
 def test_get_model_pref_defaults_null(mock_auth):
@@ -73,6 +80,27 @@ def test_put_model_pref_rejects_primary_equals_fallback(mock_auth):
     assert resp.status_code == 400
 
 
+def test_chapter_review_intensity_defaults_medium_and_persists(mock_auth):
+    first = client.get("/api/me/chapter-review-intensity")
+    assert first.status_code == 200
+    assert first.json()["chapter_review_intensity"] == "medium"
+
+    saved = client.put(
+        "/api/me/chapter-review-intensity",
+        json={"chapter_review_intensity": "high"},
+    )
+    assert saved.status_code == 200
+    assert saved.json()["chapter_review_intensity"] == "high"
+    assert client.get("/api/me/chapter-review-intensity").json()["chapter_review_intensity"] == "high"
+
+    rejected = client.put(
+        "/api/me/chapter-review-intensity",
+        json={"chapter_review_intensity": "unlimited"},
+    )
+    assert rejected.status_code == 400
+    assert client.get("/api/me/chapter-review-intensity").json()["chapter_review_intensity"] == "high"
+
+
 def test_put_model_pref_allows_clearing_to_null(mock_auth):
     m = settings.available_models[0]
     # 先设一个主模型
@@ -82,3 +110,18 @@ def test_put_model_pref_allows_clearing_to_null(mock_auth):
     assert resp.status_code == 200
     assert resp.json()["primary"] is None
     assert resp.json()["fallback"] is None
+
+
+def test_put_model_pref_allows_explicitly_disabling_fallback(mock_auth):
+    primary = settings.available_models[0]
+    resp = client.put(
+        "/api/me/model-pref",
+        json={"primary": primary, "fallback": ""},
+    )
+
+    assert resp.status_code == 200
+    assert resp.json() == {"primary": primary, "fallback": ""}
+    assert client.get("/api/me/model-pref").json() == {
+        "primary": primary,
+        "fallback": "",
+    }

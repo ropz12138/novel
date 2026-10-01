@@ -58,7 +58,47 @@ def init_db() -> None:
     import models.node_content_diff_state
     import models.research
     import models.workflow
+    import models.llm_token_usage
     Base.metadata.create_all(bind=engine)
+    from services.token_usage import ensure_llm_token_usage_work_column
+    ensure_llm_token_usage_work_column()
+    _ensure_user_chapter_review_intensity_column()
+    _ensure_user_role_column()
+
+
+def _ensure_user_chapter_review_intensity_column() -> None:
+    with engine.begin() as conn:
+        table = conn.execute(text("SELECT to_regclass('public.users')")).scalar()
+        if table is None:
+            return
+        column = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'users' "
+            "AND column_name = 'chapter_review_intensity'"
+        )).scalar()
+        if column:
+            return
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN chapter_review_intensity VARCHAR(16) "
+            "NOT NULL DEFAULT 'medium'"
+        ))
+
+
+def _ensure_user_role_column() -> None:
+    with engine.begin() as conn:
+        table = conn.execute(text("SELECT to_regclass('public.users')")).scalar()
+        if table is None:
+            return
+        column = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'users' "
+            "AND column_name = 'role'"
+        )).scalar()
+        if column:
+            return
+        conn.execute(text(
+            "ALTER TABLE users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'user'"
+        ))
 
 
 def get_db():

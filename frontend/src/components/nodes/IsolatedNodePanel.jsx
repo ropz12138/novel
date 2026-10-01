@@ -39,8 +39,20 @@ const GROUPS = [
   },
 ];
 
-const IsolatedNodePanel = memo(({ nodes = [], onSelect }) => {
-  const [collapsed, setCollapsed] = useState(false);
+const IsolatedNodePanel = memo(({
+  nodes = [],
+  onSelect,
+  initialCollapsed = false,
+  collapsed: controlledCollapsed,
+  onCollapsedChange,
+  showCollapsedTrigger = true,
+}) => {
+  const [internalCollapsed, setInternalCollapsed] = useState(initialCollapsed);
+  const collapsed = controlledCollapsed ?? internalCollapsed;
+  const setCollapsed = (value) => {
+    if (controlledCollapsed === undefined) setInternalCollapsed(value);
+    onCollapsedChange?.(value);
+  };
   const grouped = useMemo(() => {
     const isolated = nodes.filter(isIsolatedNode);
     return GROUPS.map((group) => ({
@@ -50,6 +62,7 @@ const IsolatedNodePanel = memo(({ nodes = [], onSelect }) => {
   }, [nodes]);
 
   if (collapsed) {
+    if (!showCollapsedTrigger) return null;
     return (
       <aside className="flex w-10 shrink-0 flex-col items-center border-l border-slate-200 bg-slate-50/80 py-2">
         <button
@@ -69,7 +82,10 @@ const IsolatedNodePanel = memo(({ nodes = [], onSelect }) => {
   }
 
   return (
-    <aside className="w-52 shrink-0 border-l border-slate-200 bg-slate-50/80 overflow-y-auto">
+    <aside
+      data-testid="isolated-node-panel"
+      className="relative z-[55] w-52 shrink-0 border-l border-slate-200 bg-slate-50/80 overflow-y-auto"
+    >
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-400">
         <span>角色与设定</span>
         <button

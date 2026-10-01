@@ -125,3 +125,14 @@ export async function putModelPref(data) {
     body: JSON.stringify(data),
   }, "更新模型偏好失败");
 }
+
+export async function getChapterReviewIntensity() {
+  return authJson(`${API_BASE}/me/chapter-review-intensity`, {}, "加载评审强度失败");
+}
+
+export async function putChapterReviewIntensity(data) {
+  return authJson(`${API_BASE}/me/chapter-review-intensity`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }, "保存评审强度失败");
+}

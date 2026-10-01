@@ -13,7 +13,7 @@ class LLMRawLog:
         logger.debug("LLM Request [%s/%s] %s -> %s", self.provider, self.model, self.mode, url)
 
     def stream_line(self, line: str) -> None:
-        logger.debug("LLM SSE [%s/%s] %s", self.provider, self.model, line[:200])
+        logger.debug("LLM SSE [%s/%s] %s", self.provider, self.model, line)
 
     def raw_response(self, content: bytes, status_code: int) -> None:
         logger.debug(f"LLM Response [{self.provider}/{self.model}] status={status_code} bytes={len(content)}")

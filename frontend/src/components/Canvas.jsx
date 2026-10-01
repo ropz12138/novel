@@ -16,6 +16,7 @@ import {
   addEdge,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   MarkerType,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
@@ -24,6 +25,7 @@ import IsolatedNodePanel from "./nodes/IsolatedNodePanel";
 import CustomEdge from "./edges/CustomEdge";
 import CharacterRelationEdge from "./edges/CharacterRelationEdge";
 import NodeDetailDrawer from "./nodes/NodeDetailDrawer";
+import { firstOutlineNode, orderedNavigationNodes } from "../lib/nodeNavigation";
 import {
   fetchNodes,
   createNode,
@@ -86,12 +88,12 @@ import {
 
 const createNodeTypes = (
   onNodeClick,
-  onFocusEdges,
-  focusedNodeId,
   expandedNodeIds = new Set(),
   expandableNodeIds = new Set(),
   hiddenSummaryById = new Map(),
   onCollapseToggle,
+  onNodeLongPress,
+  appMode = false,
 ) => ({
   custom: (props) => {
     const summary = hiddenSummaryById.get(props.id);
@@ -99,13 +101,13 @@ const createNodeTypes = (
       <CustomNode
         {...props}
         onNodeClick={onNodeClick}
-        onFocusEdges={onFocusEdges}
-        isEdgesFocused={props.id === focusedNodeId}
         isExpanded={expandedNodeIds.has(props.id)}
         hasChildren={expandableNodeIds.has(props.id)}
         hiddenDescendantCount={summary?.total || 0}
         hiddenDescendantText={summary?.text || ""}
         onCollapseToggle={onCollapseToggle}
+        onNodeLongPress={appMode ? onNodeLongPress : undefined}
+        appMode={appMode}
       />
     );
   },
@@ -124,22 +126,21 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = forwardRef(function Canvas({ workId, onAddContext, nodeContentDiffs = {}, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning }, ref) {
+const Canvas = forwardRef(function Canvas({ workId, onAddContext, onNodeEdited, nodeContentDiffs = {}, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} agentRunning={agentRunning} ref={ref} />
+      <CanvasContent workId={workId} onAddContext={onAddContext} onNodeEdited={onNodeEdited} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} agentRunning={agentRunning} appMode={appMode} charactersPanelOpen={charactersPanelOpen} onCharactersPanelOpenChange={onCharactersPanelOpenChange} ref={ref} />
     </ReactFlowProvider>
   );
 });
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, nodeContentDiffs, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, onNodeEdited, nodeContentDiffs, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning, appMode, charactersPanelOpen, onCharactersPanelOpenChange }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
   const [showStructuralEdges, setShowStructuralEdges] = useState(true);
   const [contextMenu, setContextMenu] = useState(null);
   const [selectedNode, setSelectedNode] = useState(null);
-  const [focusedNodeId, setFocusedNodeId] = useState(null);
   const [loadError, setLoadError] = useState("");
   // 视图状态在挂载时同步读取：defaultViewport 只在挂载生效，晚一帧就来不及
   const [initialViewState] = useState(() =>
@@ -150,6 +151,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   );
   // 展开/收起时记录操作节点与操作前的坐标，用于布局后的整体平移补偿
   const [layoutAnchor, setLayoutAnchor] = useState(null);
+  const { fitView } = useReactFlow();
   const contextMenuRef = useRef(null);
   const viewportRef = useRef(initialViewState?.viewport ?? null);
   const layoutPositionsRef = useRef(new Map());
@@ -297,7 +299,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       setEdges(restoredEdges);
       setCharacterRelations(restoredRelations);
       setSelectedNode(null);
-      setFocusedNodeId(null);
     } catch (err) {
       undoStackRef.current = [...undoStackRef.current, snapshot];
       console.error("Failed to undo canvas change:", err);
@@ -370,6 +371,10 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const handleNodeUpdate = useCallback(async (nodeId, data) => {
     try {
       await updateNode(nodeId, data);
+      const editedNode = nodesRef.current.find((node) => node.id === nodeId);
+      if (editedNode && Object.keys(data).some((key) => !["position_x", "position_y", "locked"].includes(key))) {
+        onNodeEdited?.({ id: nodeId, ...applyNodeUpdateToData(editedNode.data, data) });
+      }
       // 本地更新画布节点显示
       setNodes((nds) => {
         const next = nds.map((n) =>
@@ -389,7 +394,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       console.error("Failed to update node:", err);
       alert("保存失败：" + (err?.message || "未知错误"));
     }
-  }, [setNodes, updateNode, onNodeContentDiffsRefresh]);
+  }, [setNodes, updateNode, onNodeContentDiffsRefresh, onNodeEdited]);
 
   const handleContentDiffDecision = useCallback(async (nodeId, data) => {
     const result = await saveContentDiffDecision(nodeId, data);
@@ -435,8 +440,30 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       refresh: refreshData,
       handleDeleteNode,
       undo,
+      closeNodeDetail: () => {
+        if (!selectedNode) return false;
+        setSelectedNode(null);
+        return true;
+      },
+      openNodeDetail: (nodeId, quote) => {
+        const flowNode = nodesRef.current.find((node) => node.id === nodeId);
+        if (!flowNode) {
+          if (quote) window.alert("引用节点已不存在。");
+          return false;
+        }
+        if (quote) {
+          const content = flowNode.data.content || "";
+          const start = content.indexOf(quote);
+          if (start < 0 || content.indexOf(quote, start + 1) >= 0) {
+            window.alert("引用原文已变化或存在多处匹配，请让 AI 重新生成引用。");
+            return false;
+          }
+        }
+        setSelectedNode({ id: flowNode.id, ...flowNode.data, sourceReference: quote });
+        return true;
+      },
     }),
-    [refreshData, handleDeleteNode, undo]
+    [refreshData, handleDeleteNode, undo, selectedNode]
   );
 
   const onConnect = useCallback(
@@ -580,9 +607,11 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
   const onPaneClick = useCallback(() => {
     setContextMenu(null);
-    setFocusedNodeId(null);
     setSelectedNode(null);
-  }, []);
+    if (appMode && charactersPanelOpen) {
+      onCharactersPanelOpenChange?.(false);
+    }
+  }, [appMode, charactersPanelOpen, onCharactersPanelOpenChange]);
 
   const onPaneContextMenu = useCallback((event) => {
     event.preventDefault();
@@ -596,9 +625,10 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     });
   }, []);
 
-  const onNodeContextMenu = useCallback((event, flowNode) => {
-    event.preventDefault();
-    const bounds = event.target.closest('.react-flow')?.getBoundingClientRect();
+  const openNodeContextMenu = useCallback((event, flowNode) => {
+    event.preventDefault?.();
+    const bounds = event.target?.closest?.(".react-flow")?.getBoundingClientRect()
+      || event.currentTarget?.closest?.(".react-flow")?.getBoundingClientRect();
     if (!bounds) return;
     setContextMenu({
       kind: "node",
@@ -607,6 +637,10 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       y: event.clientY - bounds.top,
     });
   }, []);
+
+  const onNodeContextMenu = useCallback((event, flowNode) => {
+    openNodeContextMenu(event, flowNode);
+  }, [openNodeContextMenu]);
 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
@@ -682,6 +716,16 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     refreshData();
   };
 
+  const outlineTarget = firstOutlineNode(nodes);
+  const handleFocusOutline = useCallback(() => {
+    if (!outlineTarget) return;
+    fitView({
+      nodes: [{ id: outlineTarget.id }],
+      padding: 0.35,
+      duration: 300,
+    });
+  }, [fitView, outlineTarget]);
+
   const handleNodeClick = useCallback((nodeData) => {
     setSelectedNode(nodeData);
   }, []);
@@ -692,6 +736,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       .map((flowNode) => ({ id: flowNode.id, ...flowNode.data })),
     [nodes],
   );
+  const navigationNodes = useMemo(() => orderedNavigationNodes(nodes), [nodes]);
 
   const handleChapterNavigate = useCallback((chapterNode) => {
     setSelectedNode(chapterNode);
@@ -704,10 +749,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     if (shouldClearDrawerOnSelection(selectedNodes.length, isDraggingRef.current)) {
       setSelectedNode(null);
     }
-  }, []);
-
-  const handleFocusEdges = useCallback((nodeId) => {
-    setFocusedNodeId((current) => current === nodeId ? null : nodeId);
   }, []);
 
   const handleCloseDrawer = useCallback(() => {
@@ -732,9 +773,8 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     () => projectVisibleGraph({
       index: graphIndex,
       expandedNodeIds,
-      focusNodeId: focusedNodeId,
     }),
-    [graphIndex, expandedNodeIds, focusedNodeId],
+    [graphIndex, expandedNodeIds],
   );
 
   const layoutPositions = useMemo(
@@ -826,13 +866,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const visibleStructuralEdges = useMemo(
     () => {
       if (!showStructuralEdges) return [];
-      return focusedNodeId
-        ? visibleGraph.visibleEdges.filter(
-          (edge) => edge.source === focusedNodeId || edge.target === focusedNodeId,
-        )
-        : visibleGraph.visibleEdges;
+      return visibleGraph.visibleEdges;
     },
-    [visibleGraph, focusedNodeId, showStructuralEdges],
+    [visibleGraph, showStructuralEdges],
   );
 
   const visibleCharacterRelations = useMemo(() => [], []);
@@ -858,21 +894,21 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const nodeTypes = useMemo(
     () => createNodeTypes(
       handleNodeClick,
-      handleFocusEdges,
-      focusedNodeId,
       expandedNodeIds,
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
+      openNodeContextMenu,
+      appMode,
     ),
     [
       handleNodeClick,
-      handleFocusEdges,
-      focusedNodeId,
       expandedNodeIds,
       expandableNodeIds,
       hiddenSummaryById,
       handleCollapseToggle,
+      openNodeContextMenu,
+      appMode,
     ],
   );
 
@@ -887,6 +923,17 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
         <div className="absolute top-3 left-3 z-10 flex gap-2">
           <button
             type="button"
+            aria-label="定位到大纲"
+            title="定位到大纲"
+            disabled={!outlineTarget}
+            onClick={handleFocusOutline}
+            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            大纲
+          </button>
+          {!appMode && (
+          <button
+            type="button"
             onClick={() => setShowStructuralEdges((v) => !v)}
             className={`rounded px-2 py-1 text-xs border shadow-sm transition-colors ${
               showStructuralEdges
@@ -896,6 +943,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
           >
             结构线
           </button>
+          )}
         </div>
         <ReactFlow
           nodes={displayedNodes}
@@ -921,15 +969,18 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
           defaultViewport={initialViewState?.viewport ?? undefined}
           fitView={!initialViewState?.viewport}
           attributionPosition="bottom-left"
+          proOptions={appMode ? { hideAttribution: true } : undefined}
         >
           <Background />
-          <Controls />
-          <MiniMap
-            nodeStrokeWidth={3}
-            zoomable
-            pannable
-            style={{ height: 120, width: 180 }}
-          />
+          {!appMode && <Controls />}
+          {!appMode && (
+            <MiniMap
+              nodeStrokeWidth={3}
+              zoomable
+              pannable
+              style={{ height: 120, width: 180 }}
+            />
+          )}
         </ReactFlow>
 
         {/* 右键菜单 */}
@@ -940,9 +991,12 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
             {contextMenu.kind === "node" ? (
+              <>
               <button
                 type="button"
                 aria-label="引用此节点"
+                onPointerDown={(event) => event.preventDefault()}
+                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   onAddContext?.(contextMenu.node);
                   closeContextMenu();
@@ -951,6 +1005,21 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
               >
                 引用此节点
               </button>
+              <button
+                type="button"
+                aria-label="删除节点"
+                onClick={() => {
+                  const node = contextMenu.node;
+                  closeContextMenu();
+                  if (window.confirm(`确定删除节点「${node.label}」？关联的连线也会被删除。`)) {
+                    handleDeleteNode(node);
+                  }
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
+              >
+                删除节点
+              </button>
+              </>
             ) : (
               <>
                 <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100">
@@ -996,10 +1065,19 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       </div>
 
       {/* 全局节点入口：禁止连线的孤立节点不进画布，避免铺满可视区域 */}
-      <IsolatedNodePanel nodes={nodes} onSelect={handleNodeClick} />
+      <IsolatedNodePanel
+        nodes={nodes}
+        onSelect={handleNodeClick}
+        initialCollapsed={appMode}
+        collapsed={appMode ? !charactersPanelOpen : undefined}
+        onCollapsedChange={appMode
+          ? (collapsed) => onCharactersPanelOpenChange?.(!collapsed)
+          : undefined}
+        showCollapsedTrigger={!appMode}
+      />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onDelete={handleDeleteNode} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onAddContext={onAddContext} onToggleLocked={handleToggleLocked} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} onChapterNavigate={handleChapterNavigate} />
+      <NodeDetailDrawer appMode={appMode} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onAddContext={onAddContext} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} />
     </div>
   );
 });

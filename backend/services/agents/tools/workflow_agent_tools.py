@@ -84,15 +84,13 @@ async def _assemble_work_context(user_instruction: str, target_node_ids=None, mo
         if not work_id:
             return sat._failure("work_context_assembler", "未指定作品ID", "work_not_bound")
         nodes = db.query(Node).filter(Node.work_id == work_id).order_by(Node.type, Node.sort_order, Node.id).all()
+        nodes.sort(key=lambda item: item.type == "chapter")
         requested = set(target_node_ids or [])
         unavailable = requested - {item.id for item in nodes}
         if unavailable:
             return sat._failure("work_context_assembler", f"目标节点不属于当前作品：{sorted(unavailable)}", "target_node_unavailable")
         payload = {
             "work_id": work_id,
-            "mode": mode,
-            "user_instruction": user_instruction,
-            "target_node_ids": list(target_node_ids or []),
             "nodes": [
                 {
                     "id": item.id,
@@ -105,6 +103,9 @@ async def _assemble_work_context(user_instruction: str, target_node_ids=None, mo
                 }
                 for item in nodes
             ],
+            "mode": mode,
+            "user_instruction": user_instruction,
+            "target_node_ids": list(target_node_ids or []),
         }
         artifact = sat._create_artifact(work_id, None, "work_context", json.dumps(payload, ensure_ascii=False))
         return sat._envelope(
@@ -134,32 +135,27 @@ class ArtifactReviewInput(BaseModel):
     context_artifact_id: str
     artifact_id: str
     perspective: str = "editor"
-    minimum_score: int = Field(default=7, ge=1, le=10)
     reason: Optional[str] = None
 
 
-async def _review_artifact_quality(context_artifact_id: str, artifact_id: str, perspective="editor", minimum_score=7, reason=None):
+async def _review_artifact_quality(context_artifact_id: str, artifact_id: str, perspective="editor", reason=None):
     try:
         context = sat._load_artifact(context_artifact_id)
         source = sat._load_artifact(artifact_id)
-        result = await sat._invoke_json_agent(
+        advice = await sat._invoke_text_agent(
             "quality_review.txt",
             f"======= 完整作品上下文 =======\n{context.content}\n\n======= 审查视角 =======\n{perspective}\n\n======= 完整待审查产物 =======\n{source.content}",
+            system_prompt=sat._review_system_prompt("quality_review.txt"),
         )
-        score = int(result.get("score") or 0)
-        issues = result.get("issues") or []
-        passed = score >= minimum_score and not any(
-            isinstance(item, dict) and item.get("severity") == "major" for item in issues
-        )
-        artifact = sat._create_artifact(source.work_id, source.chapter_node_id, "quality_review", json.dumps(result, ensure_ascii=False), parent_artifact_id=source.id)
+        artifact = sat._create_artifact(source.work_id, source.chapter_node_id, "quality_review", advice, parent_artifact_id=source.id)
         return sat._envelope(
-            status="completed" if passed else "needs_revision",
+            status="completed",
             agent="quality_review",
             artifact=artifact,
             inputs=[context, source],
-            result=result,
-            gate_code="quality_passed" if passed else "quality_revision_required",
-            passed=passed,
+            result={"advice": advice},
+            gate_code="quality_review_completed",
+            passed=True,
         )
     except Exception as exc:
         return sat._failure("quality_review", str(exc), "quality_review_failed")
@@ -249,17 +245,101 @@ async def _humanize_chapter_draft(context_artifact_id: str, draft_artifact_id: s
         return sat._failure("fiction_humanizer", str(exc), "humanization_failed")
 
 
-async def _review_fiction_quality(context_artifact_id: str, draft_artifact_id: str, minimum_score=7, reason=None):
+async def _review_fiction_quality(context_artifact_id: str, draft_artifact_id: str, reason=None):
     try:
+        policy = sat._get_chapter_review_policy()
+        if policy and policy.intensity == "low":
+            return sat._envelope(
+                status="completed", agent="fiction_quality_review",
+                result={"reason": "当前章节评审强度为低"},
+                gate_code="fiction_quality_skipped_by_intensity", passed=True,
+            )
         context = sat._load_artifact(context_artifact_id)
         draft = sat._load_artifact(draft_artifact_id, "chapter_draft")
-        result = await sat._invoke_json_agent("fiction_quality.txt", f"======= 完整上下文 =======\n{context.content}\n\n======= 完整正文 =======\n{draft.content}")
-        score = int(result.get("score") or 0)
-        passed = score >= minimum_score and not any(isinstance(item, dict) and item.get("severity") == "major" for item in result.get("issues") or [])
-        artifact = sat._create_artifact(draft.work_id, draft.chapter_node_id, "fiction_quality_review", json.dumps(result, ensure_ascii=False), parent_artifact_id=draft.id)
-        return sat._envelope(status="completed" if passed else "needs_revision", agent="fiction_quality_review", artifact=artifact, inputs=[context, draft], result=result, gate_code="fiction_quality_passed" if passed else "fiction_quality_revision_required", passed=passed)
+        chapter_id = draft.chapter_node_id or draft.id
+        if policy and not policy.try_reserve("fiction_quality", chapter_id):
+            return sat._envelope(
+                status="completed", agent="fiction_quality_review",
+                inputs=[context, draft],
+                result={"reason": "当前章节已完成综合质量评审"},
+                gate_code="fiction_quality_review_limit_reached", passed=True,
+            )
+        advice = await sat._invoke_text_agent(
+            "fiction_quality.txt",
+            f"======= 完整上下文 =======\n{context.content}\n\n======= 完整正文 =======\n{draft.content}",
+            system_prompt=sat._review_system_prompt("fiction_quality.txt"),
+        )
+        artifact = sat._create_artifact(draft.work_id, draft.chapter_node_id, "fiction_quality_review", advice, parent_artifact_id=draft.id)
+        return sat._envelope(status="completed", agent="fiction_quality_review", artifact=artifact, inputs=[context, draft], result={"advice": advice}, gate_code="fiction_quality_review_completed", passed=True)
     except Exception as exc:
         return sat._failure("fiction_quality_review", str(exc), "fiction_quality_review_failed")
+
+
+def _ai_taste_style_rules() -> str:
+    writer = (AGENT_ROOT / "prompts" / "specialists" / "chapter_writer.txt").read_text(encoding="utf-8")
+    start = writer.find("# 二、角色视角与信息边界")
+    output = writer.find("# 二十三、输出格式")
+    principles = writer.find("# 二十四、最终写作原则")
+    if start < 0 or output < 0 or principles < 0:
+        raise ValueError("正文写作文风规则缺失")
+    return writer[start:output].rstrip() + "\n\n" + writer[principles:].rstrip() + "\n"
+
+
+async def _review_chapter_ai_taste(context_artifact_id: str, draft_artifact_id: str, reason=None):
+    try:
+        policy = sat._get_chapter_review_policy()
+        if policy and policy.intensity == "low":
+            return sat._envelope(
+                status="completed",
+                agent="ai_taste_review",
+                result={"reason": "当前章节评审强度为低"},
+                gate_code="ai_taste_skipped_by_intensity",
+                passed=True,
+            )
+        context = sat._load_artifact(context_artifact_id, "chapter_context")
+        draft = sat._load_artifact(draft_artifact_id, "chapter_draft")
+        chapter_id = draft.chapter_node_id or draft.id
+        if policy and not policy.try_reserve("ai_taste", chapter_id):
+            return sat._envelope(
+                status="completed",
+                agent="ai_taste_review",
+                inputs=[context, draft],
+                result={"reason": "当前章节已完成 AI 味评审"},
+                gate_code="ai_taste_review_limit_reached",
+                passed=True,
+            )
+        humanizer_rules = HUMANIZER_PATH.read_text(encoding="utf-8")
+        style_rules = _ai_taste_style_rules()
+        advice = await sat._invoke_text_agent(
+            "ai_taste_review.txt",
+            "======= 完整自然化规则 =======\n"
+            f"{humanizer_rules}\n\n"
+            "======= 正文写作文风规则 =======\n"
+            f"{style_rules}\n\n"
+            "======= 完整作品上下文 =======\n"
+            f"{context.content}\n\n"
+            "======= 完整章节正文 =======\n"
+            f"{draft.content}",
+            system_prompt=sat._review_system_prompt("ai_taste_review.txt"),
+        )
+        artifact = sat._create_artifact(
+            draft.work_id,
+            draft.chapter_node_id,
+            "ai_taste_review",
+            advice,
+            parent_artifact_id=draft.id,
+        )
+        return sat._envelope(
+            status="completed",
+            agent="ai_taste_review",
+            artifact=artifact,
+            inputs=[context, draft],
+            result={"advice": advice},
+            gate_code="ai_taste_review_completed",
+            passed=True,
+        )
+    except Exception as exc:
+        return sat._failure("ai_taste_review", str(exc), "ai_taste_review_failed")
 
 
 class CoherenceInput(BaseModel):
@@ -270,9 +350,13 @@ class CoherenceInput(BaseModel):
 async def _review_novel_coherence(context_artifact_id: str, reason=None):
     try:
         context = sat._load_artifact(context_artifact_id, "work_context")
-        result = await sat._invoke_json_agent("novel_coherence.txt", context.content)
-        artifact = sat._create_artifact(context.work_id, None, "novel_coherence_review", json.dumps(result, ensure_ascii=False), parent_artifact_id=context.id)
-        return sat._envelope(status="completed", agent="novel_coherence_review", artifact=artifact, inputs=[context], result=result, gate_code="coherence_review_ready", passed=True)
+        advice = await sat._invoke_text_agent(
+            "novel_coherence.txt",
+            context.content,
+            system_prompt=sat._review_system_prompt("novel_coherence.txt"),
+        )
+        artifact = sat._create_artifact(context.work_id, None, "novel_coherence_review", advice, parent_artifact_id=context.id)
+        return sat._envelope(status="completed", agent="novel_coherence_review", artifact=artifact, inputs=[context], result={"advice": advice}, gate_code="coherence_review_completed", passed=True)
     except Exception as exc:
         return sat._failure("novel_coherence_review", str(exc), "coherence_review_failed")
 
@@ -337,12 +421,21 @@ async def _apply_research_techniques(context_artifact_id: str, research_context_
 
 load_workflow_skill = StructuredTool.from_function(coroutine=_load_workflow_skill, name="load_workflow_skill", description="按名称完整加载一个已注册的创作 Workflow Skill。", args_schema=LoadWorkflowSkillInput)
 assemble_work_context = StructuredTool.from_function(coroutine=_assemble_work_context, name="assemble_work_context", description="完整装配作品节点、用户要求和目标范围，保存为工作流上下文产物。", args_schema=AssembleWorkContextInput)
-review_artifact_quality = StructuredTool.from_function(coroutine=_review_artifact_quality, name="review_artifact_quality", description="对研究或故事记忆产物执行结构化质量审查。", args_schema=ArtifactReviewInput)
+review_artifact_quality = StructuredTool.from_function(coroutine=_review_artifact_quality, name="review_artifact_quality", description="对研究或故事记忆产物给出自然语言评审建议，由 Supervisor 决定是否采纳。", args_schema=ArtifactReviewInput)
 stage_existing_chapter_draft = StructuredTool.from_function(coroutine=_stage_existing_chapter_draft, name="stage_existing_chapter_draft", description="把章节上下文中的当前完整正文保存为版本化草稿产物。", args_schema=StageChapterInput)
 revise_existing_chapter_draft = StructuredTool.from_function(coroutine=_revise_existing_chapter_draft, name="revise_existing_chapter_draft", description="按作者完整要求修改已有章节并生成新草稿版本。", args_schema=ExistingRevisionInput)
 humanize_chapter_draft = StructuredTool.from_function(coroutine=_humanize_chapter_draft, name="humanize_chapter_draft", description="完整加载自然化规则，生成保持事实与标记的新草稿版本。", args_schema=HumanizeInput)
-review_fiction_quality = StructuredTool.from_function(coroutine=_review_fiction_quality, name="review_fiction_quality", description="综合评估章节逻辑、人物、节奏、文风、对白和阅读体验。", args_schema=sat.ReviewInput)
-review_novel_coherence = StructuredTool.from_function(coroutine=_review_novel_coherence, name="review_novel_coherence", description="只读审查多章或全书的一致性、人物线和伏笔状态。", args_schema=CoherenceInput)
+review_fiction_quality = StructuredTool.from_function(coroutine=_review_fiction_quality, name="review_fiction_quality", description="综合审视章节逻辑、人物、节奏、文风、对白和阅读体验，返回自然语言建议。", args_schema=sat.ReviewInput)
+review_chapter_ai_taste = StructuredTool.from_function(
+    coroutine=_review_chapter_ai_taste,
+    name="review_chapter_ai_taste",
+    description=(
+        "审视章节正文的 AI 味句式和文风，返回自然语言建议。"
+        "中档每章最多调用一次，高档可对最新草稿重复复检，低档不调用。"
+    ),
+    args_schema=sat.ReviewInput,
+)
+review_novel_coherence = StructuredTool.from_function(coroutine=_review_novel_coherence, name="review_novel_coherence", description="只读审视多章或全书的一致性、人物线和伏笔状态，返回自然语言建议。", args_schema=CoherenceInput)
 extract_story_memory = StructuredTool.from_function(coroutine=_extract_story_memory, name="extract_story_memory", description="从完整章节提取摘要、章末状态、角色关系变化和未决线索。", args_schema=HumanizeInput)
 resolve_research_context = StructuredTool.from_function(coroutine=_resolve_research_context, name="resolve_research_context", description="按研究成果 ID 读取全文并保存为可追踪研究上下文产物。", args_schema=ResearchContextInput)
 apply_research_techniques = StructuredTool.from_function(coroutine=_apply_research_techniques, name="apply_research_techniques", description="把研究成果全文适配为当前作品可执行的技法产物。", args_schema=ApplyResearchInput)
@@ -352,7 +445,7 @@ workflow_agent_tools = [
     load_workflow_skill, assemble_work_context, review_artifact_quality,
     stage_existing_chapter_draft,
     revise_existing_chapter_draft, humanize_chapter_draft,
-    review_fiction_quality, review_novel_coherence, extract_story_memory,
+    review_fiction_quality, review_chapter_ai_taste, review_novel_coherence, extract_story_memory,
     resolve_research_context, apply_research_techniques,
 ]
 
@@ -415,13 +508,13 @@ async def _develop_existing_nodes(specialty: str, node_ids: list[str], user_inst
     try:
         payload = await sat._invoke_json_agent(
             prompt_name,
-            "======= 用户完整要求 =======\n" + user_instruction
-            + "\n\n======= 本轮要完善的真实节点 ID =======\n"
-            + json.dumps(node_ids, ensure_ascii=False)
-            + "\n\n======= 当前画布全部节点 =======\n"
+            "======= 当前画布全部节点 =======\n"
             + json.dumps(canvas_context, ensure_ascii=False)
             + "\n\n======= 当前画布全部连线 =======\n"
-            + json.dumps(canvas_edges, ensure_ascii=False),
+            + json.dumps(canvas_edges, ensure_ascii=False)
+            + "\n\n======= 本轮要完善的真实节点 ID =======\n"
+            + json.dumps(node_ids, ensure_ascii=False)
+            + "\n\n======= 用户完整要求 =======\n" + user_instruction,
             system_prompt=system_prompt,
         )
         rows = payload.get("nodes")

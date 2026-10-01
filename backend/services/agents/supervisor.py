@@ -2,6 +2,7 @@
 import json
 import logging
 import uuid
+import asyncio
 from contextvars import ContextVar, Token
 from pathlib import Path
 from typing import Callable, Optional, Dict, Any
@@ -12,6 +13,17 @@ from langgraph.prebuilt import ToolNode
 from langsmith import traceable
 
 from services.agents.llm import get_llm, bind_tools_to_llm, should_continue
+from langgraph.errors import GraphRecursionError
+
+from services.agents.supervisor_turn import (
+    MAX_SUPERVISOR_TURN_RETRIES,
+    SUPERVISOR_TOOL_LIMIT_INSTRUCTION,
+    SUPERVISOR_TURN_RETRY_INSTRUCTION,
+    count_current_run_work_tool_calls,
+    count_supervisor_work_tool_calls,
+    get_supervisor_iteration_limits,
+    prepare_supervisor_ai_message,
+)
 from services.llm_stream import chunk_to_ai_message, emit_llm_stream_deltas
 from services.message_content_utils import extract_text_content, extract_tool_calls
 from services.tool_result_utils import lookup_tool_results_after, tool_message_success
@@ -42,6 +54,54 @@ def _collect_messages_from_graph_event(
     if node_name in ("agent", "tools"):
         return [*all_messages, *msgs]
     return all_messages
+
+
+async def wrap_up_supervisor_after_tool_limit(
+    messages: list,
+    *,
+    llm,
+    emit: Optional[Callable] = None,
+) -> AIMessage:
+    """工具轮次或图递归触顶后，只允许 respond_to_user 给出用户可见回复。"""
+    from services.agents.tools.respond_to_user_tool import respond_to_user
+
+    bound = bind_tools_to_llm(llm, [respond_to_user])
+    working = list(messages) + [HumanMessage(content=SUPERVISOR_TOOL_LIMIT_INSTRUCTION)]
+    turn_retry = 0
+    while True:
+        if emit:
+            await emit("stage_start", {"stage": "thinking", "label": "本轮工具次数已用尽，正在汇总回复"})
+        aggregated = None
+        async for chunk in bound.astream(working):
+            aggregated = chunk if aggregated is None else aggregated + chunk
+            if emit:
+                await emit_llm_stream_deltas(emit, "supervisor_stream", chunk)
+        if aggregated is None:
+            raise RuntimeError("LLM 未返回任何响应")
+        response = chunk_to_ai_message(aggregated)
+        if not response.tool_calls:
+            extracted = extract_tool_calls(response)
+            if extracted:
+                response = AIMessage(
+                    content=response.content,
+                    tool_calls=[
+                        {
+                            "name": tc["name"],
+                            "args": tc.get("args") or {},
+                            "id": tc.get("id") or f"call_auto_{uuid.uuid4().hex[:12]}",
+                        }
+                        for tc in extracted
+                    ],
+                    additional_kwargs=getattr(response, "additional_kwargs", None) or {},
+                )
+        action, response = prepare_supervisor_ai_message(response)
+        if action == "end":
+            return response
+        if turn_retry >= MAX_SUPERVISOR_TURN_RETRIES:
+            raise RuntimeError("Agent stopped repeatedly without acting")
+        turn_retry += 1
+        working.append(response)
+        working.append(HumanMessage(content=SUPERVISOR_TOOL_LIMIT_INSTRUCTION))
 
 
 def _tool_call_diagnostic_payload(message) -> dict:
@@ -222,27 +282,78 @@ class SupervisorAgent:
     def __init__(self, emit: Optional[Callable] = None):
         self._default_emit = emit
 
-    def _build_system_prompt(self, context_node_ids: list | None = None, chapter_review_intensity: str = "low") -> str:
-        """构建系统提示"""
+    def _build_system_prompt(self) -> str:
+        """构建稳定的头部 system A（会话内不因轮次参数改写）。"""
         template_path = PROMPT_DIR / "supervisor_system.txt"
         template = template_path.read_text(encoding="utf-8")
+        return template.replace("{context_section}", "")
 
-        # 用户指定的对话上下文节点：提示 agent 用 read_node_content 读取后参考
-        context_section = ""
+    def _build_in_history_system_prompt(
+        self,
+        context_node_ids: list | None = None,
+        chapter_review_intensity: str = "medium",
+    ) -> str | None:
+        """轮次差异：追加在历史之后，避免改写头部 system 导致 prefix cache 失效。"""
+        parts: list[str] = []
         if context_node_ids:
             ids_list = "\n".join(f"- {nid}" for nid in context_node_ids)
-            context_section = (
+            parts.append(
                 "## 用户指定的对话上下文\n"
                 "用户已把以下节点标记为本对话的重点上下文，请优先用 read_node_content 读取它们的内容，作为本次对话的核心参考：\n"
-                f"{ids_list}\n\n"
+                f"{ids_list}"
             )
 
         review_instructions = {
-            "low": "本次章节评审强度为低：执行场景规划、正文生成、字数质量门、摘要和提交。",
-            "medium": "本次章节评审强度为中：连续性与对白各评审一次。汇总两项反馈；若有未通过项，完成一次合并修订后生成摘要并提交。",
-            "high": "本次章节评审强度为高：连续性与对白按写章 Skill 执行评审、修订和复检，次数随质量结果确定。",
+            "low": (
+                "本次章节评审强度为低：不调用任何评审工具，"
+                "完成创作、摘要和提交。本条覆盖系统提示中的默认中档。"
+            ),
+            "high": (
+                "本次章节评审强度为高：评审次数不限，各评审 Agent 会以严苛的读者视角给出建议。"
+                "由你判断建议是否值得采纳；值得采纳时修订并对最新草稿复检，"
+                "直到评审建议无需采纳，或评审 Agent 明确认为文本已经优秀。"
+                "本条覆盖系统提示中的默认中档。"
+            ),
         }
-        return template.replace("{context_section}", context_section) + "\n\n" + review_instructions[chapter_review_intensity]
+        if chapter_review_intensity in review_instructions:
+            parts.append(review_instructions[chapter_review_intensity])
+
+        if not parts:
+            return None
+        return "\n\n".join(parts)
+
+    def _assemble_initial_messages(
+        self,
+        history: list,
+        current_turn: list,
+        context_node_ids: list | None = None,
+        chapter_review_intensity: str = "medium",
+        session_id: str | None = None,
+        before_message_id: str | None = None,
+    ) -> list:
+        base_prompt = self._build_system_prompt()
+        messages = [SystemMessage(content=base_prompt), *history]
+        in_history = self._build_in_history_system_prompt(
+            context_node_ids=context_node_ids,
+            chapter_review_intensity=chapter_review_intensity,
+        )
+        effective_prompt = f"{base_prompt}\n\n{in_history}" if in_history else base_prompt
+        previous_prompt = next((
+            message.content for message in reversed(history)
+            if isinstance(message, SystemMessage)
+            and message.additional_kwargs.get("type") == "system_prompt_update"
+        ), base_prompt)
+        if effective_prompt != previous_prompt:
+            meta = {"type": "system_prompt_update"}
+            if session_id:
+                from services.session_store import session_store
+                session_store.add_message(
+                    session_id, role="system", content=effective_prompt,
+                    meta=meta, before_message_id=before_message_id,
+                )
+            messages.append(SystemMessage(content=effective_prompt, additional_kwargs=meta))
+        messages.extend(current_turn)
+        return messages
 
     def _get_tools(self):
         """单 Agent：直接挂全部操作工具，不再 dispatch 到子 agent。"""
@@ -256,8 +367,9 @@ class SupervisorAgent:
         from services.agents.tools.humanizer_tools import humanizer_tools
         from services.agents.tools.specialist_agent_tools import specialist_agent_tools
         from services.agents.tools.workflow_agent_tools import workflow_agent_tools
+        from services.agents.tools.respond_to_user_tool import respond_to_user
 
-        return query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + context_tools + research_tools + humanizer_tools + specialist_agent_tools + workflow_agent_tools
+        return [respond_to_user] + query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + context_tools + research_tools + humanizer_tools + specialist_agent_tools + workflow_agent_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""
@@ -323,9 +435,17 @@ class SupervisorAgent:
 
         return history, current_turn
 
-    def _build_graph(self, model_pref: dict | None = None, session_id: str | None = None, work_id: str | None = None, emit: Optional[Callable] = None):
+    def _build_graph(
+        self,
+        model_pref: dict | None = None,
+        session_id: str | None = None,
+        work_id: str | None = None,
+        emit: Optional[Callable] = None,
+        chapter_review_intensity: str = "medium",
+    ):
         """构建LangGraph"""
         emit = emit or self._default_emit
+        tool_call_limit, _ = get_supervisor_iteration_limits(chapter_review_intensity)
         tools = self._get_tools()
         tool_node = ToolNode(tools, handle_tool_errors=_structured_tool_error)
 
@@ -333,22 +453,46 @@ class SupervisorAgent:
         fallback = model_pref.get("fallback") if model_pref else None
         llm = get_llm(temperature=0.5, primary=primary, fallback=fallback)
         llm_with_tools = bind_tools_to_llm(llm, tools)
+        from services.agents.tools.respond_to_user_tool import respond_to_user
+        llm_end_only = bind_tools_to_llm(llm, [respond_to_user])
+        run_start_work_tool_calls: int | None = None
 
         async def agent_node(state: SupervisorState):
             """Agent 节点：流式推送 reasoning + content，并返回完整 AIMessage。"""
+            nonlocal run_start_work_tool_calls
             messages = list(state["messages"])
             response = None
+            parse_attempt = 0
+            turn_retry = 0
+            total_work_tool_calls = count_supervisor_work_tool_calls(messages)
+            if run_start_work_tool_calls is None:
+                run_start_work_tool_calls = total_work_tool_calls
+            current_run_work_tool_calls = count_current_run_work_tool_calls(
+                messages,
+                run_start_work_tool_calls,
+            )
+            hit_limit = current_run_work_tool_calls >= tool_call_limit
+            active_llm = llm_end_only if hit_limit else llm_with_tools
+            if hit_limit:
+                messages.append(HumanMessage(content=SUPERVISOR_TOOL_LIMIT_INSTRUCTION))
 
-            for parse_attempt in range(MAX_TOOL_CALL_PARSE_RETRIES + 1):
+            while True:
                 if emit:
-                    label = "AI 思考中" if parse_attempt == 0 else "修复工具参数"
+                    if parse_attempt > 0:
+                        label = "修复工具参数"
+                    elif turn_retry > 0:
+                        label = "继续执行"
+                    else:
+                        label = "AI 思考中"
                     await emit("stage_start", {"stage": "thinking", "label": label})
 
                 aggregated = None
-                async for chunk in llm_with_tools.astream(messages):
-                    aggregated = chunk if aggregated is None else aggregated + chunk
-                    if emit:
-                        await emit_llm_stream_deltas(emit, "supervisor_stream", chunk)
+                from services.agents.sampling_override import supervisor_sampling_scope
+                with supervisor_sampling_scope(active_llm):
+                    async for chunk in active_llm.astream(messages):
+                        aggregated = chunk if aggregated is None else aggregated + chunk
+                        if emit:
+                            await emit_llm_stream_deltas(emit, "supervisor_stream", chunk)
 
                 if aggregated is None:
                     raise RuntimeError("LLM 未返回任何响应")
@@ -397,10 +541,27 @@ class SupervisorAgent:
                         diagnostic,
                     )
                     if parse_attempt < MAX_TOOL_CALL_PARSE_RETRIES:
+                        parse_attempt += 1
                         feedback = _build_tool_call_parse_feedback(aggregated)
                         messages.append(HumanMessage(content=feedback))
                         continue
 
+                action, response = prepare_supervisor_ai_message(response)
+                logger.info(
+                    "supervisor turn action=%s response.text=%s tool_calls=%s finish_reason=%s retry_count=%s",
+                    action,
+                    extract_text_content(response.content),
+                    [tc.get("name") for tc in (response.tool_calls or [])],
+                    diagnostic.get("finish_reason"),
+                    turn_retry,
+                )
+                if action == "retry":
+                    if turn_retry >= MAX_SUPERVISOR_TURN_RETRIES:
+                        raise RuntimeError("Agent stopped repeatedly without acting")
+                    turn_retry += 1
+                    messages.append(response)
+                    messages.append(HumanMessage(content=SUPERVISOR_TURN_RETRY_INSTRUCTION))
+                    continue
                 break
 
             if response is None:
@@ -421,9 +582,18 @@ class SupervisorAgent:
 
             return {"messages": [response]}
 
+        async def atomic_tools_node(state: SupervisorState):
+            from services.tool_execution_unit import run_atomic_tool_calls
+            return await run_atomic_tool_calls(
+                tool_node=tool_node,
+                state=state,
+                work_id=work_id,
+                session_id=session_id,
+            )
+
         graph = StateGraph(SupervisorState)
         graph.add_node("agent", agent_node)
-        graph.add_node("tools", tool_node)
+        graph.add_node("tools", atomic_tools_node)
 
         graph.set_entry_point("agent")
         graph.add_conditional_edges(
@@ -446,8 +616,10 @@ class SupervisorAgent:
     async def run(self, user_message: str, context: Dict[str, Any] = None, emit: Optional[Callable] = None) -> dict:
         """运行Supervisor Agent"""
         context_token = None
+        run_emit = emit or self._default_emit
+        session_id = (context or {}).get("session_id")
+        work_id = (context or {}).get("work_id")
         try:
-            run_emit = emit or self._default_emit
             run_context = dict(context or {})
 
             work_id = run_context.get("work_id")
@@ -460,16 +632,16 @@ class SupervisorAgent:
             run_context["model_pref"] = model_pref
             context_token = set_context(run_context)
 
+            chapter_review_intensity = run_context.get("chapter_review_intensity", "medium")
+            _, graph_recursion_limit = get_supervisor_iteration_limits(
+                chapter_review_intensity
+            )
             graph = self._build_graph(
                 model_pref=model_pref,
                 session_id=session_id,
                 work_id=work_id,
                 emit=run_emit,
-            )
-
-            system_prompt = self._build_system_prompt(
-                context_node_ids=context_node_ids,
-                chapter_review_intensity=run_context.get("chapter_review_intensity", "low"),
+                chapter_review_intensity=chapter_review_intensity,
             )
 
             # 注入历史对话（多轮），让 agent 看到上文，理解"需要/好/不用了"等省略回答
@@ -480,48 +652,70 @@ class SupervisorAgent:
                 current_turn = [HumanMessage(content=user_message)]
 
             initial_state = {
-                "messages": [
-                    SystemMessage(content=system_prompt),
-                    *chat_history,
-                    *current_turn,
-                ],
+                "messages": self._assemble_initial_messages(
+                    chat_history,
+                    current_turn,
+                    context_node_ids=context_node_ids,
+                    chapter_review_intensity=chapter_review_intensity,
+                    session_id=session_id,
+                    before_message_id=current_turn_msgs[0]["id"] if current_turn_msgs else None,
+                ),
             }
 
             # 与 main 分支一致：graph.astream 执行，流式输出在 agent_node 内完成
-            graph_config = {"recursion_limit": 100}
+            graph_config = {"recursion_limit": graph_recursion_limit}
             run_messages: list = []
 
-            async for event in graph.astream(initial_state, config=graph_config):
-                for node_name, node_output in event.items():
-                    run_messages = _collect_messages_from_graph_event(
-                        run_messages, node_name, node_output
-                    )
-                    if node_name == "tools" and run_emit:
-                        for msg in node_output.get("messages", []):
-                            if isinstance(msg, ToolMessage):
-                                content = msg.content if hasattr(msg, "content") else str(msg)
-                                await run_emit(
-                                    "tool_executed",
-                                    {
-                                        "tool": getattr(msg, "name", "unknown"),
-                                        "tool_call_id": getattr(msg, "tool_call_id", ""),
-                                        "success": tool_message_success(str(content)),
-                                    },
-                                )
+            try:
+                async for event in graph.astream(initial_state, config=graph_config):
+                    for node_name, node_output in event.items():
+                        run_messages = _collect_messages_from_graph_event(
+                            run_messages, node_name, node_output
+                        )
+                        if node_name == "tools" and run_emit:
+                            for msg in node_output.get("messages", []):
+                                if isinstance(msg, ToolMessage):
+                                    content = msg.content if hasattr(msg, "content") else str(msg)
+                                    await run_emit(
+                                        "tool_executed",
+                                        {
+                                            "tool": getattr(msg, "name", "unknown"),
+                                            "tool_call_id": getattr(msg, "tool_call_id", ""),
+                                            "success": tool_message_success(str(content)),
+                                        },
+                                    )
 
-                    if session_id and node_name == "agent":
-                        for msg in node_output.get("messages", []):
-                            if isinstance(msg, AIMessage):
-                                self._save_intermediate_messages(session_id, [msg], work_id)
+                        if session_id and node_name == "agent":
+                            for msg in node_output.get("messages", []):
+                                if isinstance(msg, AIMessage):
+                                    self._save_intermediate_messages(session_id, [msg], work_id)
 
-                    if session_id and node_name == "tools":
-                        tool_msgs = [
-                            m for m in node_output.get("messages", [])
-                            if isinstance(m, ToolMessage)
-                        ]
-                        if tool_msgs:
-                            self._sync_tool_call_results(session_id, tool_msgs)
-                            self._save_tool_results(session_id, tool_msgs, work_id)
+                        if session_id and node_name == "tools":
+                            tool_msgs = [
+                                m for m in node_output.get("messages", [])
+                                if isinstance(m, ToolMessage)
+                            ]
+                            if tool_msgs:
+                                self._sync_tool_call_results(session_id, tool_msgs)
+                                self._save_tool_results(session_id, tool_msgs, work_id)
+            except GraphRecursionError:
+                logger.warning(
+                    "supervisor tool/graph limit reached session_id=%s work_id=%s rounds=%s",
+                    session_id,
+                    work_id,
+                    count_supervisor_work_tool_calls(run_messages),
+                )
+                wrap_source = list(initial_state["messages"]) + list(run_messages)
+                wrap_primary = model_pref.get("primary") if model_pref else None
+                wrap_fallback = model_pref.get("fallback") if model_pref else None
+                wrap_ai = await wrap_up_supervisor_after_tool_limit(
+                    wrap_source,
+                    llm=get_llm(temperature=0.5, primary=wrap_primary, fallback=wrap_fallback),
+                    emit=run_emit,
+                )
+                run_messages = [*wrap_source, wrap_ai]
+                if session_id:
+                    self._save_intermediate_messages(session_id, [wrap_ai], work_id)
 
             last_message = run_messages[-1] if run_messages else None
 
@@ -550,6 +744,21 @@ class SupervisorAgent:
 
             return result
 
+        except asyncio.CancelledError:
+            from services.session_store import session_store as _session_store
+            from services.tool_execution_unit import rollback_active_tool_unit
+            had_unit = get_context().get("active_tool_unit") is not None
+            rollback_active_tool_unit()
+            if session_id:
+                _session_store.discard_unpaired_tool_calls(session_id)
+            if had_unit:
+                await run_emit("nodes_updated", {"action": "tool_interrupted"})
+            logger.info(
+                "supervisor run cancelled session_id=%s work_id=%s",
+                session_id,
+                work_id,
+            )
+            raise
         except Exception as e:
             logger.error(f"SupervisorAgent error: {e}")
             return {
@@ -566,6 +775,11 @@ class SupervisorAgent:
 
         for idx, msg in enumerate(messages):
             if isinstance(msg, AIMessage):
+                # 模型历史独立保存完整消息，展示行只用于 UI，避免跨轮拆分或合并 assistant。
+                session_store.add_message(
+                    session_id, role="model_assistant",
+                    content=msg.model_dump_json(), work_id=work_id,
+                )
                 text = extract_text_content(msg.content)
                 tool_calls = extract_tool_calls(msg)
                 if not tool_calls and getattr(msg, "tool_calls", None):
@@ -583,7 +797,7 @@ class SupervisorAgent:
                 tool_results = lookup_tool_results_after(messages, idx + 1)
 
                 if text or rc:
-                    save_meta = {"phase": "final" if is_final else "intermediate"}
+                    save_meta = {"phase": "final" if is_final else "intermediate", "presentation_only": True}
                     if rc:
                         save_meta["reasoning_content"] = rc
                     usage = getattr(msg, "usage_metadata", None)
@@ -607,6 +821,7 @@ class SupervisorAgent:
                         else ""
                     )
                     tc_meta = {
+                        "presentation_only": True,
                         "args": tc.get("args", {}),
                         "tool_call_id": call_id,
                         "success": tool_message_success(result_content) if result_msg else True,

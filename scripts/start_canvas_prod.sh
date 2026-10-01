@@ -17,11 +17,22 @@ import json
 cfg = json.loads(open('$cfg', encoding='utf-8').read())
 print(cfg['app']['prod_port'])
 print(cfg['frontend']['prod_port'])
+print(cfg['app']['mobile']['apk_filename'])
+print(cfg['app']['mobile']['apk_publish_path'])
 "
 }
 mapfile -t _ports < <(read_port_config)
 PROD_PORT="${_ports[0]}"
 FRONTEND_PROD_PORT="${_ports[1]}"
+APK_FILENAME="${_ports[2]}"
+APK_PUBLISH_PATH="${_ports[3]}"
+APK_ARTIFACT="$ROOT_DIR/artifacts/$APK_FILENAME"
+
+if [ ! -f "$APK_ARTIFACT" ]; then
+  echo "缺少 APK 产物: $APK_ARTIFACT"
+  echo "请先执行: bash scripts/build_android_apk.sh"
+  exit 1
+fi
 
 # --- 工具函数 ---
 kill_tree() {
@@ -72,9 +83,12 @@ fi
 npm run build
 rm -rf "$NGINX_HTML/novel"/*
 cp -r dist/* "$NGINX_HTML/novel/"
+mkdir -p "$(dirname "$APK_PUBLISH_PATH")"
+install -m 0644 "$APK_ARTIFACT" "$APK_PUBLISH_PATH"
 find "$NGINX_HTML/novel" -type d -exec chmod 755 {} \;
 find "$NGINX_HTML/novel" -type f -exec chmod 644 {} \;
 echo "前端构建完成"
+echo "APK 已发布: $APK_PUBLISH_PATH"
 
 # --- 启动后端 ---
 echo "启动 Canvas 后端 (端口: $PROD_PORT)..."

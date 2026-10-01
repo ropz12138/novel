@@ -1,6 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
-import { AuthGuard } from "./components/AuthGuard";
+import { AdminGuard, AuthGuard } from "./components/AuthGuard";
 
 const CanvasPage = lazy(() => import("./pages/CanvasPage").then((module) => ({
   default: module.CanvasPage,
@@ -13,6 +13,9 @@ const RegisterPage = lazy(() => import("./pages/RegisterPage").then((module) => 
 })));
 const ResearchPage = lazy(() => import("./pages/ResearchPage").then((module) => ({
   default: module.ResearchPage,
+})));
+const TokenUsagePage = lazy(() => import("./pages/TokenUsagePage").then((module) => ({
+  default: module.TokenUsagePage,
 })));
 
 function PageFallback() {
@@ -42,6 +45,14 @@ export default function App() {
         element={
           <AuthGuard>
             <ResearchPage />
+          </AuthGuard>
+        }
+      />
+      <Route
+        path="/token-usage"
+        element={
+          <AuthGuard>
+            <AdminGuard><TokenUsagePage /></AdminGuard>
           </AuthGuard>
         }
       />

@@ -149,7 +149,7 @@ def test_start_rejects_work_owned_by_another_user(mock_auth):
     assert response.status_code == 404
     assert session_store.list_sessions(user_id=mock_auth.id, work_id=foreign_work_id) == []
 
-def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
+def test_start_skips_actions_message_for_new_session(mock_auth, monkeypatch):
     db = database.SessionLocal()
     work_id = None
     try:
@@ -167,6 +167,7 @@ def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
+        await emit("supervisor_done", {"message": "完成"})
         return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
@@ -175,8 +176,7 @@ def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
 
     resp = client.post("/api/supervisor/start", json={"message": "你知道我做了什么吗", "work_id": work_id})
     assert resp.status_code == 200
-    assert "event: user_actions_message_stored" in resp.text
-    assert '我删除了「第6章」节点。' in resp.text
+    assert "event: user_actions_message_stored" not in resp.text
 
     # 取 session 的消息，验证顺序
     db2 = database.SessionLocal()
@@ -184,15 +184,12 @@ def test_start_stores_actions_message_before_user_text(mock_auth, monkeypatch):
         sid = db2.query(User).filter_by(id=mock_auth.id).first()
         from models.session import SupervisorSession, SupervisorMessage
         sess = db2.query(SupervisorSession).order_by(SupervisorSession.created_at.desc()).first()
-        msgs = db2.query(SupervisorMessage).filter(SupervisorMessage.session_id == sess.id).order_by(SupervisorMessage.sort_order.asc()).all()
-        # 末尾应是：操作消息(在前) + 用户文字(在后)
-        last_two = msgs[-2:]
-        assert last_two[0].role == "user"
-        assert (last_two[0].meta or {}).get("type") == "user_canvas_actions"
-        assert '我删除了「第6章」节点。' in last_two[0].content
-        assert "碎片" not in last_two[0].content
-        assert last_two[1].role == "user"
-        assert last_two[1].content == "你知道我做了什么吗"
+        msgs = db2.query(SupervisorMessage).filter(
+            SupervisorMessage.session_id == sess.id,
+            SupervisorMessage.role == "user",
+        ).order_by(SupervisorMessage.sort_order.asc()).all()
+        assert len(msgs) == 1
+        assert msgs[0].content == "你知道我做了什么吗"
         # 标题应是用户文字，不是操作摘要
         assert sess.title == "你知道我做了什么吗"
     finally:
@@ -212,6 +209,7 @@ def test_start_no_actions_stores_only_user_text(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
+        await emit("supervisor_done", {"message": "完成"})
         return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)
@@ -235,7 +233,7 @@ def test_start_no_actions_stores_only_user_text(mock_auth, monkeypatch):
         db2.close()
 
 
-def test_resume_streams_actions_message_before_user_text(mock_auth, monkeypatch):
+def test_resume_does_not_reinsert_removed_action_capsules(mock_auth, monkeypatch):
     db = database.SessionLocal()
     try:
         work = CanvasWork(user_id=mock_auth.id, title="已有作品")
@@ -266,6 +264,7 @@ def test_resume_streams_actions_message_before_user_text(mock_auth, monkeypatch)
         db.close()
 
     async def fake_run(msg, context, emit=None):
+        await emit("supervisor_done", {"message": "完成"})
         return {"success": True}
 
     from routers import supervisor as sup_router
@@ -283,10 +282,8 @@ def test_resume_streams_actions_message_before_user_text(mock_auth, monkeypatch)
     )
 
     assert resp.status_code == 200
-    assert resp.text.index("event: user_actions_message_stored") < resp.text.index(
-        "event: user_message_stored"
-    )
-    assert '我修改了「第7章」节点。' in resp.text
+    assert "event: user_actions_message_stored" not in resp.text
+    assert '我修改了「第7章」节点。' not in resp.text
     assert "修改后的正文不会进入消息" not in resp.text
 
 
@@ -306,6 +303,7 @@ def test_start_advances_watermark_after_success(mock_auth, monkeypatch):
         db.close()
 
     async def fake_run(msg, context, emit=None):
+        await emit("supervisor_done", {"message": "完成"})
         return {"success": True}
     from routers import supervisor as sup_router
     monkeypatch.setattr(sup_router.supervisor_agent, "run", fake_run)

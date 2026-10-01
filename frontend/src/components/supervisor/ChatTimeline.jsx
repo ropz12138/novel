@@ -1,6 +1,7 @@
-import { useRef, Fragment, useState, useEffect } from "react";
+import { useRef, Fragment, useState, useEffect, useLayoutEffect } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { remarkHtmlBreaks } from "../../lib/markdown";
 import { Check, Loader2, X, Bot, PenLine, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { Button } from "../ui/button";
 import { ChapterContentDiffViewer } from "./ChapterContentDiffViewer";
@@ -189,6 +190,7 @@ function ExecStepRow({ item, onToggleStep }) {
             )}
             {showStepStream && (
               <div
+                className="max-h-48 overflow-y-auto"
                 ref={(el) => {
                   if (el && item.status === "running") {
                     el.scrollTop = el.scrollHeight;
@@ -208,7 +210,19 @@ function ExecStepRow({ item, onToggleStep }) {
   );
 }
 
-function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running }) {
+function ReferenceLink({ href, children, onOpenDiffNode }) {
+  if (href?.startsWith("/node-reference?")) {
+    const params = new URLSearchParams(href.split("?")[1]);
+    const nodeId = params.get("node_id");
+    const quote = params.get("quote");
+    return onOpenDiffNode && nodeId && quote
+      ? <button type="button" className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-600 hover:bg-blue-100" title={quote} onClick={() => onOpenDiffNode(nodeId, quote)}>{children}</button>
+      : <span>{children}</span>;
+  }
+  return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
+}
+
+function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running, onOpenDiffNode }) {
   const reasoningAutoCollapsed = Boolean(assistantDraft?.trim());
   const { collapsed: reasoningCollapsed, toggle: toggleReasoning } = useReasoningCollapse(reasoningAutoCollapsed);
 
@@ -233,7 +247,7 @@ function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running 
           />
         )}
         {assistantDraft && (
-          <Markdown remarkPlugins={[remarkGfm]}>{assistantDraft}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={{ a: (props) => <ReferenceLink {...props} onOpenDiffNode={onOpenDiffNode} /> }}>{assistantDraft}</Markdown>
         )}
         {running && assistantDraft && (
           <span className="inline-block h-2.5 w-px animate-pulse bg-slate-400 align-text-bottom ml-0.5" />
@@ -243,7 +257,7 @@ function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running 
   );
 }
 
-function AssistantTextMessage({ msg }) {
+function AssistantTextMessage({ msg, onOpenDiffNode }) {
   const reasoning = msg.reasoningContent || msg.meta?.reasoning_content || "";
   const { collapsed: reasoningCollapsed, toggle: toggleReasoning } = useReasoningCollapse(true);
 
@@ -262,7 +276,9 @@ function AssistantTextMessage({ msg }) {
         className={msg.content ? "mb-2 border-b border-slate-200/70 pb-2" : ""}
       />
       {msg.content && (
-        <Markdown remarkPlugins={[remarkGfm]} components={mdComponents}>
+        <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={{ ...mdComponents,
+          a: (props) => <ReferenceLink {...props} onOpenDiffNode={onOpenDiffNode} />,
+        }}>
           {msg.content}
         </Markdown>
       )}
@@ -301,6 +317,16 @@ function UserMessageBubble({ msg, running, onEditMessage }) {
   }, [editing]);
 
   const cancelEdit = () => setEditing(false);
+  const bodyRef = useRef(null);
+  const [expanded, setExpanded] = useState(false);
+  const [overflows, setOverflows] = useState(false);
+
+  useLayoutEffect(() => {
+    if (editing) return;
+    const el = bodyRef.current;
+    if (!el || expanded) return;
+    setOverflows(el.scrollHeight > el.clientHeight + 1);
+  }, [msg.content, editing, expanded]);
 
   if (editing) {
     return (
@@ -354,9 +380,23 @@ function UserMessageBubble({ msg, running, onEditMessage }) {
 
   return (
     <div className="group relative rounded-xl bg-blue-600 px-4 py-2.5 text-sm leading-relaxed text-white">
-      <div className="whitespace-pre-wrap break-words pr-6">
+      <div
+        ref={bodyRef}
+        data-testid="user-message-body"
+        className={`whitespace-pre-wrap break-words pr-6 ${expanded ? "" : "line-clamp-5"}`}
+      >
         {renderContextualContent(msg.content || "")}
       </div>
+      {overflows && (
+        <button
+          type="button"
+          aria-label={expanded ? "收起" : "展开"}
+          onClick={() => setExpanded((open) => !open)}
+          className="mt-1 text-xs font-medium text-blue-100 underline-offset-2 hover:text-white hover:underline"
+        >
+          {expanded ? "收起" : "展开"}
+        </button>
+      )}
       {canEdit && (
         <button
           type="button"
@@ -383,6 +423,9 @@ export function ChatTimeline({
   running,
   onToggleStep,
   onEditMessage,
+  onExpandDiff,
+  onCollapseDiff,
+  onOpenDiffNode,
 }) {
   const bottomRef = useRef(null);
   const visibleTimeline = (timeline || []).filter((item) => !shouldHideAssistantEllipsisBubble(item));
@@ -401,6 +444,13 @@ export function ChatTimeline({
 
         // ── Message ──
         const msg = item;
+        const diffNodeId = msg.type === "chapter_content_diff_card"
+          ? (msg.chapterContentDiffCard?.node_id || msg.chapterContentDiffCard?.chapter_node_id)
+          : null;
+        const canOpenDiffNode = Boolean(diffNodeId && onOpenDiffNode);
+        const openDiffNode = () => {
+          if (canOpenDiffNode) onOpenDiffNode(diffNodeId);
+        };
         return (
           <div key={`m-${item.id}`} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             {msg.role !== "user" && (
@@ -417,15 +467,27 @@ export function ChatTimeline({
                 <UserMessageBubble msg={msg} running={running} onEditMessage={onEditMessage} />
               ) : (
                 <div
+                  role={canOpenDiffNode ? "button" : undefined}
+                  tabIndex={canOpenDiffNode ? 0 : undefined}
+                  aria-label={canOpenDiffNode
+                    ? `打开节点详情：${msg.chapterContentDiffCard?.title || "未命名节点"}`
+                    : undefined}
+                  onClick={canOpenDiffNode ? openDiffNode : undefined}
+                  onKeyDown={canOpenDiffNode ? (event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      openDiffNode();
+                    }
+                  } : undefined}
                   className={`relative rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
                     msg.type === "error"
                       ? "bg-red-50 text-red-700 border border-red-200"
                       : msg.type === "agent_phase"
                         ? "bg-slate-50 text-slate-800 border border-slate-200"
                         : "bg-slate-100 text-slate-800"
-                  }`}
+                  } ${canOpenDiffNode ? "cursor-pointer hover:ring-2 hover:ring-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-300" : ""}`}
                 >
-                  {renderMessageContent(msg)}
+                  {renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNode })}
                 </div>
               )}
             </div>
@@ -445,6 +507,7 @@ export function ChatTimeline({
         <StreamingDraftBlock
           assistantReasoningDraft={assistantReasoningDraft}
           assistantDraft={visibleDraft}
+          onOpenDiffNode={onOpenDiffNode}
           running={running}
         />
       )}
@@ -457,19 +520,80 @@ export function ChatTimeline({
 /**
  * Render the inner content of a message bubble based on its type.
  */
-function renderMessageContent(msg) {
+function DiffSummary({ card }) {
+  const changed = card.summary?.paragraphs_changed;
+  return (
+    <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500">
+      {card.title ? <span className="font-medium text-slate-700">{card.title}</span> : null}
+      {card.node_type ? <span>{card.node_type}</span> : null}
+      {changed != null ? <span>{changed} 处修改</span> : null}
+      {typeof card.word_count === "number" && card.node_type === "chapter" ? (
+        <span>共 {card.word_count} 字</span>
+      ) : null}
+      {typeof card.text_count === "number" && card.node_type !== "chapter" ? (
+        <span>共 {card.text_count} 字符</span>
+      ) : null}
+    </div>
+  );
+}
+
+function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff }) {
+  const card = msg.chapterContentDiffCard || {};
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    setOpen(Boolean(msg.diffDetailOpen));
+  }, [msg.diffDetailOpen]);
+
+  const toggle = (event) => {
+    event.stopPropagation();
+    if (open) {
+      setOpen(false);
+      onCollapseDiff?.(msg.dbMessageId);
+      return;
+    }
+    if (Array.isArray(card.hunks)) {
+      setOpen(true);
+      return;
+    }
+    onExpandDiff?.(msg.dbMessageId);
+  };
+
+  return (
+    <div className="space-y-2">
+      {!open && <DiffSummary card={card} />}
+      <button
+        type="button"
+        onClick={toggle}
+        onKeyDown={(event) => event.stopPropagation()}
+        className="text-xs text-indigo-600"
+      >
+        {open ? "收起" : "展开"}
+      </button>
+      {open && Array.isArray(card.hunks) && (
+        <ChapterContentDiffViewer
+          title={card.title ?? ""}
+          nodeType={card.node_type}
+          hunks={card.hunks}
+          summary={card.summary ?? {}}
+          textCount={card.text_count}
+          textCountDelta={card.text_count_delta}
+          wordCount={card.word_count}
+          wordCountDelta={card.word_count_delta}
+        />
+      )}
+    </div>
+  );
+}
+
+function renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNode }) {
   switch (msg.type) {
     case "chapter_content_diff_card":
       return (
-        <ChapterContentDiffViewer
-          title={msg.chapterContentDiffCard?.title ?? ""}
-          nodeType={msg.chapterContentDiffCard?.node_type}
-          hunks={msg.chapterContentDiffCard?.hunks ?? []}
-          summary={msg.chapterContentDiffCard?.summary ?? {}}
-          textCount={msg.chapterContentDiffCard?.text_count}
-          textCountDelta={msg.chapterContentDiffCard?.text_count_delta}
-          wordCount={msg.chapterContentDiffCard?.word_count}
-          wordCountDelta={msg.chapterContentDiffCard?.word_count_delta}
+        <HistoryDiffCard
+          msg={msg}
+          onExpandDiff={onExpandDiff}
+          onCollapseDiff={onCollapseDiff}
         />
       );
 
@@ -481,6 +605,6 @@ function renderMessageContent(msg) {
       if (msg.role === "user") {
         return <p className="whitespace-pre-wrap break-words">{renderContextualContent(msg.content)}</p>;
       }
-      return <AssistantTextMessage msg={msg} />;
+      return <AssistantTextMessage msg={msg} onOpenDiffNode={onOpenDiffNode} />;
   }
 }

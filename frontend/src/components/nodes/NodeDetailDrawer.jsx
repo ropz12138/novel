@@ -1,5 +1,5 @@
-import { Children, useState, useEffect, useLayoutEffect, useMemo, useRef } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Pin, Plus, Maximize2, Minimize2, ChevronLeft, ChevronRight, Check, Undo2 } from "lucide-react";
+import { Children, cloneElement, createContext, useContext, memo, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Undo2, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   buildStackedInlineDiffBlocks,
   contentAfterBatches,
@@ -13,6 +13,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
 import { compareSiblings } from "../../lib/canvasOrder";
+import { remarkHtmlBreaks } from "../../lib/markdown";
 
 const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
 const HIGHLIGHT_TOKEN_SUFFIX = "%%";
@@ -96,20 +97,37 @@ function renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix = 
   });
 }
 
-function MarkdownRenderer({ content }) {
-  const { masked, highlights } = maskPlotHighlights(content || "");
+const SourceReferenceContext = createContext(null);
+
+const MarkdownRenderer = memo(function MarkdownRenderer({ content }) {
+  const quote = useContext(SourceReferenceContext);
+  const rootRef = useRef(null);
+  const { masked, highlights } = quote ? { masked: content || "", highlights: [] } : maskPlotHighlights(content || "");
+  const start = quote ? masked.indexOf(quote) : -1;
+  const markComponents = (components) => Object.fromEntries(Object.entries(components).map(([tag, render]) => [tag, (props) => {
+    const element = render(props);
+    const position = props.node?.position;
+    if (start < 0 || !position || !["p", "h1", "h2", "h3", "h4", "li", "blockquote", "td", "th", "code"].includes(tag)) return element;
+    if (position.start.offset >= start + quote.length || position.end.offset <= start) return element;
+    return cloneElement(element, { "data-node-reference-hit": true, style: { backgroundColor: "#fef3c7", borderRadius: "4px" } });
+  }]));
+  useEffect(() => {
+    if (!quote) return;
+    const frame = requestAnimationFrame(() => rootRef.current?.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [quote, content]);
   const renderChildren = (children, keyPrefix) => renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix);
 
   return (
-    <div className="prose prose-sm max-w-none">
+    <div ref={rootRef} className="prose prose-sm max-w-none tracking-wider">
     <Markdown
-      remarkPlugins={[remarkGfm]}
-      components={{
+      remarkPlugins={[remarkGfm, remarkHtmlBreaks]}
+      components={markComponents({
         h1: ({ children }) => <h1 className="text-2xl font-bold mt-6 mb-3 text-gray-900">{renderChildren(children, "h1")}</h1>,
         h2: ({ children }) => <h2 className="text-xl font-bold mt-5 mb-2 text-gray-900">{renderChildren(children, "h2")}</h2>,
         h3: ({ children }) => <h3 className="text-lg font-semibold mt-4 mb-2 text-gray-800">{renderChildren(children, "h3")}</h3>,
         h4: ({ children }) => <h4 className="text-base font-semibold mt-3 mb-1 text-gray-800">{renderChildren(children, "h4")}</h4>,
-        p: ({ children }) => <p className="mb-3 leading-relaxed text-gray-700">{renderChildren(children, "p")}</p>,
+        p: ({ children }) => <p className="mb-3 leading-8 text-gray-700">{renderChildren(children, "p")}</p>,
         ul: ({ children }) => <ul className="list-disc pl-5 mb-3 space-y-1">{children}</ul>,
         ol: ({ children }) => <ol className="list-decimal pl-5 mb-3 space-y-1">{children}</ol>,
         li: ({ children }) => <li className="text-gray-700">{renderChildren(children, "li")}</li>,
@@ -149,13 +167,13 @@ function MarkdownRenderer({ content }) {
             ? <AuthIllustrationImage src={src} alt={alt} />
             : <img src={src} alt={alt || ""} className="my-4 w-full rounded-lg" />
         ),
-      }}
+      })}
     >
       {masked}
     </Markdown>
     </div>
   );
-}
+});
 
 const NODE_TYPE_CONFIG = {
   outline: { icon: FileText, label: "大纲", bg: "bg-blue-100", text: "text-blue-600", badge: "text-blue-700" },
@@ -170,6 +188,23 @@ const NODE_TYPE_CONFIG = {
 const DEFAULT_NODE_TYPE_CONFIG = { icon: FileText, label: "节点", bg: "bg-slate-100", text: "text-slate-600", badge: "text-slate-700" };
 
 const detailScrollPositions = new Map();
+
+function selectionQuoteFromContainer(container) {
+  if (!container) return null;
+  const selection = window.getSelection?.();
+  if (!selection || selection.rangeCount === 0) return null;
+  const range = selection.getRangeAt(0);
+  const ancestor = range.commonAncestorContainer;
+  if (ancestor !== container && !container.contains(ancestor)) return null;
+  const selectedText = selection.toString().trim();
+  if (!selectedText) return null;
+  const rect = range.getBoundingClientRect?.() || { left: 0, top: 0, bottom: 0 };
+  return {
+    text: selectedText,
+    x: rect.left,
+    y: rect.bottom || rect.top,
+  };
+}
 
 function useRememberedDetailScroll(nodeId) {
   const scrollRef = useRef(null);
@@ -223,11 +258,11 @@ function textRangesIn(container, text) {
   return ranges;
 }
 
-function ChapterCharactersBar({ characters, onCharacterClick }) {
+function ChapterCharactersBar({ characters, onCharacterClick, stacked = false }) {
   if (!Array.isArray(characters) || characters.length === 0) return null;
 
   return (
-    <div className="flex w-full min-w-0 items-center gap-2 border-l border-gray-200 pl-4 text-left">
+    <div className={`flex w-full min-w-0 items-center gap-2 text-left ${stacked ? "" : "border-l border-gray-200 pl-4"}`}>
       <h2 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-pink-700">出场角色</h2>
       <span className="shrink-0 text-xs text-pink-700/70">{characters.length} 人</span>
       <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
@@ -251,11 +286,11 @@ function ChapterCharactersBar({ characters, onCharacterClick }) {
   );
 }
 
-function ChapterElementsBar({ elements }) {
+function ChapterElementsBar({ elements, stacked = false }) {
   if (!Array.isArray(elements) || elements.length === 0) return null;
 
   return (
-    <div className="flex w-full min-w-0 items-center gap-2 border-l border-gray-200 pl-4 text-left">
+    <div className={`flex w-full min-w-0 items-center gap-2 text-left ${stacked ? "" : "border-l border-gray-200 pl-4"}`}>
       <h2 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-amber-700">本章元素</h2>
       <span className="shrink-0 text-xs text-amber-700/70">{elements.length} 项</span>
       <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
@@ -318,6 +353,8 @@ function InlineDiffHunk({ hunk, onAccept, onReject, readOnly = false }) {
 }
 
 function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnly = false }) {
+  const quote = useContext(SourceReferenceContext);
+  if (quote) return <MarkdownRenderer content={content} />;
   const pending = pendingHunksFromBatches(batches);
   if (!pending.length) {
     return content ? <MarkdownRenderer content={content} /> : <p className="whitespace-pre-wrap">暂无内容</p>;
@@ -344,7 +381,7 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnl
   );
 }
 
-function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false }) {
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false, previousChapter, nextChapter, onChapterNavigate }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
@@ -352,6 +389,30 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
   const chapterElements = node.extra_data?.chapter_elements || [];
   const chapterCharacters = node.extra_data?.characters || [];
   const characterOccurrenceRef = useRef({ nodeId: node.id, nextIndexByName: new Map() });
+  const swipeStartRef = useRef(null);
+
+  const [metaExpanded, setMetaExpanded] = useState(false);
+  const hasChapterMeta = chapterCharacters.length > 0 || chapterElements.length > 0;
+
+  const handleTouchStart = (event) => {
+    if (!appMode) return;
+    const touch = event.touches[0];
+    swipeStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  };
+
+  const handleTouchEnd = (event) => {
+    if (!appMode) return;
+    const start = swipeStartRef.current;
+    const touch = event.changedTouches[0];
+    swipeStartRef.current = null;
+    if (!start || !touch) return;
+
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 56 || Math.abs(dy) > 40) return;
+    const targetChapter = dx < 0 ? nextChapter : previousChapter;
+    if (targetChapter) onChapterNavigate?.(targetChapter);
+  };
 
   const handleCharacterClick = (name) => {
     const scrollContainer = scrollRef.current;
@@ -384,9 +445,51 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
   return (
     <>
       <div data-testid="chapter-detail-header" className="shrink-0 border-b border-amber-200 bg-amber-50 text-left">
+        {appMode ? (
+          <div className="mx-auto flex max-w-6xl flex-col gap-1 px-6 py-2">
+            <div className="flex items-center gap-2">
+              <h1 className="min-w-0 flex-1 truncate text-sm font-bold text-gray-900">
+                {node.label}
+              </h1>
+              {hasChapterMeta && (
+                <button
+                  type="button"
+                  aria-label={metaExpanded ? "收起详情" : "展开详情"}
+                  onClick={() => setMetaExpanded((value) => !value)}
+                  className="shrink-0 rounded-md px-1.5 py-0.5 text-[10px] text-slate-500 hover:bg-amber-100"
+                >
+                  {metaExpanded ? "收起详情" : "展开详情"}
+                </button>
+              )}
+            </div>
+            <div className="flex items-center justify-start gap-2 text-gray-500">
+              <span className="text-[10px]">{wordCount} 字</span>
+              {latestEvaluation && (
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[10px] ${
+                    latestEvaluation.passed
+                      ? "bg-emerald-100 text-emerald-700"
+                      : "bg-amber-100 text-amber-700"
+                  }`}
+                >
+                  {latestEvaluation.passed ? "与画布规划同步" : "同步检查未通过"}
+                </span>
+              )}
+              {generation && (
+                <span className="text-[10px]">自动修订 {Math.max(0, evaluations.length - 1)} 次</span>
+              )}
+            </div>
+            {hasChapterMeta && metaExpanded && (
+              <div className="flex flex-col gap-1.5">
+                <ChapterCharactersBar stacked characters={chapterCharacters} onCharacterClick={handleCharacterClick} />
+                <ChapterElementsBar stacked elements={chapterElements} />
+              </div>
+            )}
+          </div>
+        ) : (
         <div className={`${isFullscreen ? "px-16" : "px-8"} mx-auto flex min-h-20 max-w-6xl items-center gap-5 overflow-hidden py-3`}>
           <div className="min-w-48 shrink-0">
-            <h1 className={`${isFullscreen ? "text-2xl" : "text-xl"} truncate font-serif font-bold text-gray-900`}>
+            <h1 className={`${isFullscreen ? "text-2xl" : "text-xl"} truncate font-bold text-gray-900`}>
               {node.label}
             </h1>
             <div className="mt-1.5 flex items-center justify-start gap-2 text-xs text-gray-500">
@@ -412,11 +515,42 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
             <ChapterElementsBar elements={chapterElements} />
           </div>
         </div>
+        )}
       </div>
 
-      <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto bg-amber-50">
-        <div className={`${isFullscreen ? "max-w-4xl px-16 py-16" : "max-w-2xl px-8 py-12"} mx-auto`}>
-          <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none font-serif`}>
+      <div className="relative flex min-h-0 flex-1">
+      {!appMode && (
+        <>
+          <button
+            type="button"
+            title="上一章"
+            disabled={!previousChapter}
+            onClick={() => previousChapter && onChapterNavigate?.(previousChapter)}
+            className="absolute left-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-amber-200 bg-white/90 text-gray-600 shadow-sm hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <ChevronLeft className="h-5 w-5" />
+          </button>
+          <button
+            type="button"
+            title="下一章"
+            disabled={!nextChapter}
+            onClick={() => nextChapter && onChapterNavigate?.(nextChapter)}
+            className="absolute right-3 top-1/2 z-10 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full border border-amber-200 bg-white/90 text-gray-600 shadow-sm hover:bg-amber-50 disabled:cursor-not-allowed disabled:opacity-30"
+          >
+            <ChevronRight className="h-5 w-5" />
+          </button>
+        </>
+      )}
+      <div
+        ref={scrollRef}
+        onMouseUp={onTextSelect}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        data-testid="node-detail-scroll"
+        className={`flex-1 touch-pan-y overflow-y-auto bg-amber-50 ${appMode ? "pb-32" : ""}`}
+      >
+        <div data-testid="chapter-body" className={`${isFullscreen ? "max-w-5xl px-6 py-10 sm:px-12 sm:py-16" : "max-w-3xl px-8 py-12"} mx-auto`}>
+          <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none`}>
             <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
               <NodeContentBody
                 content={node.content}
@@ -467,6 +601,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, onTextSelec
           )}
         </div>
       </div>
+      </div>
     </>
   );
 }
@@ -513,12 +648,30 @@ function StorylinesPanel({ storylines }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false, appMode = false, previousNode, nextNode, onNavigate }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
+  const swipeStartRef = useRef(null);
+
+  const handleTouchStart = (event) => {
+    const touch = event.touches[0];
+    swipeStartRef.current = touch ? { x: touch.clientX, y: touch.clientY } : null;
+  };
+
+  const handleTouchEnd = (event) => {
+    const start = swipeStartRef.current;
+    const touch = event.changedTouches[0];
+    swipeStartRef.current = null;
+    if (!start || !touch) return;
+    const dx = touch.clientX - start.x;
+    const dy = touch.clientY - start.y;
+    if (Math.abs(dx) < 56 || Math.abs(dy) > 40) return;
+    const target = dx < 0 ? nextNode : previousNode;
+    if (target) onNavigate?.(target);
+  };
 
   return (
-    <div ref={scrollRef} onMouseUp={onTextSelect} data-testid="node-detail-scroll" className="flex-1 overflow-y-auto">
+    <div ref={scrollRef} onMouseUp={onTextSelect} onTouchStart={appMode ? handleTouchStart : undefined} onTouchEnd={appMode ? handleTouchEnd : undefined} data-testid="node-detail-scroll" className={`flex-1 overflow-y-auto ${appMode ? "pb-32" : ""}`}>
       <div className="p-6 space-y-6">
         <div className="flex items-center gap-3">
           <div className={`p-2 rounded-lg ${config.bg}`}>
@@ -590,7 +743,14 @@ function EditView({
   isCharacter,
   storylines,
   onStorylinesChange,
+  initialContentScrollRatio = 0,
 }) {
+  const positionContentEditor = useCallback((textarea) => {
+    if (!textarea) return;
+    const maxScrollTop = Math.max(0, textarea.scrollHeight - textarea.clientHeight);
+    textarea.scrollTop = maxScrollTop * initialContentScrollRatio;
+  }, [initialContentScrollRatio]);
+
   return (
     <div className="flex-1 overflow-y-auto p-6 space-y-4">
       <div>
@@ -604,6 +764,8 @@ function EditView({
       <div>
         <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">内容（支持 Markdown）</label>
         <textarea
+          ref={positionContentEditor}
+          onLoad={(event) => positionContentEditor(event.currentTarget)}
           value={content}
           onChange={(e) => onContentChange(e.target.value)}
           className="w-full min-h-[360px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y font-mono"
@@ -709,7 +871,7 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onContentDiffDecision, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes, onChapterNavigate }) {
+function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onAddContext, onContentDiffChange, chapterNodes, navigationNodes, onChapterNavigate }) {
   const orderedChapterNodes = useMemo(
     () => [...chapterNodes].sort((left, right) => compareSiblings(
       { id: left.id, data: left },
@@ -720,6 +882,7 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
+  const [editContentScrollRatio, setEditContentScrollRatio] = useState(0);
   const [editTitle, setEditTitle] = useState(node.label);
   const [editContent, setEditContent] = useState(node.content || "");
   const [editChapterElements, setEditChapterElements] = useState(() =>
@@ -735,10 +898,28 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
       : []
   );
   const [saving, setSaving] = useState(false);
-  const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFullscreen, setIsFullscreen] = useState(appMode);
   const [selectionAction, setSelectionAction] = useState(null);
   const [diffBatches, setDiffBatches] = useState(() => hydrateDiffBatches(node.content || "", contentDiff).batches);
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
+  useEffect(() => {
+    if (appMode || !node.sourceReference || isEditing) return;
+    const frame = requestAnimationFrame(() => detailScrollRef.current?.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" }));
+    return () => cancelAnimationFrame(frame);
+  }, [node, appMode, isEditing, detailScrollRef]);
+
+  const handleStartEditing = useCallback(() => {
+    const reader = detailScrollRef.current;
+    const maxScrollTop = reader
+      ? Math.max(0, reader.scrollHeight - reader.clientHeight)
+      : 0;
+    setEditContentScrollRatio(maxScrollTop > 0 ? reader.scrollTop / maxScrollTop : 0);
+    setIsEditing(true);
+  }, [detailScrollRef]);
+
+  useEffect(() => {
+    setIsFullscreen(appMode);
+  }, [appMode]);
 
   useEffect(() => {
     setIsEditing(false);
@@ -759,11 +940,20 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
           }))
         : []
     );
-  }, [node]);
+  }, [appMode, node]);
 
   useEffect(() => {
     setDiffBatches(hydrateDiffBatches(node.content || "", contentDiff).batches);
   }, [contentDiff]);
+
+  useEffect(() => {
+    if (!onAddContext) return undefined;
+    const handleSelectionChange = () => {
+      setSelectionAction(selectionQuoteFromContainer(detailScrollRef.current));
+    };
+    document.addEventListener("selectionchange", handleSelectionChange);
+    return () => document.removeEventListener("selectionchange", handleSelectionChange);
+  }, [onAddContext, node.id]);
 
   const handleSave = async () => {
     const payload = { title: editTitle, content: editContent };
@@ -793,22 +983,16 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   };
 
   const handleTextSelect = (event) => {
-    const selection = window.getSelection?.();
-    if (!selection || selection.rangeCount === 0) {
+    const captured = selectionQuoteFromContainer(event.currentTarget);
+    if (!captured) {
       setSelectionAction(null);
       return;
     }
-    const range = selection.getRangeAt(0);
-    if (!event.currentTarget.contains(range.commonAncestorContainer)) {
-      setSelectionAction(null);
-      return;
-    }
-    const selectedText = selection.toString().trim();
-    setSelectionAction(selectedText ? {
-      text: selectedText,
-      x: event.clientX,
-      y: event.clientY,
-    } : null);
+    setSelectionAction({
+      text: captured.text,
+      x: Number.isFinite(event.clientX) ? event.clientX : captured.x,
+      y: Number.isFinite(event.clientY) ? event.clientY : captured.y,
+    });
   };
 
   const handleQuoteSelection = () => {
@@ -819,12 +1003,16 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   };
 
   const applyHunkDecisions = async (nextBatches) => {
+    // diffBatches 描述的是用户作决定前、Agent 已实际写入的正文。
+    // 画布节点刷新带防抖，node.content 在短窗口内可能仍是修改前的旧值。
+    const expectedContent = contentAfterBatches(diffBatches);
+    const expectedBaseline = diffBatches[0]?.original_content ?? contentDiff?.original_content ?? "";
     const nextContent = contentAfterBatches(nextBatches);
     const nextBaseline = contentAfterBatches(setAllHunkStatusInBatches(nextBatches, "rejected"));
     try {
       await onContentDiffDecision?.(node.id, {
-        expected_content: contentDiff?.current_content ?? node.content ?? "",
-        expected_baseline: contentDiff?.original_content ?? nextBatches[0]?.original_content ?? "",
+        expected_content: expectedContent,
+        expected_baseline: expectedBaseline,
         baseline_content: nextBaseline,
         current_content: nextContent,
       });
@@ -867,14 +1055,19 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
   const nextChapter = currentChapterIndex >= 0
     ? orderedChapterNodes[currentChapterIndex + 1]
     : null;
+  const orderedNodes = navigationNodes ?? orderedChapterNodes;
+  const currentNodeIndex = orderedNodes.findIndex((item) => item.id === node.id);
+  const previousNode = currentNodeIndex > 0 ? orderedNodes[currentNodeIndex - 1] : null;
+  const nextNode = currentNodeIndex >= 0 ? orderedNodes[currentNodeIndex + 1] : null;
 
   return (
     <div
+      data-testid="node-detail-drawer"
       className={`nodrag nopan nowheel select-text relative flex flex-col shadow-xl animate-in slide-in-from-left ${isChapter ? "bg-amber-50" : "bg-white"} ${
         isFullscreen
           ? "h-full w-full"
           : isEditing || isChapter || isCharacter
-            ? "h-full w-[700px] max-w-[90vw]"
+            ? "h-full w-[860px] max-w-[90vw]"
             : "h-full w-[420px] max-w-[90vw]"
       }`}
     >
@@ -882,37 +1075,14 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
         <button
           type="button"
           aria-label="引用此段"
+          onPointerDown={(event) => event.preventDefault()}
           onMouseDown={(event) => event.preventDefault()}
           onClick={handleQuoteSelection}
           className="fixed z-[60] rounded-md bg-slate-800 px-3 py-1.5 text-xs font-medium text-white shadow-lg hover:bg-slate-700"
-          style={{ left: selectionAction.x + 8, top: selectionAction.y + 8 }}
+          style={{ left: Math.max(8, selectionAction.x + 8), top: Math.max(8, selectionAction.y + 8) }}
         >
           引用此段
         </button>
-      )}
-      {isChapter && isFullscreen && orderedChapterNodes.length > 1 && (
-        <>
-          <button
-            type="button"
-            onClick={() => previousChapter && onChapterNavigate?.(previousChapter)}
-            disabled={!previousChapter}
-            className="absolute left-4 top-1/2 z-20 -translate-y-1/2 rounded-full border border-amber-200 bg-amber-100/90 p-3 text-amber-900 shadow-md transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-30"
-            title="上一章"
-            aria-label="上一章"
-          >
-            <ChevronLeft className="h-6 w-6" />
-          </button>
-          <button
-            type="button"
-            onClick={() => nextChapter && onChapterNavigate?.(nextChapter)}
-            disabled={!nextChapter}
-            className="absolute right-4 top-1/2 z-20 -translate-y-1/2 rounded-full border border-amber-200 bg-amber-100/90 p-3 text-amber-900 shadow-md transition-colors hover:bg-amber-200 disabled:cursor-not-allowed disabled:opacity-30"
-            title="下一章"
-            aria-label="下一章"
-          >
-            <ChevronRight className="h-6 w-6" />
-          </button>
-        </>
       )}
       <div className="flex items-center justify-between border-b border-gray-200 px-5 py-3">
         <div className="flex items-center gap-2">
@@ -926,19 +1096,19 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
             <div className="mr-1 flex items-center gap-1">
               <button
                 type="button"
-                aria-label="全部保留修改"
+                aria-label="全部保留"
                 onClick={handleAcceptAll}
                 className="rounded-md px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
               >
-                全部保留修改
+                全部保留
               </button>
               <button
                 type="button"
-                aria-label="全部撤回修改"
+                aria-label="全部撤回"
                 onClick={handleRejectAll}
                 className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
               >
-                全部撤回修改
+                全部撤回
               </button>
             </div>
           )}
@@ -965,53 +1135,27 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
             </>
           ) : (
             <>
-              {onToggleLocked && (
-                <button
-                  onClick={() => onToggleLocked(node)}
-                  className={
-                    "p-1.5 rounded-md transition-colors " + (
-                      node.locked
-                        ? "text-sky-600 bg-sky-50 hover:bg-sky-100"
-                        : "text-gray-400 hover:text-sky-500 hover:bg-sky-50"
-                    )
-                  }
-                  title={node.locked ? "取消固定（固定后坐标锁定，agent 与拖拽都无法移动）" : "固定节点（固定后坐标锁定，agent 与拖拽都无法移动）"}
-                >
-                  <Pin className={"w-4 h-4 " + (node.locked ? "fill-sky-500" : "")} />
-                </button>
-              )}
               {onUpdate && (
                 <button
-                  onClick={() => setIsEditing(true)}
+                  onClick={handleStartEditing}
                   className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
                   title="编辑节点"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
               )}
-              {onDelete && (
-                <button
-                  onClick={() => {
-                    if (window.confirm(`确定删除节点「${node.label}」？关联的连线也会被删除。`)) {
-                      onDelete(node);
-                    }
-                  }}
-                  className="p-1.5 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                  title="删除节点"
-                >
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              )}
             </>
           )}
-          <button
-            onClick={() => setIsFullscreen((value) => !value)}
-            className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
-            title={isFullscreen ? "退出全屏" : "全屏查看"}
-            aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
-          >
-            {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-          </button>
+          {!appMode && (
+            <button
+              onClick={() => setIsFullscreen((value) => !value)}
+              className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
+              title={isFullscreen ? "退出全屏" : "全屏查看"}
+              aria-label={isFullscreen ? "退出全屏" : "全屏查看"}
+            >
+              {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </button>
+          )}
           <button
             onClick={onClose}
             className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -1033,17 +1177,22 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
           isCharacter={isCharacter}
           storylines={editStorylines}
           onStorylinesChange={setEditStorylines}
+          initialContentScrollRatio={editContentScrollRatio}
         />
       ) : isChapter ? (
         <ChapterReadingView
           node={node}
           scrollRef={detailScrollRef}
           isFullscreen={isFullscreen}
+          appMode={appMode}
           onTextSelect={handleTextSelect}
           batches={diffBatches}
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
           readOnlyDiff={isDiffPreview}
+          previousChapter={navigationNodes ? previousNode : previousChapter}
+          nextChapter={navigationNodes ? nextNode : nextChapter}
+          onChapterNavigate={onChapterNavigate}
         />
       ) : (
         <DefaultNodeView
@@ -1054,20 +1203,32 @@ function NodeDetailDrawerInner({ node, contentDiff, agentRunning, onClose, onDel
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
           readOnlyDiff={isDiffPreview}
+          appMode={appMode}
+          previousNode={previousNode}
+          nextNode={nextNode}
+          onNavigate={onChapterNavigate}
         />
+      )}
+      {!isChapter && !appMode && !isEditing && (
+        <div className="pointer-events-none absolute inset-x-0 top-1/2 z-10 flex -translate-y-1/2 justify-between px-3">
+          <button type="button" title="上一节点" disabled={!previousNode} onClick={() => previousNode && onChapterNavigate?.(previousNode)} className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-600 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-30"><ChevronLeft className="h-5 w-5" /></button>
+          <button type="button" title="下一节点" disabled={!nextNode} onClick={() => nextNode && onChapterNavigate?.(nextNode)} className="pointer-events-auto flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white/90 text-gray-600 shadow-sm hover:bg-gray-50 disabled:cursor-not-allowed disabled:opacity-30"><ChevronRight className="h-5 w-5" /></button>
+        </div>
       )}
     </div>
   );
 }
 
-export default function NodeDetailDrawer({ node, contentDiff, agentRunning, onClose, onDelete, onUpdate, onContentDiffDecision, onAddContext, onToggleLocked, onContentDiffChange, chapterNodes = [], onChapterNavigate }) {
+export default function NodeDetailDrawer({ appMode = false, node, contentDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onAddContext, onContentDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
-      <NodeDetailDrawerInner node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onDelete={onDelete} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onAddContext={onAddContext} onToggleLocked={onToggleLocked} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} onChapterNavigate={onChapterNavigate} />
+      <SourceReferenceContext.Provider value={appMode ? null : node.sourceReference}>
+        <NodeDetailDrawerInner appMode={appMode} node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} />
+      </SourceReferenceContext.Provider>
     </div>
   );
 }

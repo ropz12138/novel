@@ -16,4 +16,15 @@ class ModelPrefResponse(BaseModel):
 
 class ModelPrefUpdate(BaseModel):
     primary: Optional[str] = Field(default=None, description="主模型名；null 表示回退全局默认")
-    fallback: Optional[str] = Field(default=None, description="备模型名；null 表示回退全局默认")
+    fallback: Optional[str] = Field(
+        default=None,
+        description="备模型名；null 表示回退全局默认，空字符串表示禁用备用模型",
+    )
+
+
+class ChapterReviewIntensityResponse(BaseModel):
+    chapter_review_intensity: str
+
+
+class ChapterReviewIntensityUpdate(BaseModel):
+    chapter_review_intensity: str

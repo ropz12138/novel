@@ -18,6 +18,21 @@ class Settings:
         self.prod_port = config["app"]["prod_port"]
         self.debug = config["app"]["debug"]
 
+        mobile = config["app"]["mobile"]
+        self.mobile_app_id = mobile["app_id"]
+        self.mobile_app_name = mobile["app_name"]
+        self.mobile_version_name = mobile["version_name"]
+        self.mobile_version_code = int(mobile["version_code"])
+        self.mobile_server_base_url = mobile["server_base_url"]
+        self.mobile_api_base_url = mobile["api_base_url"]
+        self.mobile_download_url = mobile["download_url"]
+        self.mobile_apk_filename = mobile["apk_filename"]
+        self.mobile_apk_publish_path = mobile["apk_publish_path"]
+        self.mobile_android_build_variant = mobile["android_build_variant"]
+        self.mobile_android_java_home = mobile["android_java_home"]
+        self.mobile_android_sdk_root = mobile["android_sdk_root"]
+        self.mobile_android_compile_sdk = int(mobile["android_compile_sdk"])
+
         self.frontend_dev_port = config["frontend"]["dev_port"]
         self.frontend_prod_port = config["frontend"]["prod_port"]
 

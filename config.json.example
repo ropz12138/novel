@@ -4,7 +4,26 @@
     "host": "0.0.0.0",
     "dev_port": 9001,
     "prod_port": 9002,
-    "debug": true
+    "debug": true,
+    "mobile": {
+      "app_id": "com.example.novel",
+      "app_name": "文灵",
+      "version_name": "1.1.8",
+      "version_code": 11,
+      "server_base_url": "https://example.com",
+      "api_base_url": "https://example.com/novel/api",
+      "download_url": "/novel/novel.apk",
+      "apk_filename": "novel.apk",
+      "apk_publish_path": "/path/to/nginx/html/novel/novel.apk",
+      "android_build_variant": "debug",
+      "android_java_home": "/usr/lib/jvm/java-21",
+      "android_sdk_root": "/path/to/android-sdk",
+      "android_compile_sdk": 35
+    }
+  },
+  "frontend": {
+    "dev_port": 5173,
+    "prod_port": 4173
   },
   "database": {
     "host": "127.0.0.1",
@@ -20,22 +39,22 @@
   },
   "llm": [
     {
-      "your-model-name": {
+      "gemini-3.8-flash-high": {
         "base_url": "https://your-llm-api-base-url/v1",
         "api_key": "your_llm_api_key",
         "context_window": "128k"
       }
     },
     {
-      "your-pro-model-name": {
+      "another-model-name": {
         "base_url": "https://your-llm-api-base-url/v1",
         "api_key": "your_llm_api_key",
         "context_window": "512k"
       }
     }
   ],
-  "default_model": "your-model-name",
-  "fallback_model": "your-pro-model-name",
+  "default_model": "gemini-3.8-flash-high",
+  "fallback_model": "",
   "observability": {
     "langsmith_api_key": "your_langsmith_api_key",
     "langsmith_project": "Novel",

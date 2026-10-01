@@ -28,6 +28,7 @@ import models.canvas_checkpoint  # noqa: E402, F401
 import models.user_canvas_action  # noqa: E402, F401
 import models.research  # noqa: E402, F401
 import models.workflow  # noqa: E402, F401
+import models.llm_token_usage  # noqa: E402, F401
 
 
 def _ensure_test_db(db_name: str = "novel_test") -> str:
@@ -62,6 +63,9 @@ def isolated_db(monkeypatch):
 
     monkeypatch.setattr(db_module, "engine", test_engine)
     monkeypatch.setattr(db_module, "SessionLocal", TestSession)
+    # 该路由在导入时绑定了 SessionLocal，也必须指向测试库。
+    from routers import supervisor as supervisor_router
+    monkeypatch.setattr(supervisor_router, "SessionLocal", TestSession)
 
     # 彻底清空 schema，避免 main backend 残留表（共用 novel_test 库）
     # 导致 create_all 不重建表、drop_all 被外键阻塞。保证 TDD 干净基线。

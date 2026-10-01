@@ -72,6 +72,18 @@ def record_edge_action(
     return action
 
 
+def _dedupe_by_target_id(actions: list) -> list:
+    """同一 target_id 只保留最后一次，非连续也合并。"""
+    by_id = {}
+    order = []
+    for a in actions:
+        key = a.target_id
+        if key not in by_id:
+            order.append(key)
+        by_id[key] = a
+    return [by_id[k] for k in order]
+
+
 def build_pending_actions_section(db: Session, work_id: Optional[str]) -> str:
     if not work_id:
         return ""
@@ -100,6 +112,13 @@ def build_pending_actions_section(db: Session, work_id: Optional[str]) -> str:
             deletes_e.append(a)
         elif a.action_type == "update_edge":
             updates_e.append(a)
+
+    creates_n = _dedupe_by_target_id(creates_n)
+    deletes_n = _dedupe_by_target_id(deletes_n)
+    updates_n = _dedupe_by_target_id(updates_n)
+    creates_e = _dedupe_by_target_id(creates_e)
+    deletes_e = _dedupe_by_target_id(deletes_e)
+    updates_e = _dedupe_by_target_id(updates_e)
 
     lines = ["我执行了以下操作："]
 

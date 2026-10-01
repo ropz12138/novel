@@ -7,6 +7,7 @@ from typing import Any
 from sqlalchemy.orm import Session
 from sqlalchemy.orm.attributes import flag_modified
 
+from models.node_content_diff_state import NodeContentDiffState
 from models.session import SupervisorMessage, SupervisorSession
 from services.todo_service import list_todo_items, serialize_todo_item
 
@@ -71,6 +72,10 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
         source_node = db.get(Node, data.get("node_id") or data.get("chapter_node_id"))
         if source_node is not None and data.get("original_content") is not None:
             record_agent_change(db, source_node, data["original_content"])
+            state = db.get(NodeContentDiffState, source_node.id)
+            if state is not None:
+                # data 随后会由 broker 推给前端；携带后端实际保存的累计基线。
+                data["baseline_content"] = state.baseline_content
         diff = data.get("diff") or {}
         node_id = data.get("node_id") or data.get("chapter_node_id") or ""
         db.add(
@@ -90,6 +95,7 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                         "title": data.get("title", ""),
                         "hunks": diff.get("hunks", []),
                         "summary": diff.get("summary", {}),
+                        "baseline_content": data.get("baseline_content"),
                         "original_content": data.get("original_content"),
                         "current_content": data.get("current_content"),
                         "text_count": data.get("text_count"),

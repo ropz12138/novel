@@ -31,6 +31,7 @@ export function LoginPage() {
       }, "登录失败");
       localStorage.setItem("novel_token", data.token);
       localStorage.setItem("novel_user", data?.user?.username || form.email.split("@")[0] || "创作者");
+      localStorage.setItem("novel_role", data?.user?.role || "user");
       navigate("/", { replace: true });
     } catch (err) {
       setError(err.message || "登录失败");

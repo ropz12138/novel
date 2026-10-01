@@ -10,9 +10,11 @@ from langchain_core.messages import AIMessage, AIMessageChunk
 logger = logging.getLogger(__name__)
 
 
-def bind_agent_llm_with_tools(llm, tools):
+def bind_agent_llm_with_tools(llm, tools, tool_choice=None):
     """绑定工具。thinking 等 extra 参数由每个模型从 config 读入实例，不再在此写死。"""
-    return llm.bind_tools(tools)
+    if tool_choice is None:
+        return llm.bind_tools(tools)
+    return llm.bind_tools(tools, tool_choice=tool_choice)
 
 
 def stream_text_delta(chunk: AIMessageChunk | AIMessage | None) -> str:

@@ -23,7 +23,13 @@ class FakeLLM:
     async def ainvoke(self, messages, config=None, **kwargs):
         self.captured["messages"] = messages
         self.captured["kwargs"] = kwargs
-        return AIMessage(content=json.dumps(self.payload, ensure_ascii=False))
+        content = self.payload if isinstance(self.payload, str) else json.dumps(self.payload, ensure_ascii=False)
+        return AIMessage(content=content)
+
+    async def astream(self, messages, config=None, **kwargs):
+        from langchain_core.messages import AIMessageChunk
+        message = await self.ainvoke(messages, config=config, **kwargs)
+        yield AIMessageChunk(content=message.content)
 
 
 class StreamingFakeLLM:
@@ -33,7 +39,10 @@ class StreamingFakeLLM:
     async def astream(self, messages, config=None, **kwargs):
         from langchain_core.messages import AIMessageChunk
         for chunk in self.chunks:
-            yield AIMessageChunk(content=chunk)
+            if isinstance(chunk, str):
+                yield AIMessageChunk(content=chunk)
+            else:
+                yield chunk
 
 
 def test_json_agent_streams_decoded_content_field(monkeypatch):
@@ -52,6 +61,34 @@ def test_json_agent_streams_decoded_content_field(monkeypatch):
 
     assert result["content"] == "第一段\n第二段"
     assert "".join(deltas) == "第一段\n第二段"
+
+
+def test_json_agent_emits_reasoning_and_content_to_frontend(monkeypatch):
+    from langchain_core.messages import AIMessageChunk
+
+    from services.agents import supervisor as supervisor_mod
+
+    chunks = [
+        AIMessageChunk(content="", additional_kwargs={"reasoning_content": "先看原文"}),
+        AIMessageChunk(content='{"content":"改后正文","ok":true}'),
+    ]
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: StreamingFakeLLM(chunks))
+    emitted = []
+
+    async def emit(event, data):
+        emitted.append((event, dict(data)))
+
+    token = supervisor_mod.set_context({"emit": emit})
+    try:
+        result = asyncio.run(sat._invoke_json_agent("chapter_writer.txt", "上下文"))
+    finally:
+        supervisor_mod.reset_context(token)
+
+    assert result["content"] == "改后正文"
+    assert emitted == [
+        ("chapter_edit_stream", {"chunk": "先看原文", "phase": "reasoning"}),
+        ("chapter_edit_stream", {"chunk": '{"content":"改后正文","ok":true}', "phase": "content"}),
+    ]
 
 
 def _work(db):
@@ -118,7 +155,14 @@ def test_prepare_chapter_from_scene_plan_updates_metadata_without_changing_conte
                 "title": "敲门",
                 "purpose": "确认来客身份",
                 "characters": ["林川"],
-                "beats": [{"action": "开门", "dialogue_purpose": "试探"}],
+                "beats": [{
+                    "event": "来客敲门，林川开门",
+                    "character_goal": "确认来客身份",
+                    "known_information": "来客知道林川住址",
+                    "choice": "保持门链扣合",
+                    "consequence": "双方开始试探",
+                    "dialogue_goal": "核实身份",
+                }],
             }],
         }, ensure_ascii=False),
     )
@@ -151,6 +195,8 @@ def test_load_write_chapter_skill_returns_full_skill():
     assert result["status"] == "completed"
     assert "场景规划" in result["result"]["skill_content"]
     assert "对白审查" in result["result"]["skill_content"]
+    assert "humanize_chapter_draft" in result["result"]["skill_content"]
+    assert "评审强度为低时跳过本步" in result["result"]["skill_content"]
     assert result["gate"]["code"] == "workflow_skill_loaded"
 
 
@@ -182,6 +228,42 @@ def test_assemble_context_persists_full_text_artifact(monkeypatch):
         assert result["result"]["chapter_created"] is False
     finally:
         db.close()
+
+
+def test_chapter_context_shared_prefix_survives_target_and_instruction_changes(monkeypatch, db_session):
+    work = _work(db_session)
+    _node(db_session, work.id, "worldbuilding", "世界", "完整世界设定" * 100, 1)
+    _node(db_session, work.id, "character", "人物", "完整人物设定", 1)
+    chapters = [_node(db_session, work.id, "chapter", f"第{i}章", f"完整正文{i}", i) for i in [1, 2]]
+    monkeypatch.setattr(sat, "_get_current_work_id", lambda: work.id)
+    contents = []
+    for i, chapter in enumerate(chapters):
+        result = json.loads(asyncio.run(sat.assemble_chapter_context.ainvoke({
+            "chapter_node_id": chapter.id, "user_instruction": f"任务{i}", "target_words": 2000 + i,
+        })))
+        content = sat._load_artifact(result["artifact"]["id"]).content
+        contents.append(content)
+        data = json.loads(content)
+        assert data["target_chapter"]["content"] == chapter.content
+        assert data["user_instruction"] == f"任务{i}"
+        assert content.index('"characters"') < content.index('"target_chapter"')
+        assert content.index('"global_context"') < content.index('"previous_chapters"')
+    assert contents[0].split(', "previous_chapters"')[0] == contents[1].split(', "previous_chapters"')[0]
+
+
+def test_work_context_nodes_precede_task_specific_fields(monkeypatch, db_session):
+    from services.agents.tools import workflow_agent_tools as wat
+    work = _work(db_session)
+    node = _node(db_session, work.id, "worldbuilding", "世界", "完整设定", 1)
+    _node(db_session, work.id, "chapter", "第一章", "变化中的正文", 1)
+    monkeypatch.setattr(wat, "_current_context", lambda: {"work_id": work.id})
+    contents = []
+    for instruction in ["审查", "修订"]:
+        result = json.loads(asyncio.run(wat._assemble_work_context(instruction, [node.id])))
+        contents.append(sat._load_artifact(result["artifact"]["id"]).content)
+    assert contents[0].index('"nodes"') < contents[0].index('"user_instruction"')
+    assert json.loads(contents[0])["nodes"][0]["id"] == node.id
+    assert contents[0].split(', "mode"')[0] == contents[1].split(', "mode"')[0]
 
 
 def test_assemble_creates_chapter_under_plot_with_contains_edge(monkeypatch):
@@ -334,7 +416,7 @@ def test_scene_plan_agent_uses_project_llm_and_returns_artifact(monkeypatch):
     payload = {
         "chapter_goal": "确认来客身份",
         "opening_carryover": "承接敲门声",
-        "emotional_progression": "戒备到怀疑",
+        "opening_state": "林川在门内，门链扣合",
         "scenes": [{
             "order": 1,
             "title": "开门",
@@ -342,11 +424,18 @@ def test_scene_plan_agent_uses_project_llm_and_returns_artifact(monkeypatch):
             "purpose": "试探",
             "characters": ["林川"],
             "approximate_words": 3000,
-            "beats": [{"action": "开门", "dialogue_purpose": "确认身份", "speaker_intention": "试探", "listener_reaction": "回避"}],
-            "emotional_shift": "戒备加深",
+            "beats": [{
+                "event": "来客敲门，林川开门确认身份",
+                "character_goal": "确认来客身份",
+                "known_information": "来客知道林川住址",
+                "choice": "保持门链扣合并询问姓名",
+                "consequence": "来客回避身份问题，戒备加深",
+                "dialogue_goal": "核实身份",
+            }],
+            "state_change": "来客仍在门外，门链保持扣合",
             "information_change": "确认来客认识自己",
         }],
-        "ending_hook": "伞上没有雨水",
+        "ending_state": "来客身份未明，林川看见伞面干燥",
     }
     monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM(captured, payload))
 
@@ -359,6 +448,116 @@ def test_scene_plan_agent_uses_project_llm_and_returns_artifact(monkeypatch):
     assert result["result"]["scene_count"] == 1
     assert "END-CONTEXT" in captured["messages"][-1].content
     assert "max_tokens" not in captured["kwargs"]
+
+
+def test_scene_plan_rejects_prose_oriented_legacy_beat_schema(monkeypatch):
+    context = sat._create_artifact(
+        work_id=None,
+        chapter_node_id=None,
+        artifact_type="chapter_context",
+        content="完整上下文",
+    )
+    legacy_payload = {
+        "chapter_goal": "确认来客身份",
+        "opening_carryover": "承接敲门声",
+        "emotional_progression": "戒备到怀疑",
+        "scenes": [{
+            "order": 1,
+            "title": "开门",
+            "setting": "深夜门口",
+            "purpose": "试探",
+            "characters": ["林川"],
+            "approximate_words": 3000,
+            "beats": [{
+                "action": "林川脑海里跳出一个词：来客。",
+                "dialogue_purpose": "确认身份",
+                "speaker_intention": "试探",
+                "listener_reaction": "回避",
+            }],
+            "emotional_shift": "戒备加深",
+            "information_change": "确认来客认识自己",
+        }],
+        "ending_hook": "伞上没有雨水",
+    }
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, legacy_payload))
+
+    result = json.loads(asyncio.run(sat.plan_chapter_scenes.ainvoke({
+        "context_artifact_id": context.id,
+    })))
+
+    assert result["success"] is False
+    assert result["gate"]["code"] == "scene_plan_failed"
+
+
+def test_scene_plan_rejects_abstract_emotional_arc_fields(monkeypatch):
+    context = sat._create_artifact(None, None, "chapter_context", "完整上下文")
+    result_payload = {
+        "chapter_goal": "守住实验室",
+        "opening_carryover": "承接上一章",
+        "opening_state": "两人在实验室内",
+        "emotional_progression": "恐惧到协作",
+        "scenes": [{
+            "order": 1,
+            "title": "守门",
+            "setting": "实验室",
+            "purpose": "守住入口",
+            "characters": ["林越"],
+            "approximate_words": 500,
+            "beats": [{
+                "event": "门外出现撞击",
+                "character_goal": "守住门",
+                "known_information": "门后有铁椅",
+                "choice": "用铁椅抵门",
+                "consequence": "门暂时未开",
+                "dialogue_goal": "",
+            }],
+            "state_change": "铁椅抵住门",
+            "information_change": "撞击者会追随声音",
+        }],
+        "ending_state": "门仍关闭",
+    }
+    monkeypatch.setattr(sat, "_invoke_json_agent", AsyncMock(return_value=result_payload))
+
+    result = json.loads(asyncio.run(sat._plan_chapter_scenes(context.id)))
+
+    assert result["success"] is False
+    assert result["gate"]["code"] == "scene_plan_failed"
+
+
+def test_scene_plan_rejects_beat_fields_that_expand_into_prose(monkeypatch):
+    context = sat._create_artifact(None, None, "chapter_context", "完整上下文")
+    payload = {
+        "chapter_goal": "守住实验室",
+        "opening_carryover": "承接上一章",
+        "opening_state": "两人在实验室内",
+        "scenes": [{
+            "order": 1,
+            "title": "守门",
+            "setting": "实验室",
+            "purpose": "守住入口",
+            "characters": ["林越"],
+            "approximate_words": 500,
+            "beats": [{
+                "event": "门外出现撞击，林越先走到门边又回头确认苏棠的位置，随后把椅子推到门后，并逐次检查椅腿、毛巾和门框是否贴合，最后退开两步等待下一次撞击",
+                "character_goal": "守住门",
+                "known_information": "门后有铁椅",
+                "choice": "用铁椅抵门",
+                "consequence": "门暂时未开",
+                "dialogue_goal": "",
+            }],
+            "state_change": "铁椅抵住门",
+            "information_change": "撞击者会追随声音",
+        }],
+        "ending_state": "门仍关闭",
+    }
+    monkeypatch.setattr(sat, "_invoke_json_agent", AsyncMock(return_value=payload))
+
+    result = json.loads(asyncio.run(sat._plan_chapter_scenes(context.id)))
+
+    assert result["success"] is False
+    assert result["gate"]["code"] == "scene_plan_failed"
+    assert "beats[0]" in result["error"]["message"]
+    assert "event" in result["error"]["message"]
 
 
 def test_short_chapter_draft_requires_revision(monkeypatch):
@@ -508,6 +707,7 @@ def test_chapter_writer_receives_explicit_total_and_scene_word_limits(monkeypatc
     assert result["status"] == "completed"
     prompt = captured["messages"][-1].content
     assert "目标字数：3000字" in prompt
+    assert prompt.index("完整作品上下文") < prompt.index("完整场景计划") < prompt.index("本章篇幅要求")
     assert "允许范围：2550—3450字" in prompt
     assert "第1场《接触联盟》：约1200字" in prompt
     assert "第2场《完成任务》：约1800字" in prompt
@@ -534,6 +734,73 @@ def test_revision_decision_records_selected_strategy(monkeypatch):
     assert result["artifact"]["type"] == "chapter_revision_decision"
     assert result["result"]["strategy"] == "replan"
     assert "下一章" in result["result"]["instructions"]
+
+
+def test_revision_decision_allows_local_edit_without_scene_plan(monkeypatch):
+    context = sat._create_artifact(None, None, "chapter_context", '{"target_words":3000}')
+    draft = sat._create_artifact(None, None, "chapter_draft", "冗长正文")
+    captured = {}
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM(captured, {
+        "strategy": "local_edit",
+        "reason": "超出上限，问题集中在重复描写。",
+        "instructions": "删除重复环境描写，保留取晶核与笔记线索。",
+    }))
+
+    result = json.loads(asyncio.run(sat.decide_chapter_revision.ainvoke({
+        "context_artifact_id": context.id,
+        "draft_artifact_id": draft.id,
+        "feedback": "字数3826，超出上限3450约376字。",
+    })))
+
+    assert result["status"] == "completed"
+    assert result["result"]["strategy"] == "local_edit"
+    decision = json.loads(sat._load_artifact(result["artifact"]["id"]).content)
+    assert "scene_plan_artifact_id" not in decision
+    prompt = captured["messages"][-1].content
+    assert "======= 当前场景计划 =======" in prompt
+    assert "无。本次没有场景计划" in prompt
+    assert "strategy 只能是 local_edit" in prompt
+
+
+def test_revision_decision_rejects_replan_without_scene_plan(monkeypatch):
+    context = sat._create_artifact(None, None, "chapter_context", '{"target_words":3000}')
+    draft = sat._create_artifact(None, None, "chapter_draft", "冗长正文")
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, {
+        "strategy": "replan",
+        "reason": "情节过多。",
+        "instructions": "把后半章交给下一章。",
+    }))
+
+    result = json.loads(asyncio.run(sat.decide_chapter_revision.ainvoke({
+        "context_artifact_id": context.id,
+        "draft_artifact_id": draft.id,
+        "feedback": "超出上限376字。",
+    })))
+
+    assert result["status"] == "failed"
+    assert result["gate"]["code"] == "revision_decision_failed"
+    assert "没有场景计划" in result["error"]["message"]
+    assert "replan" in result["error"]["message"]
+
+
+def test_revision_decision_rejects_rewrite_without_scene_plan(monkeypatch):
+    context = sat._create_artifact(None, None, "chapter_context", '{"target_words":3000}')
+    draft = sat._create_artifact(None, None, "chapter_draft", "冗长正文")
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, {
+        "strategy": "rewrite",
+        "reason": "多数场景都偏长。",
+        "instructions": "整章重写并压缩。",
+    }))
+
+    result = json.loads(asyncio.run(sat.decide_chapter_revision.ainvoke({
+        "context_artifact_id": context.id,
+        "draft_artifact_id": draft.id,
+        "feedback": "超出上限376字。",
+    })))
+
+    assert result["status"] == "failed"
+    assert "没有场景计划" in result["error"]["message"]
+    assert "rewrite" in result["error"]["message"]
 
 
 def test_local_chapter_edit_replaces_only_selected_passage(monkeypatch):
@@ -691,74 +958,35 @@ def test_commit_rejects_short_draft_even_if_supervisor_skips_length_gate():
         db.close()
 
 
-def test_review_failure_is_successful_tool_execution(monkeypatch):
+def test_review_returns_natural_language_advice_without_quality_gate(monkeypatch):
     context = sat._create_artifact(None, None, "chapter_context", "上下文")
     draft = sat._create_artifact(None, None, "chapter_draft", "正文")
-    payload = {
-        "score": 5,
-        "issues": [{
-            "id": "dialogue-1",
-            "severity": "major",
-            "scene_order": 1,
-            "characters": ["林川"],
-            "excerpt": "我把全部计划告诉你。",
-            "issue_type": "intention_too_explicit",
-            "problem": "人物表达过于直接",
-            "desired_effect": "通过试探传递意图",
-            "preserve": ["计划内容不变"],
-        }],
-        "character_voice": [],
-    }
-    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, payload))
+    advice = "人物表达过于直接，建议通过试探传递意图；保留计划内容。"
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, advice))
 
     result = json.loads(asyncio.run(sat.review_chapter_dialogue.ainvoke({
         "context_artifact_id": context.id,
         "draft_artifact_id": draft.id,
-        "minimum_score": 7,
     })))
 
     assert result["success"] is True
-    assert result["status"] == "needs_revision"
-    assert result["gate"] == {
-        "passed": False,
-        "code": "dialogue_revision_required",
-    }
-    assert result["result"]["issues"][0]["id"] == "dialogue-1"
+    assert result["status"] == "completed"
+    assert result["gate"] == {"passed": True, "code": "dialogue_review_completed"}
+    assert result["result"] == {"advice": advice}
 
 
-def test_moderate_review_issue_requires_revision(monkeypatch):
+def test_review_advice_does_not_set_needs_revision(monkeypatch):
     context = sat._create_artifact(None, None, "chapter_context", "上下文")
     draft = sat._create_artifact(None, None, "chapter_draft", "正文")
-    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, {
-        "score": 7,
-        "issues": [{"id": "d1", "severity": "moderate"}],
-        "revision_scope": [{"scene_order": 1, "issue_ids": ["d1"]}],
-    }))
+    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, "第一场对话节奏偏平，可增加试探。"))
 
     result = json.loads(asyncio.run(sat.review_chapter_dialogue.ainvoke({
         "context_artifact_id": context.id,
         "draft_artifact_id": draft.id,
     })))
 
-    assert result["status"] == "needs_revision"
-
-
-def test_medium_review_issue_requires_revision(monkeypatch):
-    context = sat._create_artifact(None, None, "chapter_context", "上下文")
-    draft = sat._create_artifact(None, None, "chapter_draft", "正文")
-    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: FakeLLM({}, {
-        "score": 8,
-        "issues": [{"id": 1, "severity": "medium", "problem": "对白信息揭示过早"}],
-    }))
-
-    result = json.loads(asyncio.run(sat.review_chapter_dialogue.ainvoke({
-        "context_artifact_id": context.id,
-        "draft_artifact_id": draft.id,
-    })))
-
-    assert result["status"] == "needs_revision"
-    assert result["gate"]["code"] == "dialogue_revision_required"
-    assert result["gate"]["passed"] is False
+    assert result["status"] == "completed"
+    assert result["gate"]["code"] == "dialogue_review_completed"
 
 
 def test_revision_creates_next_draft_version(monkeypatch):

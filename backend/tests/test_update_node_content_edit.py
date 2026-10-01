@@ -189,6 +189,29 @@ def test_update_node_replace_mode_applies_unique_snippets(monkeypatch):
         db.close()
 
 
+def test_update_node_replace_mode_feedback_when_old_equals_new():
+    db = database.SessionLocal()
+    try:
+        node, original = _seed_chapter(db, "same")
+        result = json.loads(nt._update_node_sync(
+            node.id,
+            mode="replace",
+            replacements=[
+                {"old": "就你理性", "new": "就你能耐"},
+                {"old": "两人找了个角落坐下。", "new": "两人找了个角落坐下。"},
+            ],
+        ))
+        assert result.get("success") is not True
+        message = result.get("error") or ""
+        assert "old 和 new 完全相同" in message
+        assert "new" in message
+        assert "replacements[1]" in message
+        db.refresh(node)
+        assert node.content == original
+    finally:
+        db.close()
+
+
 def test_update_node_replace_mode_rejects_missing_or_ambiguous_old(monkeypatch):
     db = database.SessionLocal()
     try:

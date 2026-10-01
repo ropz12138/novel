@@ -3,6 +3,7 @@ import uuid
 
 import pytest
 
+from models.node import Node
 from models.session import SupervisorMessage, SupervisorSession
 from services.supervisor_event_persist import (
     PERSISTABLE_DIFF_EVENTS,
@@ -242,3 +243,34 @@ def test_persist_chapter_edit_diff_multiple_times(db_session, sample_session):
         assert card["chapter_node_id"] == f"node-{i}"
         assert card["title"] == f"第{i + 1}章"
         assert card["word_count"] == 3000 + i * 100
+
+
+def test_diff_event_exposes_the_authoritative_pending_baseline(db_session, sample_session):
+    node = Node(
+        id="chapter-baseline",
+        work_id=sample_session.work_id,
+        type="chapter",
+        title="第一章",
+        content="第三稿",
+        sort_order=1,
+    )
+    db_session.add(node)
+    db_session.commit()
+
+    first = {
+        "chapter_node_id": node.id,
+        "original_content": "第一稿",
+        "current_content": "第二稿",
+        "diff": {"hunks": []},
+    }
+    persist_supervisor_event(db_session, sample_session.id, "chapter_edit_diff", first)
+    assert first["baseline_content"] == "第一稿"
+
+    second = {
+        "chapter_node_id": node.id,
+        "original_content": "第二稿",
+        "current_content": "第三稿",
+        "diff": {"hunks": []},
+    }
+    persist_supervisor_event(db_session, sample_session.id, "chapter_edit_diff", second)
+    assert second["baseline_content"] == "第一稿"

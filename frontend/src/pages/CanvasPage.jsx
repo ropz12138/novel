@@ -1,12 +1,16 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft } from "lucide-react";
+import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft, Users, Gauge } from "lucide-react";
 import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
+import AppUpdateButton from "../components/AppUpdateButton";
+import AppFloatingComposer from "../components/AppFloatingComposer";
 import { fetchWorks, createWork, deleteWork, fetchContentDiffs } from "../lib/canvasApi";
 import { accumulateNodeContentDiff, buildContentDiffFromContents } from "../lib/inlineContentDiff";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
+import { IS_NATIVE_APP } from "../lib/runtime-config";
+import { exitNativeApp, subscribeAppBack, subscribeAppResume } from "../lib/appBackNavigation";
 
 const CHAT_WIDTH_STORAGE_KEY = "novel_canvas_chat_width";
 const LAST_ACTIVE_WORK_STORAGE_KEY = "novel_canvas_last_active_work";
@@ -32,31 +36,79 @@ function getStoredChatWidth() {
   return Number.isFinite(stored) ? clampChatWidth(stored) : DEFAULT_CHAT_WIDTH;
 }
 
-export function CanvasPage() {
+export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   const navigate = useNavigate();
-  const [showChat, setShowChat] = useState(true);
+  const [showChat, setShowChat] = useState(() => !appMode);
+  const [showCharactersPanel, setShowCharactersPanel] = useState(() => !appMode);
+  const [agentDraft, setAgentDraft] = useState("");
+  const [modifiedNodes, setModifiedNodes] = useState([]);
+  const handleNodeEdited = useCallback((node) => {
+    setModifiedNodes((current) => [...current.filter((item) => item.id !== node.id), node]);
+  }, []);
+  const removeModifiedNode = useCallback((id) => {
+    setModifiedNodes((current) => current.filter((node) => node.id !== id));
+  }, []);
+  const clearModifiedNodes = useCallback(() => setModifiedNodes([]), []);
+  const [agentState, setAgentState] = useState({
+    ready: false,
+    running: false,
+    streamLine: "",
+    sessions: [],
+    sessionId: null,
+    chapterReviewIntensity: "medium",
+    pendingMessages: [],
+  });
   const [chatWidth, setChatWidth] = useState(getStoredChatWidth);
   const canvasRef = useRef(null);
+  const agentRef = useRef(null);
   const [works, setWorks] = useState([]);
   const [currentWorkId, setCurrentWorkId] = useState(null);
+  useEffect(() => setModifiedNodes([]), [currentWorkId]);
   const [loading, setLoading] = useState(true);
   const [worksError, setWorksError] = useState("");
   const [showWorkSelector, setShowWorkSelector] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
+  const workSelectorRef = useRef(null);
+  const userMenuRef = useRef(null);
   const [showModelConfig, setShowModelConfig] = useState(false);
+  const isAdmin = window.localStorage.getItem("novel_role") === "admin";
   const [nodeContentDiffs, setNodeContentDiffs] = useState({});
   const [agentRunning, setAgentRunning] = useState(false);
-  const insertPillRef = useRef(null);
+  const insertPillFnRef = useRef(null);
+  const pendingContextRef = useRef(null);
+  const insertPillRef = useMemo(() => ({
+    get current() {
+      return insertPillFnRef.current;
+    },
+    set current(next) {
+      insertPillFnRef.current = next;
+      if (next && pendingContextRef.current) {
+        const args = pendingContextRef.current;
+        pendingContextRef.current = null;
+        next(...args);
+      }
+    },
+  }), []);
 
   const handleAddContext = useCallback((node, selectedText) => {
-    insertPillRef.current?.(node.id, node.type, node.label, selectedText);
-  }, []);
+    const args = [node.id, node.type, node.label, selectedText];
+    if (showChat && insertPillFnRef.current) {
+      insertPillFnRef.current(...args);
+      return;
+    }
+    pendingContextRef.current = args;
+    setShowChat(true);
+  }, [showChat]);
 
-  useEffect(() => {
-    loadWorks();
-  }, []);
+  useLayoutEffect(() => {
+    if (!showChat) return;
+    const args = pendingContextRef.current;
+    if (!args || !insertPillFnRef.current) return;
+    pendingContextRef.current = null;
+    insertPillFnRef.current(...args);
+  }, [showChat]);
 
-  const loadWorks = async () => {
+  const loadWorks = useCallback(async () => {
     setWorksError("");
     try {
       const data = await fetchWorks();
@@ -83,13 +135,21 @@ export function CanvasPage() {
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    loadWorks();
+  }, [loadWorks]);
 
   const debouncedRefresh = useDebouncedRefresh(canvasRef, 300);
 
   const handleNodesUpdate = useCallback(() => {
     debouncedRefresh();
   }, [debouncedRefresh]);
+
+  const handleOpenNodeDetail = useCallback((...args) => {
+    canvasRef.current?.openNodeDetail?.(...args);
+  }, []);
 
   const handleNodeContentDiff = useCallback((nodeId, diff) => {
     setNodeContentDiffs((current) => {
@@ -120,6 +180,27 @@ export function CanvasPage() {
   useEffect(() => {
     handleNodeContentDiffsReset();
   }, [handleNodeContentDiffsReset]);
+
+  const refreshAppData = useCallback(() => Promise.all([
+    loadWorks(),
+    canvasRef.current?.refresh?.(),
+    agentRef.current?.refresh?.(),
+    handleNodeContentDiffsReset(),
+  ]), [handleNodeContentDiffsReset, loadWorks]);
+
+  useEffect(() => {
+    if (!appMode) return undefined;
+    let disposed = false;
+    let unsubscribe;
+    subscribeAppResume(refreshAppData).then((remove) => {
+      if (disposed) remove();
+      else unsubscribe = remove;
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [appMode, refreshAppData]);
 
   const handleCreateWork = async () => {
     const title = prompt("请输入作品名称：", "未命名作品");
@@ -164,6 +245,7 @@ export function CanvasPage() {
   const handleLogout = () => {
     localStorage.removeItem("novel_token");
     localStorage.removeItem("novel_user");
+    localStorage.removeItem("novel_role");
     navigate("/login", { replace: true });
   };
 
@@ -191,6 +273,48 @@ export function CanvasPage() {
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
   }, []);
+
+  useEffect(() => {
+    if (!showWorkSelector && !showUserMenu) return undefined;
+    const handlePointerDown = (event) => {
+      if (showWorkSelector && workSelectorRef.current && !workSelectorRef.current.contains(event.target)) {
+        setShowWorkSelector(false);
+      }
+      if (showUserMenu && userMenuRef.current && !userMenuRef.current.contains(event.target)) {
+        setShowUserMenu(false);
+      }
+    };
+    document.addEventListener("pointerdown", handlePointerDown);
+    return () => document.removeEventListener("pointerdown", handlePointerDown);
+  }, [showWorkSelector, showUserMenu]);
+
+  useEffect(() => {
+    if (!appMode) return undefined;
+    let disposed = false;
+    let unsubscribe;
+    const handleBack = () => {
+      if (canvasRef.current?.closeNodeDetail?.()) {
+        return;
+      }
+      if (showChat) {
+        setShowChat(false);
+        return;
+      }
+      if (showCharactersPanel) {
+        setShowCharactersPanel(false);
+        return;
+      }
+      exitNativeApp();
+    };
+    subscribeAppBack(handleBack).then((remove) => {
+      if (disposed) remove();
+      else unsubscribe = remove;
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [appMode, showChat, showCharactersPanel]);
 
   const handleChatResizeStart = useCallback((event) => {
     if (event.button !== 0) return;
@@ -238,17 +362,27 @@ export function CanvasPage() {
         </div>
       )}
       {/* Header */}
-      <header className="flex shrink-0 items-center justify-between border-b border-slate-200 px-4 py-2.5 bg-white">
+      <header
+        data-testid="canvas-page-header"
+        className={`relative z-[80] flex shrink-0 items-center justify-between border-b border-slate-200 bg-white px-4 ${
+          appMode
+            ? "pb-2.5 pt-[max(2.75rem,calc(env(safe-area-inset-top)+0.625rem))]"
+            : "py-2.5"
+        }`}
+      >
         <div className="flex items-center gap-3">
-          <div className="flex items-center gap-2">
-            <span className="text-xl">📚</span>
-            <span className="text-base font-semibold text-slate-800">小说创作画布</span>
-          </div>
-
-          <div className="h-4 w-px bg-slate-200" />
+          {!appMode && (
+            <>
+              <div className="flex items-center gap-2">
+                <span className="text-xl">📚</span>
+                <span className="text-base font-semibold text-slate-800">文灵</span>
+              </div>
+              <div className="h-4 w-px bg-slate-200" />
+            </>
+          )}
 
           {/* 作品选择器 */}
-          <div className="relative">
+          <div className="relative" ref={workSelectorRef}>
             <button
               onClick={() => setShowWorkSelector(!showWorkSelector)}
               className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100 transition-colors"
@@ -327,6 +461,14 @@ export function CanvasPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          {isAdmin && <button
+            onClick={() => navigate("/token-usage")}
+            className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 transition-colors hover:bg-indigo-100"
+            aria-label="Token 用量"
+          >
+            <Gauge className="h-4 w-4" />
+            {!appMode && <span>Token 用量</span>}
+          </button>}
           <button
             onClick={() => navigate("/research")}
             className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 transition-colors hover:bg-indigo-100"
@@ -334,7 +476,7 @@ export function CanvasPage() {
             <BookOpen className="h-4 w-4" />
             <span>小说研究</span>
           </button>
-          <div className="relative">
+          <div className="relative" ref={userMenuRef}>
             <button
               onClick={() => setShowUserMenu(!showUserMenu)}
               className="flex items-center p-1.5 rounded-lg hover:bg-gray-100 transition-colors"
@@ -344,7 +486,7 @@ export function CanvasPage() {
             </button>
             {showUserMenu && (
               <div className="absolute top-full right-0 mt-1 w-44 bg-white rounded-lg shadow-lg border border-gray-200 z-50">
-                <button
+                {isAdmin && <button
                   onClick={() => {
                     setShowUserMenu(false);
                     setShowModelConfig(true);
@@ -353,7 +495,12 @@ export function CanvasPage() {
                 >
                   <Settings className="h-4 w-4" />
                   模型配置
-                </button>
+                </button>}
+                {appMode && (
+                  <AppUpdateButton
+                    buttonClassName="w-full flex items-center gap-2 border-t border-gray-100 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                  />
+                )}
                 <button
                   onClick={handleLogout}
                   className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 rounded-b-lg border-t border-gray-100 transition-colors"
@@ -368,13 +515,13 @@ export function CanvasPage() {
       </header>
 
       {/* Main Content */}
-      <main className="flex-1 overflow-hidden flex">
+      <main className="relative flex flex-1 overflow-hidden">
         {!currentWorkId ? (
           <div className="flex-1 flex items-center justify-center bg-gray-50">
             <div className="text-center max-w-md">
               <div className="text-6xl mb-6">📖</div>
               <h2 className="text-xl font-semibold text-gray-800 mb-3">
-                欢迎使用小说创作画布
+                欢迎使用文灵
               </h2>
               <p className="text-sm text-gray-500 mb-6">
                 选择或创建一部作品，开始你的创作之旅
@@ -392,45 +539,81 @@ export function CanvasPage() {
           </div>
         ) : (
           <>
+            {appMode && !showCharactersPanel && (
+              <button
+                type="button"
+                aria-label="展开角色与设定"
+                title="展开角色与设定"
+                onClick={() => setShowCharactersPanel(true)}
+                className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.12)] backdrop-blur hover:bg-violet-50 hover:text-violet-600"
+              >
+                <Users className="h-4 w-4" />
+              </button>
+            )}
             <div className="min-w-0 flex-1 transition-all duration-300">
               <Canvas
                 key={currentWorkId}
                 ref={canvasRef}
                 workId={currentWorkId}
                 onAddContext={handleAddContext}
+                onNodeEdited={handleNodeEdited}
                 nodeContentDiffs={nodeContentDiffs}
                 onNodeContentDiffChange={handleNodeContentDiff}
                 onNodeContentDiffsRefresh={handleNodeContentDiffsReset}
                 agentRunning={agentRunning}
+                appMode={appMode}
+                charactersPanelOpen={showCharactersPanel}
+                onCharactersPanelOpenChange={setShowCharactersPanel}
               />
             </div>
-            {showChat && (
+            {(showChat || appMode) && (
               <div
-                className="relative shrink-0"
-                style={{ width: chatWidth }}
+                data-testid="agent-panel"
+                aria-hidden={!showChat}
+                className={
+                  appMode
+                    ? `z-[70] bg-white ${showChat ? "absolute inset-0" : "pointer-events-none overflow-hidden"}`
+                    : `relative shrink-0 ${showChat ? "" : "pointer-events-none overflow-hidden"}`
+                }
+                style={
+                  appMode
+                    ? (showChat ? undefined : { width: 0, height: 0, overflow: "hidden" })
+                    : { width: showChat ? chatWidth : 0 }
+                }
               >
-                <div
-                  role="separator"
-                  aria-orientation="vertical"
-                  aria-label="调整对话区域宽度"
-                  title="拖拽调整对话区域宽度"
-                  className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1 cursor-col-resize touch-none"
-                  onMouseDown={handleChatResizeStart}
-                >
-                  <div className="mx-auto h-full w-px bg-gray-200 transition-colors hover:bg-blue-400" />
-                </div>
+                {showChat && !appMode && (
+                  <div
+                    role="separator"
+                    aria-orientation="vertical"
+                    aria-label="调整对话区域宽度"
+                    title="拖拽调整对话区域宽度"
+                    className="absolute inset-y-0 left-0 z-20 w-2 -translate-x-1 cursor-col-resize touch-none"
+                    onMouseDown={handleChatResizeStart}
+                  >
+                    <div className="mx-auto h-full w-px bg-gray-200 transition-colors hover:bg-blue-400" />
+                  </div>
+                )}
                 <AgentChat
+                  ref={agentRef}
+                  appMode={appMode}
                   workId={currentWorkId}
+                  draft={agentDraft}
+                  modifiedNodes={modifiedNodes}
+                  onRemoveModifiedNode={removeModifiedNode}
+                  onModifiedNodesSent={clearModifiedNodes}
+                  onDraftChange={setAgentDraft}
                   onCollapse={() => setShowChat(false)}
                   onNodesUpdate={handleNodesUpdate}
                   onNodeContentDiff={handleNodeContentDiff}
                   onNodeContentDiffsReset={handleNodeContentDiffsReset}
+                  onOpenNodeDetail={handleOpenNodeDetail}
                   onRunningChange={setAgentRunning}
+                  onStateChange={setAgentState}
                   insertPillRef={insertPillRef}
                 />
               </div>
             )}
-            {!showChat && (
+            {!showChat && !appMode && (
               <aside className="flex w-10 shrink-0 flex-col items-center border-l border-slate-200 bg-slate-50/80 py-2">
                 <button
                   type="button"
@@ -446,6 +629,28 @@ export function CanvasPage() {
                   Agent
                 </span>
               </aside>
+            )}
+            {appMode && !showChat && (
+              <AppFloatingComposer
+                modifiedNodes={agentState.sessionId ? modifiedNodes : []}
+                onRemoveModifiedNode={removeModifiedNode}
+                draft={agentDraft}
+                onDraftChange={setAgentDraft}
+                ready={agentState.ready}
+                running={agentState.running}
+                streamLine={agentState.streamLine}
+                sessions={agentState.sessions}
+                currentSessionId={agentState.sessionId}
+                intensity={agentState.chapterReviewIntensity}
+                pendingMessages={agentState.pendingMessages}
+                agentCollapsed={!showChat}
+                onNewSession={() => agentRef.current?.newSession()}
+                onSelectSession={(session) => agentRef.current?.selectSession(session)}
+                onSend={(message) => agentRef.current?.send(message)}
+                onStop={() => agentRef.current?.stop()}
+                onIntensityChange={(value) => agentRef.current?.setIntensity(value)}
+                onExpandAgent={() => setShowChat(true)}
+              />
             )}
           </>
         )}

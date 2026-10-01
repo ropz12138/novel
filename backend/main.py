@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import init_db
 from observability import setup_langsmith
-from routers import auth, work, node, edge, supervisor, supervisor_sessions, me, character_relation, illustration, research
+from routers import app_release, auth, work, node, edge, supervisor, supervisor_sessions, me, character_relation, illustration, research, token_usage
 
 LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -65,6 +65,9 @@ app.add_middleware(
         f"http://localhost:{settings.frontend_dev_port}",
         f"http://127.0.0.1:{settings.frontend_prod_port}",
         f"http://localhost:{settings.frontend_prod_port}",
+        "http://localhost",
+        "https://localhost",
+        "capacitor://localhost",
     ],
     allow_credentials=True,
     allow_methods=["*"],
@@ -82,6 +85,8 @@ app.include_router(me.router, prefix="/api")
 app.include_router(character_relation.router, prefix="/api")
 app.include_router(illustration.router, prefix="/api")
 app.include_router(research.router, prefix="/api")
+app.include_router(app_release.router, prefix="/api")
+app.include_router(token_usage.router, prefix="/api")
 
 
 @app.post("/health")

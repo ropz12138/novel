@@ -452,7 +452,10 @@ list_user_canvas_actions = StructuredTool.from_function(
 
 
 # 导出所有查询工具
+from .node_reference_tools import create_node_references
+
 query_tools = [
+    create_node_references,
     query_nodes,
     query_edges,
     read_node_content,

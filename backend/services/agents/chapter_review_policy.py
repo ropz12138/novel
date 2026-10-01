@@ -7,11 +7,9 @@ ChapterReviewIntensity = Literal["low", "medium", "high"]
 
 
 class ChapterReviewPolicy:
-    def __init__(self, intensity: ChapterReviewIntensity = "low"):
+    def __init__(self, intensity: ChapterReviewIntensity = "medium"):
         self.intensity = intensity
         self._reviewed: set[tuple[str, str]] = set()
-        self._failed_reviews: set[str] = set()
-        self._revised_after_review: set[str] = set()
 
     def try_reserve(self, kind: str, chapter_id: str) -> bool:
         if self.intensity == "low":
@@ -24,18 +22,11 @@ class ChapterReviewPolicy:
         self._reviewed.add(key)
         return True
 
-    def record_result(self, kind: str, chapter_id: str, *, passed: bool) -> None:
-        if self.intensity == "medium" and not passed:
-            self._failed_reviews.add(chapter_id)
-
     def try_reserve_revision(self, chapter_id: str) -> bool:
-        if self.intensity != "medium" or chapter_id not in self._failed_reviews:
-            return True
-        return chapter_id not in self._revised_after_review
+        return True
 
     def record_revision(self, chapter_id: str) -> None:
-        if self.intensity == "medium" and chapter_id in self._failed_reviews:
-            self._revised_after_review.add(chapter_id)
+        return None
 
 
 current_chapter_review_policy: ContextVar[ChapterReviewPolicy | None] = ContextVar(

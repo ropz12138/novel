@@ -1,5 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { createRef } from "react";
 
 const mocks = vi.hoisted(() => ({
@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   edgesStateCall: 0,
   lastReactFlowProps: null,
   customNodeProps: [],
+  fitView: vi.fn(),
 }));
 
 vi.mock("@xyflow/react", async () => {
@@ -19,12 +20,16 @@ vi.mock("@xyflow/react", async () => {
   return {
     ReactFlow: (props) => {
       mocks.lastReactFlowProps = props;
-      return React.createElement("div", { "data-testid": "react-flow" }, props.children);
+      return React.createElement(
+        "div",
+        { "data-testid": "react-flow", className: "react-flow" },
+        props.children,
+      );
     },
     ReactFlowProvider: ({ children }) => children,
     Background: () => null,
-    Controls: () => null,
-    MiniMap: () => null,
+    Controls: () => <div data-testid="flow-controls" />,
+    MiniMap: () => <div data-testid="flow-minimap" />,
     addEdge: (edge, edges) => [...edges, edge],
     useNodesState: () => [mocks.nodes, mocks.setNodes, vi.fn()],
     useEdgesState: () => {
@@ -35,6 +40,7 @@ vi.mock("@xyflow/react", async () => {
       return [mocks.relationEdges, mocks.setRelationEdges, vi.fn()];
     },
     MarkerType: { ArrowClosed: "arrowclosed" },
+    useReactFlow: () => ({ fitView: mocks.fitView }),
   };
 });
 
@@ -477,6 +483,45 @@ describe("Canvas forwardRef", () => {
     fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
   });
 
+  it("opens a node detail by node id through the imperative handle", async () => {
+    mocks.nodes = [{
+      id: "chapter-1",
+      type: "custom",
+      position: { x: 0, y: 0 },
+      data: { type: "chapter", label: "第一章", content: "正文", extra_data: {} },
+    }];
+    fetchNodes.mockResolvedValue({
+      nodes: [{
+        id: "chapter-1",
+        type: "chapter",
+        title: "第一章",
+        content: "正文",
+        extra_data: {},
+        position_x: 0,
+        position_y: 0,
+      }],
+    });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    const ref = createRef();
+
+    render(<Canvas ref={ref} workId="w-open-detail" />);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+
+    let opened;
+    act(() => {
+      opened = ref.current.openNodeDetail("chapter-1");
+    });
+    expect(opened).toBe(true);
+    expect(ref.current.openNodeDetail("missing-node")).toBe(false);
+    act(() => {
+      expect(ref.current.openNodeDetail("chapter-1", "正文")).toBe(true);
+    });
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    expect(ref.current.openNodeDetail("chapter-1", "已删除的文字")).toBe(false);
+    expect(alert).toHaveBeenCalledWith("引用原文已变化或存在多处匹配，请让 AI 重新生成引用。");
+    alert.mockRestore();
+  });
+
   it("rejects same-level connections before they reach the server", async () => {
     // 同级顺序由 sort_order 表达，同级连线会被后端拒绝，画布应提前挡住
     const chapters = [
@@ -528,6 +573,73 @@ describe("Canvas forwardRef", () => {
     expect(typeof mocks.lastReactFlowProps.onSelectionDragStop).toBe("function");
   });
 
+  it("hides flow controls, the global minimap, and the structural-edge toggle in App mode", async () => {
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-app" appMode />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    expect(document.querySelector('[data-testid="flow-controls"]')).toBeNull();
+    expect(document.querySelector('[data-testid="flow-minimap"]')).toBeNull();
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(false);
+    expect(mocks.lastReactFlowProps.proOptions).toEqual({ hideAttribution: true });
+  });
+
+  it("collapses the characters panel when the App canvas pane is clicked", async () => {
+    const onCharactersPanelOpenChange = vi.fn();
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(
+      <Canvas
+        ref={createRef()}
+        workId="w-pane-collapse"
+        appMode
+        charactersPanelOpen
+        onCharactersPanelOpenChange={onCharactersPanelOpenChange}
+      />,
+    );
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    act(() => {
+      mocks.lastReactFlowProps.onPaneClick();
+    });
+
+    expect(onCharactersPanelOpenChange).toHaveBeenCalledWith(false);
+  });
+
+  it("does not collapse the characters panel from a web canvas pane click", async () => {
+    const onCharactersPanelOpenChange = vi.fn();
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(
+      <Canvas
+        ref={createRef()}
+        workId="w-web-pane"
+        onCharactersPanelOpenChange={onCharactersPanelOpenChange}
+      />,
+    );
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    act(() => {
+      mocks.lastReactFlowProps.onPaneClick();
+    });
+
+    expect(onCharactersPanelOpenChange).not.toHaveBeenCalled();
+  });
+
+  it("shows the structural-edge toggle on the web canvas", async () => {
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-web" />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(true);
+  });
+
   it("shows 引用此节点 when a node is right-clicked", async () => {
     const onAddContext = vi.fn();
     fetchNodes.mockResolvedValue({ nodes: [] });
@@ -549,9 +661,82 @@ describe("Canvas forwardRef", () => {
       }, flowNode);
     });
 
-    fireEvent.click(document.querySelector('button[aria-label="引用此节点"]'));
+    const quoteButton = document.querySelector('button[aria-label="引用此节点"]');
+    const mouseDown = new MouseEvent("mousedown", { bubbles: true, cancelable: true });
+    quoteButton.dispatchEvent(mouseDown);
+    expect(mouseDown.defaultPrevented).toBe(true);
+    fireEvent.click(quoteButton);
 
     expect(onAddContext).toHaveBeenCalledWith({ id: "chapter-1", ...flowNode.data });
+  });
+
+  it("shows 删除节点 beside 引用此节点 and deletes after confirm", async () => {
+    vi.stubGlobal("confirm", vi.fn(() => true));
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    deleteNode.mockResolvedValue(undefined);
+
+    render(<Canvas ref={createRef()} workId="w-node-delete-menu" />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    const flowNode = {
+      id: "chapter-1",
+      data: { type: "chapter", label: "第一章", content: "正文", sort_order: 1 },
+    };
+    act(() => {
+      mocks.lastReactFlowProps.onNodeContextMenu({
+        preventDefault: vi.fn(),
+        clientX: 120,
+        clientY: 80,
+        target: document.querySelector('[data-testid="react-flow"]'),
+      }, flowNode);
+    });
+
+    expect(document.querySelector('button[aria-label="引用此节点"]')).not.toBeNull();
+    fireEvent.click(document.querySelector('button[aria-label="删除节点"]'));
+
+    expect(window.confirm).toHaveBeenCalled();
+    await waitFor(() => expect(deleteNode).toHaveBeenCalledWith("chapter-1"));
+  });
+
+  it("opens the node menu from a long-press callback", async () => {
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-node-long-press" appMode />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    const nodeView = mocks.lastReactFlowProps.nodeTypes.custom({
+      id: "chapter-1",
+      data: { type: "chapter", label: "第一章", content: "正文" },
+    });
+    render(nodeView);
+    const { onNodeLongPress } = mocks.customNodeProps.at(-1);
+    act(() => {
+      onNodeLongPress({
+        preventDefault: vi.fn(),
+        clientX: 140,
+        clientY: 90,
+        target: document.querySelector('[data-testid="react-flow"]'),
+      }, { id: "chapter-1", data: { type: "chapter", label: "第一章", content: "正文" } });
+    });
+
+    expect(document.querySelector('button[aria-label="引用此节点"]')).not.toBeNull();
+    expect(document.querySelector('button[aria-label="删除节点"]')).not.toBeNull();
+  });
+
+  it("does not wire long-press on the web canvas", async () => {
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+
+    render(<Canvas ref={createRef()} workId="w-web-no-long-press" />);
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    render(mocks.lastReactFlowProps.nodeTypes.custom({
+      id: "chapter-1",
+      data: { type: "chapter", label: "第一章", content: "正文" },
+    }));
+    expect(mocks.customNodeProps.at(-1).onNodeLongPress).toBeUndefined();
   });
 
   it("exposes a refresh method via ref", async () => {
@@ -908,6 +1093,25 @@ describe("Canvas 可见子图接入", () => {
     });
     return mocks.lastReactFlowProps;
   };
+
+  it("shows an outline focus button on web and app", async () => {
+    await renderCanvas();
+    expect(screen.getByRole("button", { name: "定位到大纲" })).toBeTruthy();
+
+    cleanup();
+    render(<Canvas ref={createRef()} workId="w-app-outline" appMode />);
+    expect(await screen.findByRole("button", { name: "定位到大纲" })).toBeTruthy();
+  });
+
+  it("fits the canvas view to the earliest outline node", async () => {
+    await renderCanvas();
+    fireEvent.click(screen.getByRole("button", { name: "定位到大纲" }));
+    expect(mocks.fitView).toHaveBeenCalledWith({
+      nodes: [{ id: "o1" }],
+      padding: 0.35,
+      duration: 300,
+    });
+  });
 
   it("默认只把主干节点交给 ReactFlow 渲染", async () => {
     const props = await renderCanvas();

@@ -1,9 +1,10 @@
 """将 canvas supervisor_messages 记录还原为 LangChain 消息列表。"""
 from __future__ import annotations
 
+import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 
 _SKIP_TYPES_DEFAULT = frozenset({
     "requirements_todolist",
@@ -38,6 +39,21 @@ def db_message_dicts_to_langchain(
     for m in db_messages:
         role = m.get("role", "")
         meta = m.get("meta") if isinstance(m.get("meta"), dict) else {}
+
+        if meta.get("presentation_only"):
+            continue
+
+        if role == "model_assistant":
+            flush_pending_tool_calls()
+            langchain_messages.append(AIMessage(**json.loads(m["content"])))
+            continue
+
+        if role == "system":
+            flush_pending_tool_calls()
+            langchain_messages.append(SystemMessage(
+                content=m["content"], additional_kwargs={"type": meta.get("type")},
+            ))
+            continue
 
         if role == "user":
             flush_pending_tool_calls()

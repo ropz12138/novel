@@ -16,7 +16,7 @@ EXPECTED_TOOLS = {
     "load_workflow_skill", "assemble_work_context", "review_artifact_quality",
     "develop_existing_nodes", "stage_existing_chapter_draft",
     "revise_existing_chapter_draft", "humanize_chapter_draft",
-    "review_fiction_quality", "review_novel_coherence", "extract_story_memory",
+    "review_fiction_quality", "review_chapter_ai_taste", "review_novel_coherence", "extract_story_memory",
     "resolve_research_context", "apply_research_techniques",
 }
 

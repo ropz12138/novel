@@ -71,6 +71,7 @@ class AuthService:
                 "id": user.id,
                 "username": user.username,
                 "email": user.email,
+                "role": user.role,
             },
         }
 
@@ -86,6 +87,9 @@ class AuthService:
             username=username.strip(),
             email=email,
             password_hash=self._make_password_hash(password),
+            role="user",
+            primary_model=settings.default_model,
+            fallback_model="",
         )
         db.add(user)
         db.commit()
@@ -98,6 +102,7 @@ class AuthService:
                 "id": user.id,
                 "username": user.username,
                 "email": user.email,
+                "role": user.role,
             },
         }
 

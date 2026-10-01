@@ -289,9 +289,11 @@ export function accumulateNodeContentDiff(existing, incoming, currentContent) {
   const acceptedExistingHunks = getDiffBatches(existing)
     .flatMap((batch) => batch.hunks || [])
     .filter((hunk) => hunk.status === "accepted");
-  const baseline = existingOriginal != null
-    ? applyHunks(existingOriginal, acceptedExistingHunks)
-    : incomingOriginal;
+  const baseline = incoming.baseline_content != null
+    ? incoming.baseline_content
+    : existingOriginal != null
+      ? applyHunks(existingOriginal, acceptedExistingHunks)
+      : incomingOriginal;
   if (baseline != null && incomingCurrent != null) {
     const netHunks = buildContentDiffFromContents(baseline, incomingCurrent);
     return {

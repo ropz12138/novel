@@ -22,7 +22,14 @@ export function AuthGuard({ children }) {
   if (!token || isTokenExpired(token)) {
     localStorage.removeItem("novel_token");
     localStorage.removeItem("novel_user");
+    localStorage.removeItem("novel_role");
     return <Navigate to="/login" replace />;
   }
   return children;
+}
+
+export function AdminGuard({ children }) {
+  return localStorage.getItem("novel_role") === "admin"
+    ? children
+    : <Navigate to="/" replace />;
 }

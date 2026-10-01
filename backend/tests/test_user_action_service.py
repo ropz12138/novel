@@ -247,6 +247,60 @@ def test_build_section_update_only_reports_node_title(work_and_user):
     assert "非常长的修改后正文" not in section
 
 
+def test_build_section_merges_repeated_updates_on_same_node(work_and_user):
+    db, work, user = work_and_user
+    node = _make_chapter(db, work, title="第二章 尸变")
+    for _ in range(4):
+        svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=node)
+
+    section = svc.build_pending_actions_section(db, work.id)
+
+    assert section.count('我修改了「第二章 尸变」节点。') == 1
+
+
+def test_build_section_merges_same_node_even_when_not_consecutive(work_and_user):
+    db, work, user = work_and_user
+    n1 = _make_chapter(db, work, title="第二章 尸变")
+    n2 = _make_chapter(db, work, title="第三章")
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=n1)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=n2)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=n1)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=n2)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=n1)
+
+    section = svc.build_pending_actions_section(db, work.id)
+
+    assert section.count('我修改了「第二章 尸变」节点。') == 1
+    assert section.count('我修改了「第三章」节点。') == 1
+
+
+def test_build_section_keeps_latest_title_when_merging_same_node(work_and_user):
+    db, work, user = work_and_user
+    node = _make_chapter(db, work, title="旧标题")
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=node)
+    node.title = "新标题"
+    db.commit()
+    db.refresh(node)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=node)
+
+    section = svc.build_pending_actions_section(db, work.id)
+
+    assert '我修改了「新标题」节点。' in section
+    assert '我修改了「旧标题」节点。' not in section
+
+
+def test_build_section_does_not_merge_create_and_update_on_same_node(work_and_user):
+    db, work, user = work_and_user
+    node = _make_chapter(db, work, title="第二章 尸变")
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="create_node", node=node)
+    svc.record_node_action(db, work_id=work.id, user_id=user.id, action_type="update_node", node=node)
+
+    section = svc.build_pending_actions_section(db, work.id)
+
+    assert '我新增了「第二章 尸变」节点。' in section
+    assert '我修改了「第二章 尸变」节点。' in section
+
+
 def test_build_section_edge_update_guides_to_query_edges(work_and_user):
     db, work, user = work_and_user
     src = _make_chapter(db, work, title="A")

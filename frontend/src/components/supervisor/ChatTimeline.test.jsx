@@ -19,6 +19,18 @@ function renderTimeline(overrides = {}) {
 
 
 describe("ChatTimeline", () => {
+  it("opens source references only when web navigation is supplied", () => {
+    const onOpenNodeDetail = vi.fn();
+    const content = `[查看原文](/node-reference?node_id=n1&quote=${encodeURIComponent("原文")})`;
+    const props = { timeline: [{ kind: "message", id: 99, role: "assistant", content }] };
+    const view = renderTimeline({ ...props, onOpenDiffNode: onOpenNodeDetail });
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    expect(onOpenNodeDetail).toHaveBeenCalledWith("n1", "原文");
+    view.unmount();
+    renderTimeline(props);
+    expect(screen.queryByRole("link", { name: "查看原文" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
+  });
   it("renders nothing without messages, drafts, or a running request", () => {
     const { container } = renderTimeline();
     expect(container.innerHTML).toBe("");
@@ -62,6 +74,56 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("林远")).toBeDefined();
+  });
+
+  it("collapses user bubbles that exceed five lines and toggles expand/collapse", () => {
+    const longContent = Array.from({ length: 8 }, (_, i) => `第${i + 1}行足够长的内容`).join("\n");
+    const proto = HTMLElement.prototype;
+    const scrollDesc = Object.getOwnPropertyDescriptor(proto, "scrollHeight");
+    const clientDesc = Object.getOwnPropertyDescriptor(proto, "clientHeight");
+    Object.defineProperty(proto, "scrollHeight", {
+      configurable: true,
+      get() {
+        if (this.getAttribute?.("data-testid") === "user-message-body") {
+          return this.classList.contains("line-clamp-5") ? 200 : 320;
+        }
+        return scrollDesc?.get?.call(this) ?? 0;
+      },
+    });
+    Object.defineProperty(proto, "clientHeight", {
+      configurable: true,
+      get() {
+        if (this.getAttribute?.("data-testid") === "user-message-body") {
+          return this.classList.contains("line-clamp-5") ? 80 : 320;
+        }
+        return clientDesc?.get?.call(this) ?? 0;
+      },
+    });
+
+    try {
+      renderTimeline({
+        timeline: [{ kind: "message", id: 1, role: "user", content: longContent }],
+      });
+
+      const body = screen.getByTestId("user-message-body");
+      expect(body.className).toContain("line-clamp-5");
+      fireEvent.click(screen.getByRole("button", { name: "展开" }));
+      expect(body.className).not.toContain("line-clamp-5");
+      fireEvent.click(screen.getByRole("button", { name: "收起" }));
+      expect(body.className).toContain("line-clamp-5");
+    } finally {
+      if (scrollDesc) Object.defineProperty(proto, "scrollHeight", scrollDesc);
+      else delete proto.scrollHeight;
+      if (clientDesc) Object.defineProperty(proto, "clientHeight", clientDesc);
+      else delete proto.clientHeight;
+    }
+  });
+
+  it("does not show expand on short user bubbles", () => {
+    renderTimeline({
+      timeline: [{ kind: "message", id: 1, role: "user", content: "短消息" }],
+    });
+    expect(screen.queryByRole("button", { name: "展开" })).toBeNull();
   });
 
   it("hides quoted node text from user bubbles but keeps the following instruction", () => {
@@ -121,9 +183,87 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.getByText("第一章")).toBeDefined();
+    expect(screen.queryByText("旧内容")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
     fireEvent.click(screen.getByText("替换"));
     expect(screen.getByText("旧内容")).toBeDefined();
     expect(screen.getByText("新内容")).toBeDefined();
+    fireEvent.click(screen.getByRole("button", { name: "收起" }));
+    expect(screen.queryByText("旧内容")).toBeNull();
+  });
+
+  it("opens the corresponding node when a diff bubble is clicked", () => {
+    const onOpenDiffNode = vi.fn();
+    renderTimeline({
+      onOpenDiffNode,
+      timeline: [{
+        kind: "message",
+        id: 1,
+        role: "assistant",
+        content: "",
+        type: "chapter_content_diff_card",
+        chapterContentDiffCard: {
+          node_id: "chapter-1",
+          title: "第一章",
+          hunks: [],
+          summary: { paragraphs_changed: 1 },
+        },
+      }],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "打开节点详情：第一章" }));
+    expect(onOpenDiffNode).toHaveBeenCalledWith("chapter-1");
+  });
+
+  it("expands a diff without opening its node", () => {
+    const onOpenDiffNode = vi.fn();
+    renderTimeline({
+      onOpenDiffNode,
+      timeline: [{
+        kind: "message",
+        id: 1,
+        role: "assistant",
+        content: "",
+        type: "chapter_content_diff_card",
+        chapterContentDiffCard: {
+          node_id: "chapter-1",
+          title: "第一章",
+          hunks: [],
+          summary: { paragraphs_changed: 1 },
+        },
+      }],
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
+    expect(onOpenDiffNode).not.toHaveBeenCalled();
+  });
+
+  it("loads diff hunks only after expanding a summary card", () => {
+    const onExpandDiff = vi.fn();
+    renderTimeline({
+      onExpandDiff,
+      timeline: [{
+        kind: "message",
+        id: 1,
+        role: "assistant",
+        content: "",
+        dbMessageId: "diff-1",
+        type: "chapter_content_diff_card",
+        chapterContentDiffCard: {
+          title: "第二章",
+          node_type: "chapter",
+          summary: { paragraphs_changed: 2 },
+          word_count: 80,
+        },
+      }],
+    });
+
+    expect(screen.getByText("第二章")).toBeDefined();
+    expect(screen.getByText("2 处修改")).toBeDefined();
+    expect(screen.getByText("共 80 字")).toBeDefined();
+    expect(screen.queryByText("替换")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
+    expect(onExpandDiff).toHaveBeenCalledWith("diff-1");
   });
 
   it("allows a stored user message to be edited and resent", () => {
@@ -163,6 +303,24 @@ describe("ChatTimeline", () => {
     });
 
     expect(screen.queryByLabelText("编辑并重新发送")).toBeNull();
+  });
+
+  it("caps a running tool step content stream at the reasoning max height", () => {
+    renderTimeline({
+      timeline: [{
+        kind: "step",
+        id: 1,
+        label: "工具调用 · write_chapter_draft",
+        status: "running",
+        panelOpen: true,
+        reasoningStream: "先看原文",
+        stream: "很长的专职模型正文",
+      }],
+    });
+
+    const content = screen.getByText("很长的专职模型正文");
+    expect(content.className).toContain("max-h-48");
+    expect(content.className).toContain("overflow-y-auto");
   });
 
   it("renders streaming reasoning and answer content", () => {

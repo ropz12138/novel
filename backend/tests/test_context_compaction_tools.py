@@ -112,7 +112,8 @@ def test_read_node_content_blocks_compacted_node_by_default():
         db.close()
 
 
-def test_context_window_status_uses_config_and_latest_usage():
+def test_context_window_status_uses_config_and_latest_usage(monkeypatch):
+    monkeypatch.setitem(ctx_tools.settings._models, "deepseek-v4-flash", {"context_window": 512000})
     db = database.SessionLocal()
     try:
         _, work, session = _make_user_work_session(db)

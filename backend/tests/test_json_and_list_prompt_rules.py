@@ -3,7 +3,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from services.agents.supervisor import SupervisorAgent
 from services.agents.tools import specialist_agent_tools as sat
@@ -28,12 +28,16 @@ class _CapturingLLM:
     def __init__(self):
         self.system_content = ""
 
+    async def astream(self, messages, config=None, **kwargs):
+        message = await self.ainvoke(messages, config=config, **kwargs)
+        yield AIMessageChunk(content=message.content)
+
     async def ainvoke(self, messages, config=None, **kwargs):
         self.system_content = messages[0].content
         return AIMessage(content=json.dumps({
             "chapter_goal": "确认来客身份",
             "opening_carryover": "承接敲门声",
-            "emotional_progression": "戒备到怀疑",
+            "opening_state": "林川在门内，门链扣合",
             "scenes": [{
                 "order": 1,
                 "title": "开门",
@@ -42,15 +46,17 @@ class _CapturingLLM:
                 "characters": ["林川"],
                 "approximate_words": 300,
                 "beats": [{
-                    "action": "开门",
-                    "dialogue_purpose": "确认身份",
-                    "speaker_intention": "试探",
-                    "listener_reaction": "回避",
+                    "event": "来客敲门，林川开门确认身份",
+                    "character_goal": "确认来客身份",
+                    "known_information": "来客知道林川住址",
+                    "choice": "保持门链扣合并询问姓名",
+                    "consequence": "来客回避身份问题，戒备加深",
+                    "dialogue_goal": "核实身份",
                 }],
-                "emotional_shift": "戒备加深",
+                "state_change": "来客仍在门外，林川保持门链扣合",
                 "information_change": "确认来客认识自己",
             }],
-            "ending_hook": "伞上没有雨水",
+            "ending_state": "来客仍未说明身份，林川看见伞面干燥",
         }, ensure_ascii=False))
 
 
@@ -92,6 +98,32 @@ def test_invoke_json_agent_appends_full_json_output_rules(monkeypatch):
     assert "scenes、beats 必须是对象数组" in scene_plan_prompt
     assert fake.system_content == f"{scene_plan_prompt}\n\n{JSON_OUTPUT_RULES}"
     assert ILLEGAL_BODY in fake.system_content
+
+
+def test_preparation_prompts_keep_planning_separate_from_prose_realization():
+    specialists = AGENT_PROMPTS / "specialists"
+    scene_plan = (specialists / "scene_plan.txt").read_text(encoding="utf-8")
+    summary = (specialists / "summary.txt").read_text(encoding="utf-8")
+    story_memory = (specialists / "story_memory.txt").read_text(encoding="utf-8")
+
+    assert "准备层决定写什么、为什么发生以及发生后改变什么" in scene_plan
+    assert "正文层决定具体措辞、句式、修辞、心理呈现和叙述节奏" in scene_plan
+    assert "event、character_goal、known_information、choice、consequence、dialogue_goal" in scene_plan
+    assert "opening_state" in scene_plan
+    assert "state_change" in scene_plan
+    assert "ending_state" in scene_plan
+    assert "每个字段只记录一个事实单位" in scene_plan
+    assert "emotional_progression" not in scene_plan
+    assert "emotional_shift" not in scene_plan
+    assert "ending_hook" not in scene_plan
+    assert "speaker_intention" not in scene_plan
+    assert "listener_reaction" not in scene_plan
+    assert "事实台账" in summary
+    assert "事实记忆" in story_memory
+    for prompt in (scene_plan, summary, story_memory):
+        assert "小说化成句" in prompt
+        assert "解释性心理" in prompt
+        assert "修辞" in prompt
 
 
 def test_supervisor_prompt_describes_array_fields_as_object_arrays():

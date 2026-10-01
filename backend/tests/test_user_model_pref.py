@@ -52,6 +52,17 @@ def test_get_llm_null_fallback_falls_back_to_config():
     assert llm._fallback.model_name == settings.fallback_model
 
 
+def test_get_llm_empty_fallback_disables_config_fallback():
+    primary = settings.available_models[0]
+    llm = llm_mod.get_llm(
+        temperature=0.1,
+        streaming=False,
+        primary=primary,
+        fallback="",
+    )
+    assert llm._fallback is None
+
+
 # ---------- SupervisorAgent 偏好读取 ----------
 
 def test_supervisor_load_model_pref_reads_user():

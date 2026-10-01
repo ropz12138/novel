@@ -7,6 +7,7 @@ from __future__ import annotations
 import copy
 import json
 import logging
+import time
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
@@ -26,8 +27,14 @@ from services.llm.llm_tool import (
 from services.llm.llm_types import LLMModelConfig
 
 logger = logging.getLogger("llm")
+_monotonic = time.perf_counter
 
 LLMRawEventHook = Callable[[dict[str, Any]], None]
+LLM_USER_ERROR_MESSAGE = "AI额度不足，请稍后再试"
+
+
+class LLMUserFacingError(RuntimeError):
+    pass
 
 
 def resolve_openai_tool_choice(tool_choice):
@@ -35,6 +42,16 @@ def resolve_openai_tool_choice(tool_choice):
         return "auto"
     if isinstance(tool_choice, str) and tool_choice not in ("auto", "none", "required"):
         return {"type": "function", "function": {"name": tool_choice}}
+    return tool_choice
+
+
+def resolve_anthropic_tool_choice(tool_choice):
+    if tool_choice is None or tool_choice == "auto":
+        return {"type": "auto"}
+    if tool_choice == "required":
+        return {"type": "any"}
+    if isinstance(tool_choice, str):
+        return {"type": "tool", "name": tool_choice}
     return tool_choice
 
 
@@ -161,6 +178,7 @@ class OpenAILLMClient(LLMProtocolClient):
         active = client or httpx.Client(timeout=timeout_seconds)
         raw_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="complete")
         raw_log.request(url=url, payload=payload)
+        request_started_at = _monotonic()
         try:
             def retry_post(next_payload):
                 retry_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="complete_retry")
@@ -178,6 +196,13 @@ class OpenAILLMClient(LLMProtocolClient):
         finally:
             if owns:
                 active.close()
+        from services.token_usage import record_openai_usage
+        request_finished_at = _monotonic()
+        record_openai_usage(
+            self.config.name,
+            body.get("usage"),
+            request_duration_ms=round((request_finished_at - request_started_at) * 1000),
+        )
         return extract_openai_text(body)
 
     async def stream_chat(
@@ -193,6 +218,7 @@ class OpenAILLMClient(LLMProtocolClient):
             "model": self.config.model,
             "messages": self._normalize_messages(messages),
             "stream": True,
+            "stream_options": {"include_usage": True},
         }
         payload.update(copy.deepcopy(self.config.extra_body))
         if tools:
@@ -205,6 +231,9 @@ class OpenAILLMClient(LLMProtocolClient):
         owns_client = client is None
         active_client = client or httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
         pending: dict[int, dict[str, Any]] = {}
+        last_usage: dict[str, Any] | None = None
+        request_started_at = _monotonic()
+        first_output_at: float | None = None
         raw_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="stream")
         raw_log.request(url=url, payload=payload)
         try:
@@ -223,6 +252,8 @@ class OpenAILLMClient(LLMProtocolClient):
                         chunk = json.loads(data)
                     except json.JSONDecodeError as exc:
                         raise ValueError(f"SSE 行解析失败：{data[:200]}") from exc
+                    if isinstance(chunk.get("usage"), dict):
+                        last_usage = chunk["usage"]
                     choices = chunk.get("choices") or []
                     if not choices:
                         continue
@@ -231,11 +262,18 @@ class OpenAILLMClient(LLMProtocolClient):
                     finish_reason = choice.get("finish_reason") or delta.get("finish_reason")
                     text = delta.get("content")
                     if text:
+                        if first_output_at is None:
+                            first_output_at = _monotonic()
                         yield ToolStreamEvent(kind="text", text=text)
                     reasoning = delta.get("reasoning_content") or delta.get("reasoning")
                     if reasoning:
+                        if first_output_at is None:
+                            first_output_at = _monotonic()
                         yield ToolStreamEvent(kind="thinking", text=reasoning)
-                    for tc in delta.get("tool_calls") or []:
+                    tool_call_deltas = delta.get("tool_calls") or []
+                    if tool_call_deltas and first_output_at is None:
+                        first_output_at = _monotonic()
+                    for tc in tool_call_deltas:
                         idx = tc.get("index", 0)
                         slot = pending.setdefault(idx, {"id": None, "name": None, "arguments_parts": []})
                         if tc.get("id"):
@@ -249,6 +287,21 @@ class OpenAILLMClient(LLMProtocolClient):
                         for event in _finalize_openai_pending(pending):
                             yield event
             raw_log.finish()
+            request_finished_at = _monotonic()
+            from services.token_usage import record_openai_usage
+            record_openai_usage(
+                self.config.name,
+                last_usage,
+                time_to_first_token_ms=(
+                    round((first_output_at - request_started_at) * 1000)
+                    if first_output_at is not None else None
+                ),
+                generation_duration_ms=(
+                    round((request_finished_at - first_output_at) * 1000)
+                    if first_output_at is not None else None
+                ),
+                request_duration_ms=round((request_finished_at - request_started_at) * 1000),
+            )
         except Exception as exc:
             raw_log.fail(exc)
             raise
@@ -417,12 +470,7 @@ class AnthropicLLMClient(LLMProtocolClient):
             payload["system"] = system
         if tools:
             payload["tools"] = self.convert_tools(tools)
-            if tool_choice is None or tool_choice == "auto":
-                payload["tool_choice"] = {"type": "auto"}
-            elif isinstance(tool_choice, str):
-                payload["tool_choice"] = {"type": "tool", "name": tool_choice}
-            else:
-                payload["tool_choice"] = tool_choice
+            payload["tool_choice"] = resolve_anthropic_tool_choice(tool_choice)
         headers = self._anthropic_headers()
         url = self._join_url(self.config.base_url, "/messages")
         owns_client = client is None
@@ -504,25 +552,50 @@ class BaseLLMProvider(LLMProtocolClient):
             _create_protocol_client(fallback_config) if fallback_config is not None else None
         )
 
-    async def stream_chat(self, messages, *, client=None, tools=None, raw_event_hook=None, tool_choice=None):
+    async def _stream_and_log_thinking(self, protocol, model_name, messages, **kwargs):
+        parts: list[str] = []
+
+        def flush() -> None:
+            if not parts:
+                return
+            text = "".join(parts)
+            parts.clear()
+            logger.info("LLM thinking [%s] %s", model_name, text)
+
         try:
-            async for event in self.client.stream_chat(
-                messages, client=client, tools=tools, raw_event_hook=raw_event_hook, tool_choice=tool_choice
-            ):
+            async for event in protocol.stream_chat(messages, **kwargs):
+                if event.kind == "thinking" and event.text:
+                    parts.append(event.text)
+                else:
+                    flush()
+                yield event
+        except Exception:
+            flush()
+            raise
+        flush()
+
+    async def stream_chat(self, messages, *, client=None, tools=None, raw_event_hook=None, tool_choice=None):
+        kwargs = dict(client=client, tools=tools, raw_event_hook=raw_event_hook, tool_choice=tool_choice)
+        try:
+            async for event in self._stream_and_log_thinking(self.client, self.config.name, messages, **kwargs):
                 yield event
         except Exception as exc:
             if self.fallback_client is None:
-                raise
+                logger.error("LLM 流式调用最终失败", exc_info=True)
+                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from exc
             logger.warning(
                 "主模型 %s 流式对话失败，切换 fallback %s: %s",
                 self.config.name,
                 self.fallback_config.name if self.fallback_config else "fallback",
                 exc,
             )
-            async for event in self.fallback_client.stream_chat(
-                messages, client=client, tools=tools, raw_event_hook=raw_event_hook, tool_choice=tool_choice
-            ):
-                yield event
+            fallback_name = self.fallback_config.name if self.fallback_config else "fallback"
+            try:
+                async for event in self._stream_and_log_thinking(self.fallback_client, fallback_name, messages, **kwargs):
+                    yield event
+            except Exception as fallback_exc:
+                logger.error("LLM 主备模型流式调用均失败", exc_info=True)
+                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from fallback_exc
 
     def complete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
         kwargs = dict(temperature=temperature, timeout_seconds=timeout_seconds, response_format_json=response_format_json, client=client)
@@ -530,9 +603,14 @@ class BaseLLMProvider(LLMProtocolClient):
             return self.client.complete(messages, **kwargs)
         except Exception as exc:
             if self.fallback_client is None:
-                raise
+                logger.error("LLM complete 调用最终失败", exc_info=True)
+                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from exc
             logger.warning("主模型 %s complete 失败，切换 fallback %s: %s", self.config.name, self.fallback_config.name if self.fallback_config else "fallback", exc)
-            return self.fallback_client.complete(messages, **kwargs)
+            try:
+                return self.fallback_client.complete(messages, **kwargs)
+            except Exception as fallback_exc:
+                logger.error("LLM 主备模型 complete 调用均失败", exc_info=True)
+                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from fallback_exc
 
 
 def create_provider(config: LLMModelConfig, fallback_config: LLMModelConfig | None = None) -> BaseLLMProvider:

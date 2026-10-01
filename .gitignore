@@ -29,6 +29,11 @@ yarn-error.log*
 frontend/dist/
 frontend/.vite/
 frontend/*.log
+frontend/android/
+frontend/public/download
+frontend/capacitor.config.json
+deploy/novel/download
+artifacts/
 *.rdb
 
 # === Config with secrets ===

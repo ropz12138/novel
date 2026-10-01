@@ -19,6 +19,7 @@ export function authFetch(url, options = {}) {
     if (response.status === 401) {
       localStorage.removeItem("novel_token");
       localStorage.removeItem("novel_user");
+      localStorage.removeItem("novel_role");
       const base = import.meta.env.BASE_URL || "/";
       window.location.assign(`${base.replace(/\/?$/, "/")}login`);
       return Promise.reject(new Error("Unauthorized"));

@@ -53,6 +53,20 @@ describe("ModelConfigDialog", () => {
     });
   });
 
+  it("allows explicitly disabling the fallback model", async () => {
+    const onClose = vi.fn();
+    render(<ModelConfigDialog open={true} onClose={onClose} />);
+
+    const fallbackSelect = await screen.findByLabelText("备模型（主模型 429 限流时自动切换）");
+    fireEvent.change(fallbackSelect, { target: { value: "" } });
+    fireEvent.click(screen.getByText("保存"));
+
+    await waitFor(() => {
+      expect(putModelPref).toHaveBeenCalledWith({ primary: null, fallback: "" });
+      expect(onClose).toHaveBeenCalled();
+    });
+  });
+
   it("does not save when closed via cancel", async () => {
     const onClose = vi.fn();
     render(<ModelConfigDialog open={true} onClose={onClose} />);

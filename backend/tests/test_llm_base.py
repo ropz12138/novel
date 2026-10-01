@@ -1,5 +1,8 @@
 """LLM 协议基类：OpenAI SSE 解析、主备切换。"""
 import asyncio
+import logging
+
+import pytest
 
 from services.llm.llm_service import BaseLLMProvider, OpenAILLMClient
 from services.llm.llm_tool import ToolStreamEvent
@@ -121,6 +124,47 @@ def test_openai_client_assembles_tool_call_from_fragments():
     asyncio.run(_run())
 
 
+def test_base_provider_logs_full_thinking(caplog):
+    async def _run():
+        primary = _FakeProtocolClient(events=[
+            ToolStreamEvent(kind="thinking", text="The user wants "),
+            ToolStreamEvent(kind="thinking", text="to look at the first chapter."),
+            ToolStreamEvent(kind="text", text="ok"),
+        ])
+        provider = BaseLLMProvider(_cfg("glm-5.3-flash"), _client=primary)
+        with caplog.at_level(logging.INFO, logger="llm"):
+            events = [
+                ev
+                async for ev in provider.stream_chat([{"role": "user", "content": "hi"}])
+            ]
+        assert [(ev.kind, ev.text) for ev in events] == [
+            ("thinking", "The user wants "),
+            ("thinking", "to look at the first chapter."),
+            ("text", "ok"),
+        ]
+        thinking_logs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("LLM thinking")]
+        assert thinking_logs == [
+            "LLM thinking [glm-5.3-flash] The user wants to look at the first chapter.",
+        ]
+
+    asyncio.run(_run())
+
+
+def test_base_provider_logs_thinking_when_stream_ends_on_thinking(caplog):
+    async def _run():
+        primary = _FakeProtocolClient(events=[
+            ToolStreamEvent(kind="thinking", text="只思考"),
+        ])
+        provider = BaseLLMProvider(_cfg("glm-5.3-flash"), _client=primary)
+        with caplog.at_level(logging.INFO, logger="llm"):
+            async for _ev in provider.stream_chat([{"role": "user", "content": "hi"}]):
+                pass
+        thinking_logs = [r.getMessage() for r in caplog.records if r.getMessage().startswith("LLM thinking")]
+        assert thinking_logs == ["LLM thinking [glm-5.3-flash] 只思考"]
+
+    asyncio.run(_run())
+
+
 def test_base_provider_falls_back_on_stream_error():
     async def _run():
         primary = _FakeProtocolClient(exc=RuntimeError("primary down"))
@@ -141,3 +185,27 @@ def test_base_provider_falls_back_on_stream_error():
         assert fallback.calls == 1
 
     asyncio.run(_run())
+
+
+def test_base_provider_hides_llm_error_details_without_fallback():
+    async def _run():
+        provider = BaseLLMProvider(
+            _cfg("gemini"),
+            _client=_FakeProtocolClient(exc=RuntimeError("secret gateway body")),
+        )
+        with pytest.raises(RuntimeError) as caught:
+            async for _event in provider.stream_chat([{"role": "user", "content": "hi"}]):
+                pass
+        assert str(caught.value) == "AI额度不足，请稍后再试"
+        assert "secret gateway body" not in str(caught.value)
+
+    asyncio.run(_run())
+
+
+def test_base_provider_hides_complete_error_details_without_fallback():
+    provider = BaseLLMProvider(
+        _cfg("gemini"),
+        _client=_FakeProtocolClient(exc=RuntimeError("secret gateway body")),
+    )
+    with pytest.raises(RuntimeError, match="^AI额度不足，请稍后再试$"):
+        provider.complete([{"role": "user", "content": "hi"}])

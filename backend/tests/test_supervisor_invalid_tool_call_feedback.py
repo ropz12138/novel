@@ -30,7 +30,15 @@ class _RetryLLM:
                     response_metadata={"finish_reason": "tool_calls"},
                 )
             else:
-                yield AIMessageChunk(content="recovered")
+                yield AIMessageChunk(
+                    content="",
+                    tool_calls=[{
+                        "name": "respond_to_user",
+                        "args": {"message": "recovered"},
+                        "id": "call_end",
+                        "type": "tool_call",
+                    }],
+                )
 
         return _gen()
 
@@ -76,7 +84,7 @@ def test_tool_call_parse_feedback_includes_invalid_args_and_error_location():
 def test_agent_retries_after_invalid_tool_call_json(monkeypatch):
     llm = _RetryLLM()
     monkeypatch.setattr("services.agents.supervisor.get_llm", lambda **kw: llm)
-    monkeypatch.setattr("services.agents.supervisor.bind_tools_to_llm", lambda model, tools: model)
+    monkeypatch.setattr("services.agents.supervisor.bind_tools_to_llm", lambda model, tools, **kwargs: model)
 
     agent = SupervisorAgent()
     graph = agent._build_graph()
