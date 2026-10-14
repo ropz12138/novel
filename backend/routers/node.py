@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from database import get_db
 from models.node import Node
@@ -16,10 +16,22 @@ from services.agents.tools.node_tools import (
 from services import user_action_service as action_svc
 from services.node_content_write_service import write_node_content
 from services.node_content_diff_state import record_manual_change, save_decision
+from services.chapter_notes_diff_state import (
+    record_manual_change as record_manual_notes_change,
+    save_decision as save_notes_decision,
+)
 from models.node_content_diff_state import NodeContentDiffState
-from pydantic import BaseModel
+from models.chapter_notes_diff_state import ChapterNotesDiffState
+from models.chapter import Chapter
+from pydantic import BaseModel, Field
 
 router = APIRouter(tags=["nodes"])
+
+
+class AgentDiffGroup(BaseModel):
+    start_offset: int = Field(ge=0)
+    old_text: str
+    new_text: str
 
 
 class ContentDiffDecision(BaseModel):
@@ -27,6 +39,14 @@ class ContentDiffDecision(BaseModel):
     expected_baseline: str
     baseline_content: str
     current_content: str
+    groups: list[AgentDiffGroup] | None = None
+
+
+class NotesDiffDecision(BaseModel):
+    expected_notes: str
+    expected_baseline: str
+    baseline_notes: str
+    current_notes: str
 
 
 @router.get("/works/{work_id}/content-diffs")
@@ -65,9 +85,80 @@ def list_content_diffs(work_id: str, db: Session = Depends(get_db), current_user
     rows = db.query(NodeContentDiffState, Node).join(Node, Node.id == NodeContentDiffState.node_id).filter(
         NodeContentDiffState.work_id == work_id,
     ).all()
-    return [{"node_id": node.id, "original_content": state.baseline_content,
-             "current_content": node.content or ""} for state, node in rows
-            if state.baseline_content != (node.content or "")]
+    from services.node_agent_diff import get_snapshot
+    result = []
+    for state, node in rows:
+        if state.baseline_content == (node.content or ""):
+            continue
+        snapshot = get_snapshot(db, node)
+        if snapshot is not None:
+            result.append({"node_id": node.id, **snapshot})
+        else:
+            # 历史格式没有工具分组；作为一个完整旧稿/新稿对照返回。
+            from services.chapter_edit_service import build_whole_content_group
+            result.append({"node_id": node.id, "original_content": state.baseline_content,
+                           "current_content": node.content or "",
+                           **build_whole_content_group(state.baseline_content, node.content or "")})
+    return result
+
+
+@router.get("/works/{work_id}/notes-diffs")
+def list_notes_diffs(work_id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+    from models.work import CanvasWork
+    from models.session import SupervisorMessage, SupervisorSession
+    work = db.get(CanvasWork, work_id)
+    if not work or work.user_id != current_user.id:
+        raise HTTPException(status_code=404, detail="Work not found")
+    nodes = {node.id: node for node in db.query(Node).filter(Node.work_id == work_id, Node.type == "chapter").all()}
+    chapters = {chapter.node_id: chapter for chapter in db.query(Chapter).filter(Chapter.work_id == work_id).all()}
+    existing = {row.node_id for row in db.query(ChapterNotesDiffState).filter_by(work_id=work_id).all()}
+    messages = db.query(SupervisorMessage).join(
+        SupervisorSession, SupervisorMessage.session_id == SupervisorSession.id
+    ).filter(
+        SupervisorSession.work_id == work_id,
+        SupervisorMessage.role == "assistant",
+        SupervisorMessage.meta["type"].as_string() == "chapter_notes_diff_card",
+    ).order_by(
+        SupervisorMessage.created_at.desc()
+    ).all()
+    for message in messages:
+        card = (message.meta or {}).get("chapterNotesDiffCard")
+        if not card:
+            continue
+        node_id = card.get("node_id") or card.get("chapter_node_id")
+        node = nodes.get(node_id)
+        chapter = chapters.get(node_id)
+        current_notes = (chapter.notes if chapter else "") or ""
+        if node_id in existing or node is None or card.get("current_notes") != current_notes:
+            continue
+        baseline = card.get("original_notes")
+        if baseline is None:
+            continue
+        db.add(ChapterNotesDiffState(node_id=node_id, work_id=work_id, baseline_notes=baseline))
+        existing.add(node_id)
+    db.commit()
+    rows = db.query(ChapterNotesDiffState, Chapter).join(
+        Chapter, Chapter.node_id == ChapterNotesDiffState.node_id
+    ).filter(ChapterNotesDiffState.work_id == work_id).all()
+    return [{"node_id": state.node_id, "original_notes": state.baseline_notes,
+             "current_notes": chapter.notes or ""} for state, chapter in rows
+            if state.baseline_notes != (chapter.notes or "")]
+
+
+@router.put("/nodes/{node_id}/notes-diff-decision")
+def decide_notes_diff(node_id: str, data: NotesDiffDecision, db: Session = Depends(get_db),
+                      current_user: User = Depends(get_current_user)):
+    from models.work import CanvasWork
+    node = db.get(Node, node_id)
+    work = db.get(CanvasWork, node.work_id) if node else None
+    if not work or work.user_id != current_user.id or node.type != "chapter":
+        raise HTTPException(status_code=404, detail="Node not found")
+    try:
+        save_notes_decision(db, node, **data.model_dump())
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    return {"node_id": node.id, "original_notes": data.baseline_notes,
+            "current_notes": data.current_notes}
 
 
 @router.put("/nodes/{node_id}/content-diff-decision")
@@ -82,8 +173,11 @@ def decide_content_diff(node_id: str, data: ContentDiffDecision, db: Session = D
         save_decision(db, node, **data.model_dump())
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
-    return {"node_id": node.id, "original_content": data.baseline_content,
-            "current_content": data.current_content}
+    from services.node_agent_diff import get_snapshot
+    snapshot = get_snapshot(db, node)
+    return {"node_id": node.id, **snapshot} if snapshot is not None else {
+        "node_id": node.id, "original_content": data.baseline_content,
+        "current_content": data.current_content}
 
 
 @router.post("/works/{work_id}/nodes", response_model=NodeResponse, status_code=201)
@@ -129,7 +223,7 @@ def list_nodes(
     current_user: User = Depends(get_current_user),
 ):
     """获取指定作品的所有节点"""
-    nodes = db.query(Node).filter(Node.work_id == work_id).all()
+    nodes = db.query(Node).options(selectinload(Node.chapter_record)).filter(Node.work_id == work_id).all()
     return NodeListResponse(nodes=nodes, total=len(nodes))
 
 
@@ -147,8 +241,12 @@ def update_node(
 
     update_data = data.model_dump(exclude_unset=True)
     old_content = node.content or ""
+    expected_content = update_data.pop("expected_content", None)
+    if "content" in update_data and expected_content is not None and expected_content != old_content:
+        raise HTTPException(status_code=409, detail="正文已发生变化，请刷新后重试")
     proposed_scope = update_data.pop("scope", None)
     chapter_elements = update_data.pop("chapter_elements", None)
+    notes = update_data.pop("notes", None)
     characters = update_data.pop("characters", None)
     storylines = update_data.pop("storylines", None)
     new_type = update_data.get("type")
@@ -162,6 +260,15 @@ def update_node(
     node.scope = final_scope
     if "content" in update_data:
         write_node_content(db, node, update_data["content"])
+
+    old_notes = None
+    if notes is not None:
+        effective_type = new_type or node.type
+        if effective_type != "chapter":
+            raise HTTPException(status_code=400, detail="notes 只能用于 chapter 节点")
+        existing_chapter = db.query(Chapter).filter_by(node_id=node.id).first()
+        old_notes = (existing_chapter.notes if existing_chapter else "") or ""
+        write_node_content(db, node, node.content or "", summary=notes)
 
     if chapter_elements is not None:
         effective_type = new_type or node.type
@@ -194,8 +301,11 @@ def update_node(
     db.refresh(node)
     if "content" in update_data and (node.content or "") != old_content:
         record_manual_change(db, node, old_content)
+    if old_notes is not None and notes != old_notes:
+        record_manual_notes_change(db, node, old_notes)
     substantial = (
         action_svc.has_substantial_node_change(update_data)
+        or notes is not None
         or chapter_elements is not None
         or storylines is not None
     )

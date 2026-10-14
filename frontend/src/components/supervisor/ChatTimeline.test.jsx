@@ -186,8 +186,11 @@ describe("ChatTimeline", () => {
     expect(screen.queryByText("旧内容")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "展开" }));
     fireEvent.click(screen.getByText("替换"));
-    expect(screen.getByText("旧内容")).toBeDefined();
-    expect(screen.getByText("新内容")).toBeDefined();
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("新内容");
+    expect(screen.queryByTestId("inline-diff-old")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "对照" }));
+    expect(screen.getByTestId("inline-diff-old").textContent).toBe("旧内容");
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("新内容");
     fireEvent.click(screen.getByRole("button", { name: "收起" }));
     expect(screen.queryByText("旧内容")).toBeNull();
   });

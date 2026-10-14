@@ -8,6 +8,7 @@ import { getChapterReviewIntensity, putChapterReviewIntensity } from "../lib/can
 import { getLatestSupervisorSession } from "../lib/supervisorSession";
 import { useKeyboardInset } from "../lib/keyboardInset";
 import ModifiedNodeCapsules from "./ModifiedNodeCapsules";
+import SessionContextUsage from "./SessionContextUsage";
 import { attachModifiedNodes } from "../lib/modifiedNodeDraft";
 
 export function scrollTopAfterPrepend(previousTop, previousHeight, nextHeight) {
@@ -48,7 +49,7 @@ function latestStreamLine(chat) {
   return String(source).split(/\r?\n/).filter((line) => line.trim()).at(-1) || "";
 }
 
-const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftChange, modifiedNodes = [], onRemoveModifiedNode, onModifiedNodesSent, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onOpenNodeDetail, onRunningChange, onStateChange, insertPillRef, onCollapse, appMode = false }, ref) {
+const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftChange, modifiedNodes = [], onRemoveModifiedNode, onModifiedNodesSent, onNodesUpdate, onNodeContentDiff, onNodeContentDiffsReset, onNodeNotesDiff, onNodeNotesDiffsReset, onOpenNodeDetail, onRunningChange, onStateChange, insertPillRef, onCollapse, appMode = false }, ref) {
   const keyboardInset = useKeyboardInset();
   const chat = useSupervisorChat({
     workId,
@@ -57,6 +58,8 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
       onNodesUpdate: () => onNodesUpdate?.(),
       onNodeContentDiff,
       onNodeContentDiffsReset,
+      onNodeNotesDiff,
+      onNodeNotesDiffsReset,
     },
   });
 
@@ -392,7 +395,10 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
   // session 创建后刷新列表
   useEffect(() => {
     if (chat.sessionId) loadSessions();
-  }, [chat.sessionId, loadSessions]);
+    if (!chat.sessionId || !chat.running) return;
+    const timer = setInterval(loadSessions, 5000);
+    return () => clearInterval(timer);
+  }, [chat.sessionId, chat.running, loadSessions]);
 
   // 点击外部关闭下拉框
   useEffect(() => {
@@ -501,7 +507,10 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
             disabled={chat.running}
           >
             <Bot className="h-4 w-4 text-blue-500 shrink-0" />
-            <span className="truncate">{currentSessionTitle}</span>
+            <span className="flex min-w-0 flex-1 flex-col">
+              <span className="truncate">{currentSessionTitle}</span>
+              <SessionContextUsage tokens={sessions.find((s) => s.id === chat.sessionId)?.context_input_tokens} />
+            </span>
             <ChevronDown className="h-3.5 w-3.5 shrink-0 text-slate-400" />
           </button>
           <button
@@ -535,6 +544,7 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
                 >
                   <div className="min-w-0 flex-1">
                     <p className="truncate text-xs font-medium">{s.title}</p>
+                    <SessionContextUsage tokens={s.context_input_tokens} />
                     <p className="text-[10px] text-slate-400">
                       {s.updated_at ? new Date(s.updated_at).toLocaleDateString("zh-CN") : ""}
                     </p>

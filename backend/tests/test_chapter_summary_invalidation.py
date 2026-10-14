@@ -1,4 +1,4 @@
-"""章节正文变更后清空 chapters.summary — TDD。"""
+"""章节正文变更后保留章节笔记 — TDD。"""
 import importlib
 import json
 import pytest
@@ -8,7 +8,7 @@ from models.chapter import Chapter
 from models.node import Node
 from models.user import User
 from models.work import CanvasWork
-from services.chapter_history_service import clear_chapter_summary_on_content_change
+from services.node_content_write_service import write_node_content
 from routers.node import create_node as create_node_route, update_node as update_node_route
 from schemas.node import NodeCreate, NodeUpdate
 
@@ -25,7 +25,7 @@ def _make_work(db):
     return work
 
 
-def test_clear_chapter_summary_clears_existing_summary(db_session):
+def test_content_write_preserves_existing_notes(db_session):
     work = _make_work(db_session)
     node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="旧正文")
     db_session.add(node)
@@ -34,26 +34,26 @@ def test_clear_chapter_summary_clears_existing_summary(db_session):
     db_session.add(row)
     db_session.commit()
 
-    clear_chapter_summary_on_content_change(db_session, node)
+    write_node_content(db_session, node, node.content)
     db_session.commit()
     db_session.refresh(row)
 
-    assert row.summary == ""
+    assert row.notes == "旧评估摘要"
 
 
-def test_clear_chapter_summary_noop_for_non_chapter(db_session):
+def test_content_write_creates_no_chapter_row_for_other_types(db_session):
     work = _make_work(db_session)
     node = Node(sort_order=0, work_id=work.id, type="outline", title="大纲", content="内容")
     db_session.add(node)
     db_session.commit()
 
-    clear_chapter_summary_on_content_change(db_session, node)
+    write_node_content(db_session, node, node.content)
     db_session.commit()
 
     assert db_session.query(Chapter).count() == 0
 
 
-def test_update_node_content_clears_chapter_summary(db_session):
+def test_update_node_content_preserves_chapter_notes(db_session):
     work = _make_work(db_session)
     node = Node(sort_order=0, work_id=work.id, type="chapter", title="第1章", content="旧正文")
     db_session.add(node)
@@ -66,7 +66,7 @@ def test_update_node_content_clears_chapter_summary(db_session):
     assert result["success"] is True
 
     db_session.refresh(row)
-    assert row.summary == ""
+    assert row.notes == "旧摘要"
 
 
 def test_update_node_content_synchronizes_chapter_row(db_session):
@@ -84,7 +84,7 @@ def test_update_node_content_synchronizes_chapter_row(db_session):
     db_session.refresh(node)
     db_session.refresh(row)
     assert node.content == row.content == "新正文"
-    assert row.summary == ""
+    assert row.notes == "旧摘要"
 
 
 def test_frontend_node_update_uses_same_chapter_content_path(db_session):
@@ -102,7 +102,7 @@ def test_frontend_node_update_uses_same_chapter_content_path(db_session):
     db_session.refresh(node)
     db_session.refresh(row)
     assert node.content == row.content == "前端修改正文"
-    assert row.summary == ""
+    assert row.notes == "旧摘要"
 
 
 def test_agent_create_chapter_with_content_creates_chapter_row(db_session, monkeypatch):

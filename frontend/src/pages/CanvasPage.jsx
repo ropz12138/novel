@@ -6,7 +6,7 @@ import ModelConfigDialog from "../components/ModelConfigDialog";
 import AgentChat from "../components/AgentChat";
 import AppUpdateButton from "../components/AppUpdateButton";
 import AppFloatingComposer from "../components/AppFloatingComposer";
-import { fetchWorks, createWork, deleteWork, fetchContentDiffs } from "../lib/canvasApi";
+import { fetchWorks, createWork, deleteWork, fetchContentDiffs, fetchNotesDiffs } from "../lib/canvasApi";
 import { accumulateNodeContentDiff, buildContentDiffFromContents } from "../lib/inlineContentDiff";
 import { useDebouncedRefresh } from "../hooks/useDebouncedRefresh";
 import { IS_NATIVE_APP } from "../lib/runtime-config";
@@ -40,6 +40,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   const navigate = useNavigate();
   const [showChat, setShowChat] = useState(() => !appMode);
   const [showCharactersPanel, setShowCharactersPanel] = useState(() => !appMode);
+  const [nodeEditing, setNodeEditing] = useState(false);
   const [agentDraft, setAgentDraft] = useState("");
   const [modifiedNodes, setModifiedNodes] = useState([]);
   const handleNodeEdited = useCallback((node) => {
@@ -73,6 +74,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   const [showModelConfig, setShowModelConfig] = useState(false);
   const isAdmin = window.localStorage.getItem("novel_role") === "admin";
   const [nodeContentDiffs, setNodeContentDiffs] = useState({});
+  const [nodeNotesDiffs, setNodeNotesDiffs] = useState({});
   const [agentRunning, setAgentRunning] = useState(false);
   const insertPillFnRef = useRef(null);
   const pendingContextRef = useRef(null);
@@ -165,13 +167,44 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
     });
   }, []);
 
+  const handleNodeNotesDiff = useCallback((nodeId, diff) => {
+    setNodeNotesDiffs((current) => {
+      if (!diff) {
+        const next = { ...current };
+        delete next[nodeId];
+        return next;
+      }
+      if (Array.isArray(diff.batches)) {
+        return { ...current, [nodeId]: diff };
+      }
+      return { ...current, [nodeId]: accumulateNodeContentDiff(current[nodeId], diff) };
+    });
+  }, []);
+
+  const handleNodeNotesDiffsReset = useCallback(() => {
+    if (!currentWorkId) return;
+    return fetchNotesDiffs(currentWorkId).then((rows) => {
+      const restored = {};
+      for (const row of rows) {
+        const hunks = buildContentDiffFromContents(row.original_notes, row.current_notes);
+        if (hunks.length) {
+          restored[row.node_id] = accumulateNodeContentDiff(null, {
+            original_content: row.original_notes,
+            current_content: row.current_notes,
+            hunks,
+          });
+        }
+      }
+      setNodeNotesDiffs(restored);
+    }).catch((error) => console.error("Failed to restore notes diffs:", error));
+  }, [currentWorkId]);
+
   const handleNodeContentDiffsReset = useCallback(() => {
     if (!currentWorkId) return;
     return fetchContentDiffs(currentWorkId).then((rows) => {
       const restored = {};
       for (const row of rows) {
-        const hunks = buildContentDiffFromContents(row.original_content, row.current_content);
-        if (hunks.length) restored[row.node_id] = accumulateNodeContentDiff(null, { ...row, hunks });
+        if (row.hunks?.length) restored[row.node_id] = accumulateNodeContentDiff(null, row);
       }
       setNodeContentDiffs(restored);
     }).catch((error) => console.error("Failed to restore content diffs:", error));
@@ -179,14 +212,16 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
 
   useEffect(() => {
     handleNodeContentDiffsReset();
-  }, [handleNodeContentDiffsReset]);
+    handleNodeNotesDiffsReset();
+  }, [handleNodeContentDiffsReset, handleNodeNotesDiffsReset]);
 
   const refreshAppData = useCallback(() => Promise.all([
     loadWorks(),
     canvasRef.current?.refresh?.(),
     agentRef.current?.refresh?.(),
     handleNodeContentDiffsReset(),
-  ]), [handleNodeContentDiffsReset, loadWorks]);
+    handleNodeNotesDiffsReset(),
+  ]), [handleNodeContentDiffsReset, handleNodeNotesDiffsReset, loadWorks]);
 
   useEffect(() => {
     if (!appMode) return undefined;
@@ -293,11 +328,11 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
     let disposed = false;
     let unsubscribe;
     const handleBack = () => {
-      if (canvasRef.current?.closeNodeDetail?.()) {
-        return;
-      }
       if (showChat) {
         setShowChat(false);
+        return;
+      }
+      if (canvasRef.current?.closeNodeDetail?.()) {
         return;
       }
       if (showCharactersPanel) {
@@ -558,12 +593,16 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                 onAddContext={handleAddContext}
                 onNodeEdited={handleNodeEdited}
                 nodeContentDiffs={nodeContentDiffs}
+                nodeNotesDiffs={nodeNotesDiffs}
                 onNodeContentDiffChange={handleNodeContentDiff}
+                onNodeNotesDiffChange={handleNodeNotesDiff}
                 onNodeContentDiffsRefresh={handleNodeContentDiffsReset}
+                onNodeNotesDiffsRefresh={handleNodeNotesDiffsReset}
                 agentRunning={agentRunning}
                 appMode={appMode}
                 charactersPanelOpen={showCharactersPanel}
                 onCharactersPanelOpenChange={setShowCharactersPanel}
+                onNodeEditingChange={setNodeEditing}
               />
             </div>
             {(showChat || appMode) && (
@@ -594,6 +633,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                   </div>
                 )}
                 <AgentChat
+                  key={currentWorkId}
                   ref={agentRef}
                   appMode={appMode}
                   workId={currentWorkId}
@@ -606,6 +646,8 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                   onNodesUpdate={handleNodesUpdate}
                   onNodeContentDiff={handleNodeContentDiff}
                   onNodeContentDiffsReset={handleNodeContentDiffsReset}
+                  onNodeNotesDiff={handleNodeNotesDiff}
+                  onNodeNotesDiffsReset={handleNodeNotesDiffsReset}
                   onOpenNodeDetail={handleOpenNodeDetail}
                   onRunningChange={setAgentRunning}
                   onStateChange={setAgentState}
@@ -630,7 +672,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                 </span>
               </aside>
             )}
-            {appMode && !showChat && (
+            {appMode && !showChat && !nodeEditing && (
               <AppFloatingComposer
                 modifiedNodes={agentState.sessionId ? modifiedNodes : []}
                 onRemoveModifiedNode={removeModifiedNode}

@@ -8,6 +8,7 @@ class SnapshotNode(BaseModel):
     type: str
     title: str
     content: str = ""
+    notes: str | None = None
     extra_data: dict = Field(default_factory=dict)
     layer: int = 0
     sort_order: int = 0

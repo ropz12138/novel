@@ -20,7 +20,7 @@ def test_supervisor_has_direct_node_ops():
         "create_node", "update_node", "delete_node",
         "create_edge", "delete_edge", "update_edge",
         "batch_create_nodes", "batch_create_edges",
-        "evaluate_chapter", "count_chapter_words", "insert_chapter_illustration", "get_canvas_index",
+        "count_chapter_words", "insert_chapter_illustration", "get_canvas_index",
         "query_nodes", "read_node_content",
         "query_character_relations", "create_character_relation",
     ):
@@ -39,3 +39,13 @@ def test_supervisor_no_dispatch_tools():
         "edit_chapter_content",
     ):
         assert removed not in names, f"应移除 dispatch 工具: {removed}"
+
+
+def test_supervisor_uses_only_deep_agent_context_compaction_tools():
+    names = {tool.name for tool in SupervisorAgent()._get_tools()}
+
+    assert names.isdisjoint({
+        "get_context_window_status",
+        "create_context_compaction",
+        "resolve_context_source",
+    })

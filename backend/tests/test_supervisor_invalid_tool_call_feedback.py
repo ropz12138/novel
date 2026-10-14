@@ -81,25 +81,14 @@ def test_tool_call_parse_feedback_includes_invalid_args_and_error_location():
     assert "只重新调用工具" in feedback
 
 
-def test_agent_retries_after_invalid_tool_call_json(monkeypatch):
-    llm = _RetryLLM()
-    monkeypatch.setattr("services.agents.supervisor.get_llm", lambda **kw: llm)
-    monkeypatch.setattr("services.agents.supervisor.bind_tools_to_llm", lambda model, tools, **kwargs: model)
-
-    agent = SupervisorAgent()
-    graph = agent._build_graph()
-
-    async def _run():
-        result = None
-        async for event in graph.astream({"messages": [], "user_message": "hi"}):
-            if "agent" in event:
-                result = event["agent"]
-        return result
-
-    result = asyncio.run(_run())
-
-    assert len(llm.calls) == 2
-    assert result["messages"][0].content == "recovered"
-    retry_messages = llm.calls[1]
-    assert "JSONDecodeError" in retry_messages[-1].content
-    assert "batch_create_nodes" in retry_messages[-1].content
+def test_direct_writing_retry_keeps_all_calls_and_full_long_draft():
+    calls = [{
+        "name": "update_node", "id": f"bad_{i}",
+        "args": '{"content": "' + "长篇正文" * 4000 + f'第{i}章结尾"}}]',
+    } for i in range(4)]
+    message = AIMessageChunk(content="", invalid_tool_calls=calls)
+    feedback = _build_tool_call_parse_feedback(message)
+    for call in calls:
+        assert call["id"] in feedback
+        assert call["args"] in feedback
+    assert "args truncated" not in feedback

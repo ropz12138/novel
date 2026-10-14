@@ -10,7 +10,6 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
-    UniqueConstraint,
 )
 from sqlalchemy.orm import relationship
 
@@ -77,12 +76,6 @@ class ResearchJob(Base):
         back_populates="job",
         cascade="all, delete-orphan",
         order_by="ResearchInstruction.sequence",
-    )
-    context_epochs = relationship(
-        "ResearchContextEpoch",
-        back_populates="job",
-        cascade="all, delete-orphan",
-        order_by="ResearchContextEpoch.epoch_number",
     )
 
 
@@ -174,40 +167,78 @@ class ResearchInstruction(Base):
     job = relationship("ResearchJob", back_populates="instructions")
 
 
-class ResearchContextEpoch(Base):
-    """一次已提交的上下文压缩。
+class ResearchSession(Base):
+    """独立研究对话；作品通过消息引用，不在会话上绑定。"""
 
-    structured_pack_text 是下一代上下文的入口；archive_path 指向不可变的
-    完整请求归档。只有 status=active 的最新记录会被注入 Agent 快照。
-    """
-
-    __tablename__ = "research_context_epochs"
-    __table_args__ = (
-        UniqueConstraint(
-            "job_id",
-            "epoch_number",
-            name="uq_research_context_epoch_number",
-        ),
-    )
+    __tablename__ = "research_sessions"
 
     id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    job_id = Column(
-        String(36),
-        ForeignKey("research_jobs.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
+    user_id = Column(
+        String(36), ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False, index=True,
     )
-    epoch_number = Column(Integer, nullable=False)
-    status = Column(String(20), nullable=False, default="active", index=True)
-    source_event_start = Column(Integer, nullable=False, default=1)
-    compact_through_sequence = Column(Integer, nullable=False)
-    archive_path = Column(Text, nullable=False)
-    archive_sha256 = Column(String(64), nullable=False)
-    structured_pack_text = Column(Text, nullable=False)
-    rendered_context_chars = Column(Integer, nullable=False, default=0)
-    estimated_input_tokens = Column(Integer, nullable=False, default=0)
-    model_name = Column(String(200), nullable=False, default="")
-    schema_version = Column(Integer, nullable=False, default=1)
+    title = Column(String(200), nullable=False, default="新对话")
+    created_at = Column(DateTime(timezone=True), default=_utcnow)
+    updated_at = Column(DateTime(timezone=True), default=_utcnow, onupdate=_utcnow)
+
+    messages = relationship(
+        "ResearchMessage", back_populates="session", cascade="all, delete-orphan",
+        order_by="ResearchMessage.sequence",
+    )
+
+
+class ResearchMessage(Base):
+    __tablename__ = "research_messages"
+
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    session_id = Column(
+        String(36), ForeignKey("research_sessions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    role = Column(String(20), nullable=False)
+    content = Column(Text, nullable=False, default="")
+    sequence = Column(Integer, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_utcnow)
 
-    job = relationship("ResearchJob", back_populates="context_epochs")
+    session = relationship("ResearchSession", back_populates="messages")
+    work_references = relationship(
+        "ResearchMessageWorkReference", back_populates="message",
+        cascade="all, delete-orphan",
+    )
+    chapter_reference = relationship(
+        "ResearchMessageChapterReference", back_populates="message",
+        cascade="all, delete-orphan", uselist=False,
+    )
+
+
+class ResearchMessageWorkReference(Base):
+    __tablename__ = "research_message_work_references"
+
+    message_id = Column(
+        String(36), ForeignKey("research_messages.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    work_id = Column(
+        String(36), ForeignKey("research_jobs.id", ondelete="CASCADE"),
+        primary_key=True, index=True,
+    )
+
+    message = relationship("ResearchMessage", back_populates="work_references")
+    work = relationship("ResearchJob")
+
+
+class ResearchMessageChapterReference(Base):
+    __tablename__ = "research_message_chapter_references"
+
+    message_id = Column(
+        String(36), ForeignKey("research_messages.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    version_id = Column(
+        String(36), ForeignKey("research_text_versions.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    section_index = Column(Integer, nullable=False)
+
+    message = relationship("ResearchMessage", back_populates="chapter_reference")
+    version = relationship("ResearchTextVersion")

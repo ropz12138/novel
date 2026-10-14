@@ -49,7 +49,8 @@ def test_missing_sort_order_error_is_actionable():
 def test_supervisor_prompt_states_sort_order_and_forbids_same_level_edges():
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     assert "sort_order" in prompt
-    assert "同级之间禁止连线" in prompt
+    assert "使用 `create_edge` 建立父子连线" in prompt
+    assert "同级顺序使用 `sort_order`" in prompt
 
 
 def test_create_node_tool_description_requires_sort_order():

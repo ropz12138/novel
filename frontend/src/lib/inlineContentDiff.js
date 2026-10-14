@@ -1,7 +1,160 @@
 const TYPE_ORDER = { delete: 0, replace: 1, insert_after: 2 };
+import { applyAgentGroups } from "./agentContentDiff";
+
+function graphemes(value) {
+  return Array.from(value || "");
+}
+
+function tokenOperations(oldTokens, newTokens) {
+  const frontier = new Map([[1, 0]]);
+  const trace = [];
+  const maxDistance = oldTokens.length + newTokens.length;
+
+  for (let distance = 0; distance <= maxDistance; distance += 1) {
+    trace.push(new Map(frontier));
+    for (let diagonal = -distance; diagonal <= distance; diagonal += 2) {
+      const fromDelete = frontier.get(diagonal - 1) ?? Number.NEGATIVE_INFINITY;
+      const fromInsert = frontier.get(diagonal + 1) ?? Number.NEGATIVE_INFINITY;
+      let oldIndex = diagonal === -distance || (diagonal !== distance && fromDelete < fromInsert)
+        ? fromInsert
+        : fromDelete + 1;
+      let newIndex = oldIndex - diagonal;
+      while (oldIndex < oldTokens.length && newIndex < newTokens.length
+        && oldTokens[oldIndex] === newTokens[newIndex]) {
+        oldIndex += 1;
+        newIndex += 1;
+      }
+      frontier.set(diagonal, oldIndex);
+      if (oldIndex < oldTokens.length || newIndex < newTokens.length) continue;
+
+      const reversed = [];
+      let backOld = oldTokens.length;
+      let backNew = newTokens.length;
+      for (let backDistance = trace.length - 1; backDistance >= 0; backDistance -= 1) {
+        const previous = trace[backDistance];
+        const backDiagonal = backOld - backNew;
+        const previousDelete = previous.get(backDiagonal - 1) ?? Number.NEGATIVE_INFINITY;
+        const previousInsert = previous.get(backDiagonal + 1) ?? Number.NEGATIVE_INFINITY;
+        const previousDiagonal = backDiagonal === -backDistance
+          || (backDiagonal !== backDistance && previousDelete < previousInsert)
+          ? backDiagonal + 1
+          : backDiagonal - 1;
+        const previousOld = previous.get(previousDiagonal) ?? 0;
+        const previousNew = previousOld - previousDiagonal;
+
+        while (backOld > previousOld && backNew > previousNew) {
+          reversed.push({ kind: "equal", text: oldTokens[backOld - 1] });
+          backOld -= 1;
+          backNew -= 1;
+        }
+        if (backDistance === 0) break;
+        if (backOld === previousOld) {
+          reversed.push({ kind: "insert", text: newTokens[backNew - 1] });
+          backNew -= 1;
+        } else {
+          reversed.push({ kind: "delete", text: oldTokens[backOld - 1] });
+          backOld -= 1;
+        }
+      }
+      return reversed.reverse();
+    }
+  }
+  return [];
+}
+
+function alignedBoundaryMap(baselineCharacters, currentCharacters) {
+  const operations = tokenOperations(baselineCharacters, currentCharacters);
+  const boundaries = Array(currentCharacters.length + 1);
+  let baselineIndex = 0;
+  let currentIndex = 0;
+  let operationIndex = 0;
+
+  while (operationIndex < operations.length) {
+    if (operations[operationIndex].kind === "equal") {
+      boundaries[currentIndex] = baselineIndex;
+      baselineIndex += 1;
+      currentIndex += 1;
+      boundaries[currentIndex] = baselineIndex;
+      operationIndex += 1;
+      continue;
+    }
+
+    const baselineStart = baselineIndex;
+    const currentStart = currentIndex;
+    while (operationIndex < operations.length && operations[operationIndex].kind !== "equal") {
+      if (operations[operationIndex].kind === "delete") baselineIndex += 1;
+      else currentIndex += 1;
+      operationIndex += 1;
+    }
+    const baselineLength = baselineIndex - baselineStart;
+    const currentLength = currentIndex - currentStart;
+    if (currentLength === 0) {
+      boundaries[currentStart] = baselineIndex;
+      continue;
+    }
+    for (let offset = 0; offset <= currentLength; offset += 1) {
+      boundaries[currentStart + offset] = baselineStart
+        + Math.round((baselineLength * offset) / currentLength);
+    }
+  }
+
+  boundaries[0] ??= 0;
+  boundaries[currentCharacters.length] ??= baselineCharacters.length;
+  return boundaries;
+}
+
+function textEditBlocks(currentCharacters, editedCharacters) {
+  const operations = tokenOperations(currentCharacters, editedCharacters);
+  const blocks = [];
+  let currentIndex = 0;
+  let operationIndex = 0;
+
+  while (operationIndex < operations.length) {
+    if (operations[operationIndex].kind === "equal") {
+      currentIndex += 1;
+      operationIndex += 1;
+      continue;
+    }
+
+    const start = currentIndex;
+    const replacement = [];
+    while (operationIndex < operations.length && operations[operationIndex].kind !== "equal") {
+      const operation = operations[operationIndex];
+      if (operation.kind === "delete") currentIndex += 1;
+      else replacement.push(operation.text);
+      operationIndex += 1;
+    }
+    blocks.push({ start, end: currentIndex, replacement });
+  }
+  return blocks;
+}
+
+export function commitUserTextEdit(baselineText, currentText, editedText) {
+  const baselineCharacters = graphemes(baselineText);
+  const currentCharacters = graphemes(currentText);
+  const editedCharacters = graphemes(editedText);
+  const boundaries = alignedBoundaryMap(baselineCharacters, currentCharacters);
+  const blocks = textEditBlocks(currentCharacters, editedCharacters);
+
+  for (let index = blocks.length - 1; index >= 0; index -= 1) {
+    const block = blocks[index];
+    const baselineStart = boundaries[block.start];
+    const baselineEnd = boundaries[block.end];
+    baselineCharacters.splice(
+      baselineStart,
+      baselineEnd - baselineStart,
+      ...block.replacement,
+    );
+  }
+
+  return {
+    baselineText: baselineCharacters.join(""),
+    currentText: editedText,
+  };
+}
 
 export function splitParagraphs(content) {
-  const text = (content || "").trim();
+  const text = content || "";
   if (!text) return [];
   return text.split("\n\n");
 }
@@ -10,72 +163,219 @@ export function joinParagraphs(paragraphs) {
   return paragraphs.join("\n\n");
 }
 
-export function buildContentDiffFromContents(originalContent, currentContent) {
-  const oldParagraphs = splitParagraphs(originalContent);
-  const newParagraphs = splitParagraphs(currentContent);
+function comparableCharacters(text) {
+  return graphemes(text)
+    .filter((character) => /[\p{L}\p{N}]/u.test(character))
+    .map((character) => character.toLocaleLowerCase());
+}
+
+function multisetDice(left, right) {
+  if (!left.length || !right.length) return 0;
+  const counts = new Map();
+  for (const item of left) counts.set(item, (counts.get(item) || 0) + 1);
+  let overlap = 0;
+  for (const item of right) {
+    const remaining = counts.get(item) || 0;
+    if (remaining > 0) {
+      overlap += 1;
+      counts.set(item, remaining - 1);
+    }
+  }
+  return (2 * overlap) / (left.length + right.length);
+}
+
+function characterPairs(characters) {
+  const pairs = [];
+  for (let index = 1; index < characters.length; index += 1) {
+    pairs.push(`${characters[index - 1]}\u0000${characters[index]}`);
+  }
+  return pairs;
+}
+
+function paragraphFeatures(text) {
+  const characters = comparableCharacters(text);
+  return { characters, pairs: characterPairs(characters) };
+}
+
+function paragraphSimilarity(oldText, newText, oldFeatures, newFeatures) {
+  if (oldText === newText) return 1;
+  const oldCharacters = oldFeatures.characters;
+  const newCharacters = newFeatures.characters;
+  if (!oldCharacters.length || !newCharacters.length) return 0;
+  const characterScore = multisetDice(oldCharacters, newCharacters);
+  const oldPairs = oldFeatures.pairs;
+  const newPairs = newFeatures.pairs;
+  const pairScore = oldPairs.length && newPairs.length ? multisetDice(oldPairs, newPairs) : characterScore;
+  return (characterScore * 0.7) + (pairScore * 0.3);
+}
+
+function alignParagraphs(oldParagraphs, newParagraphs) {
   const rows = oldParagraphs.length + 1;
   const cols = newParagraphs.length + 1;
-  const lcs = Array.from({ length: rows }, () => Array(cols).fill(0));
+  const matrix = Array.from({ length: rows }, () => Array(cols));
+  const oldFeatures = oldParagraphs.map(paragraphFeatures);
+  const newFeatures = newParagraphs.map(paragraphFeatures);
+  matrix[0][0] = { cost: 0, operation: null };
+  for (let oldIndex = 1; oldIndex < rows; oldIndex += 1) {
+    matrix[oldIndex][0] = { cost: oldIndex, operation: "delete" };
+  }
+  for (let newIndex = 1; newIndex < cols; newIndex += 1) {
+    matrix[0][newIndex] = { cost: newIndex, operation: "insert" };
+  }
 
-  for (let i = oldParagraphs.length - 1; i >= 0; i -= 1) {
-    for (let j = newParagraphs.length - 1; j >= 0; j -= 1) {
-      lcs[i][j] = oldParagraphs[i] === newParagraphs[j]
-        ? lcs[i + 1][j + 1] + 1
-        : Math.max(lcs[i + 1][j], lcs[i][j + 1]);
+  for (let oldIndex = 1; oldIndex < rows; oldIndex += 1) {
+    for (let newIndex = 1; newIndex < cols; newIndex += 1) {
+      const oldText = oldParagraphs[oldIndex - 1];
+      const newText = newParagraphs[newIndex - 1];
+      const candidates = [];
+      if (oldText === newText) {
+        candidates.push({
+          cost: matrix[oldIndex - 1][newIndex - 1].cost,
+          operation: "equal",
+        });
+      } else {
+        const similarity = paragraphSimilarity(
+          oldText,
+          newText,
+          oldFeatures[oldIndex - 1],
+          newFeatures[newIndex - 1],
+        );
+        if (similarity >= 0.45) {
+          candidates.push({
+            cost: matrix[oldIndex - 1][newIndex - 1].cost + (2 * (1 - similarity)),
+            operation: "replace",
+          });
+        }
+      }
+      candidates.push({ cost: matrix[oldIndex][newIndex - 1].cost + 1, operation: "insert" });
+      candidates.push({ cost: matrix[oldIndex - 1][newIndex].cost + 1, operation: "delete" });
+      matrix[oldIndex][newIndex] = candidates.reduce((best, candidate) => (
+        candidate.cost < best.cost ? candidate : best
+      ));
     }
   }
 
-  const matches = [];
-  let oldIndex = 0;
-  let newIndex = 0;
-  while (oldIndex < oldParagraphs.length && newIndex < newParagraphs.length) {
-    if (oldParagraphs[oldIndex] === newParagraphs[newIndex]) {
-      matches.push([oldIndex, newIndex]);
-      oldIndex += 1;
-      newIndex += 1;
-    } else if (lcs[oldIndex + 1][newIndex] >= lcs[oldIndex][newIndex + 1]) {
-      oldIndex += 1;
+  const reversed = [];
+  let oldIndex = oldParagraphs.length;
+  let newIndex = newParagraphs.length;
+  while (oldIndex > 0 || newIndex > 0) {
+    const operation = matrix[oldIndex][newIndex].operation;
+    if (operation === "equal" || operation === "replace") {
+      reversed.push({
+        operation,
+        oldText: oldParagraphs[oldIndex - 1],
+        newText: newParagraphs[newIndex - 1],
+      });
+      oldIndex -= 1;
+      newIndex -= 1;
+    } else if (operation === "delete") {
+      reversed.push({ operation, oldText: oldParagraphs[oldIndex - 1] });
+      oldIndex -= 1;
     } else {
-      newIndex += 1;
+      reversed.push({ operation: "insert", newText: newParagraphs[newIndex - 1] });
+      newIndex -= 1;
     }
   }
-  matches.push([oldParagraphs.length, newParagraphs.length]);
+  return reversed.reverse();
+}
 
+export function buildContentDiffFromContents(originalContent, currentContent) {
+  if (originalContent === currentContent) return [];
+  const oldParagraphs = splitParagraphs(originalContent);
+  const newParagraphs = splitParagraphs(currentContent);
+  let commonPrefixLength = 0;
+  while (
+    commonPrefixLength < oldParagraphs.length
+    && commonPrefixLength < newParagraphs.length
+    && oldParagraphs[commonPrefixLength] === newParagraphs[commonPrefixLength]
+  ) {
+    commonPrefixLength += 1;
+  }
+
+  let oldChangedEnd = oldParagraphs.length;
+  let newChangedEnd = newParagraphs.length;
+  while (
+    oldChangedEnd > commonPrefixLength
+    && newChangedEnd > commonPrefixLength
+    && oldParagraphs[oldChangedEnd - 1] === newParagraphs[newChangedEnd - 1]
+  ) {
+    oldChangedEnd -= 1;
+    newChangedEnd -= 1;
+  }
+
+  const operations = alignParagraphs(
+    oldParagraphs.slice(commonPrefixLength, oldChangedEnd),
+    newParagraphs.slice(commonPrefixLength, newChangedEnd),
+  );
   const hunks = [];
-  let previousOld = 0;
-  let previousNew = 0;
-  for (const [matchedOld, matchedNew] of matches) {
-    const removed = oldParagraphs.slice(previousOld, matchedOld);
-    const added = newParagraphs.slice(previousNew, matchedNew);
-    const paired = Math.min(removed.length, added.length);
-    for (let offset = 0; offset < paired; offset += 1) {
+  let oldParagraphIndex = commonPrefixLength;
+
+  for (let index = 0; index < operations.length; index += 1) {
+    const operation = operations[index];
+    if (operation.operation === "equal") {
+      oldParagraphIndex += 1;
+    } else if (operation.operation === "replace") {
+      oldParagraphIndex += 1;
       hunks.push({
         type: "replace",
-        paragraph_index: previousOld + offset + 1,
-        old_text: removed[offset],
-        new_text: added[offset],
+        paragraph_index: oldParagraphIndex,
+        old_text: operation.oldText,
+        new_text: operation.newText,
       });
-    }
-    for (let offset = paired; offset < removed.length; offset += 1) {
+    } else if (operation.operation === "delete") {
+      oldParagraphIndex += 1;
       hunks.push({
         type: "delete",
-        paragraph_index: previousOld + offset + 1,
-        old_text: removed[offset],
+        paragraph_index: oldParagraphIndex,
+        old_text: operation.oldText,
         new_text: "",
       });
-    }
-    if (added.length > paired) {
+    } else {
+      const inserted = [operation.newText];
+      while (operations[index + 1]?.operation === "insert") {
+        index += 1;
+        inserted.push(operations[index].newText);
+      }
       hunks.push({
         type: "insert_after",
-        paragraph_index: matchedOld,
+        paragraph_index: oldParagraphIndex,
         old_text: "",
-        new_text: added.slice(paired).join("\n\n"),
+        new_text: joinParagraphs(inserted),
       });
     }
-    previousOld = matchedOld + 1;
-    previousNew = matchedNew + 1;
   }
   return hunks;
+}
+
+export function commitUserParagraphEdit(baselineContent, currentContent, paragraphIndex, nextText) {
+  const baselineParagraphs = splitParagraphs(baselineContent);
+  const currentParagraphs = splitParagraphs(currentContent);
+  const operations = alignParagraphs(baselineParagraphs, currentParagraphs);
+  const targetNewIndex = paragraphIndex - 1;
+  let oldIndex = 0;
+  let newIndex = 0;
+
+  for (const operation of operations) {
+    if (operation.operation === "delete") {
+      oldIndex += 1;
+      continue;
+    }
+    if (newIndex !== targetNewIndex) {
+      if (operation.operation !== "insert") oldIndex += 1;
+      newIndex += 1;
+      continue;
+    }
+
+    currentParagraphs[newIndex] = nextText;
+    if (operation.operation === "insert") baselineParagraphs.splice(oldIndex, 0, nextText);
+    else baselineParagraphs[oldIndex] = nextText;
+    return {
+      baselineContent: joinParagraphs(baselineParagraphs),
+      currentContent: joinParagraphs(currentParagraphs),
+    };
+  }
+
+  throw new RangeError(`Paragraph ${paragraphIndex} does not exist in current content`);
 }
 
 function summarizeContentDiff(hunks, originalContent, currentContent) {
@@ -166,6 +466,9 @@ function sortForReverse(hunks) {
 }
 
 export function applyHunks(content, hunks) {
+  if (hunks.length && hunks.every((hunk) => hunk.start_offset != null)) {
+    return applyAgentGroups(content, [...hunks].sort((a, b) => a.start_offset - b.start_offset));
+  }
   let current = splitParagraphs(content);
   for (const hunk of sortForApply(hunks)) {
     current = applySingle(current, hunk);
@@ -211,6 +514,9 @@ export function pendingHunksFromBatches(batches) {
 
 export function getDiffBatches(diff) {
   if (!diff) return [];
+  if (diff.grouping === "agent_replacements") {
+    return diff.hunks?.length ? [{ grouping: diff.grouping, original_content: diff.original_content, hunks: diff.hunks }] : [];
+  }
   if (Array.isArray(diff.batches) && diff.batches.length) return diff.batches;
   if (diff.hunks?.length) {
     return [{ original_content: diff.original_content, hunks: diff.hunks }];
@@ -276,6 +582,9 @@ export function hydrateDiffBatches(currentContent, diff) {
 
 export function accumulateNodeContentDiff(existing, incoming, currentContent) {
   if (!incoming) return null;
+  if (incoming.grouping === "agent_replacements") {
+    return { ...incoming, batches: getDiffBatches(incoming) };
+  }
   const incomingHunks = incoming.hunks || [];
   const existingBatches = getDiffBatches(existing);
 
@@ -343,12 +652,27 @@ function appliedTextOfHunk(hunk) {
   return hunk.new_text || "";
 }
 
+function indexHunksByParagraph(hunks) {
+  const edits = new Map();
+  const inserts = new Map();
+  (hunks || []).forEach((hunk, index) => {
+    const item = { hunk, index };
+    const target = (hunk.type || "replace") === "insert_after" ? inserts : edits;
+    const paragraphIndex = hunk.paragraph_index;
+    const items = target.get(paragraphIndex);
+    if (items) items.push(item);
+    else target.set(paragraphIndex, [item]);
+  });
+  return { edits, inserts };
+}
+
 function overlayBatch(slots, hunks, batchIndex) {
   const occupying = slots.filter((slot) => slot.appliedText != null);
   const nextSlots = [];
+  const hunkIndex = indexHunksByParagraph(hunks);
 
   const pushInserts = (paragraphIndex) => {
-    for (const item of hunksAt(hunks, paragraphIndex, (type) => type === "insert_after")) {
+    for (const item of hunkIndex.inserts.get(paragraphIndex) || []) {
       if (item.hunk.status === "rejected") continue;
       const appliedText = appliedTextOfHunk(item.hunk);
       if (item.hunk.status === "accepted") {
@@ -369,7 +693,7 @@ function overlayBatch(slots, hunks, batchIndex) {
 
   occupying.forEach((slot, offset) => {
     const paragraphIndex = offset + 1;
-    const edits = hunksAt(hunks, paragraphIndex, (type) => type !== "insert_after");
+    const edits = hunkIndex.edits.get(paragraphIndex) || [];
     const edit = edits[0];
 
     if (!edit) {
@@ -421,12 +745,6 @@ export function buildStackedInlineDiffBlocks(batches) {
   return slots.flatMap((slot) => slot.blocks);
 }
 
-function hunksAt(hunks, paragraphIndex, typeFilter) {
-  return hunks
-    .map((hunk, index) => ({ hunk, index }))
-    .filter(({ hunk }) => hunk.paragraph_index === paragraphIndex && typeFilter(hunk.type || "replace"));
-}
-
 function blockForSettledReplace(paragraph, hunk) {
   if (hunk.old_text === paragraph) return hunk.new_text;
   return paragraph.replace(hunk.old_text, hunk.new_text);
@@ -435,9 +753,10 @@ function blockForSettledReplace(paragraph, hunk) {
 export function buildInlineDiffBlocks(originalContent, hunks) {
   const paragraphs = splitParagraphs(originalContent);
   const blocks = [];
+  const hunkIndex = indexHunksByParagraph(hunks);
 
   const pushInserts = (paragraphIndex) => {
-    for (const item of hunksAt(hunks, paragraphIndex, (type) => type === "insert_after")) {
+    for (const item of hunkIndex.inserts.get(paragraphIndex) || []) {
       if (item.hunk.status === "rejected") continue;
       if (item.hunk.status === "accepted") {
         blocks.push({ kind: "paragraph", text: item.hunk.new_text });
@@ -451,7 +770,7 @@ export function buildInlineDiffBlocks(originalContent, hunks) {
 
   paragraphs.forEach((paragraph, offset) => {
     const paragraphIndex = offset + 1;
-    const edits = hunksAt(hunks, paragraphIndex, (type) => type !== "insert_after");
+    const edits = hunkIndex.edits.get(paragraphIndex) || [];
     const edit = edits[0];
 
     if (!edit) {

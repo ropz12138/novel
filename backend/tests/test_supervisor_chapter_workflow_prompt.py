@@ -46,34 +46,26 @@ def test_prompt_keeps_workflow():
     assert "2500–3500 字" not in PROMPT
     assert "`write_chapter`" not in PROMPT
     assert "`edit_chapter_content`" not in PROMPT
-    assert "尚无章节则传 `parent_node_id`" in PROMPT
-    assert "由该工具创建空章节并建立 plot→chapter 的 contains 连线" in PROMPT
-    assert "`prepare_chapter_from_scene_plan`" in PROMPT
-    assert "先调用 `decide_chapter_revision`" in PROMPT
+    assert "新章用 `create_node`" in PROMPT
+    assert "所属 plot" in PROMPT
+    assert "`chapter_elements`" in PROMPT
+    assert "`save_chapter_notes`" in PROMPT
+    assert "`save_workflow_record`" not in PROMPT
+    assert "`read_workflow_records`" not in PROMPT
 
 
 def test_prompt_limits_word_count_adjustment_to_two_attempts():
     assert "针对字数的调整，每次执行最多两次" in PROMPT
-    assert "两次之后仍未达到目标字数，停止继续删改" in PROMPT
+    assert "达到次数后说明当前字数与目标差距" in PROMPT
 
 
-def test_write_chapter_skill_routes_each_revision_through_strategy_decision():
-    skill = (
-        Path(__file__).resolve().parents[1]
-        / "services/agents/skills/write-chapter/SKILL.md"
-    ).read_text(encoding="utf-8")
-
-    for tool_name in (
-        "decide_chapter_revision", "replan_chapter_scenes",
-        "rewrite_chapter_draft", "edit_chapter_draft_locally",
-    ):
-        assert f"`{tool_name}`" in skill
-    assert "Supervisor 阅读评审建议和证据" in skill
-    assert "每个评审工具最多调用一次" in skill
-    assert "评审次数不限" in skill
-    assert "85%" not in skill
-    assert "115%" not in skill
-    assert "不要自动循环压缩篇幅" in skill
+def test_prompt_analyzes_requests_and_offers_meaningful_choices():
+    assert "## 需求分析与方案选择" in PROMPT
+    assert "先提炼用户真正想获得的结果" in PROMPT
+    assert "提供 2—3 个可执行方案" in PROMPT
+    assert "明确推荐其中一个方案" in PROMPT
+    assert "等待用户选择后执行" in PROMPT
+    assert "执行路径已经明确" in PROMPT
 
 
 def test_revise_chapter_skill_does_not_force_word_count_loop():
@@ -83,11 +75,12 @@ def test_revise_chapter_skill_does_not_force_word_count_loop():
     ).read_text(encoding="utf-8")
 
     assert "`count_chapter_words`" in skill
-    assert "`decide_chapter_revision`" in skill
-    assert "`edit_chapter_draft_locally`" in skill
+    assert "`chapter_revision_decision.txt`" in skill
+    assert "`chapter_local_edit.txt`" in skill
+    assert 'run_writing_agent(operation="revise"' in skill
     assert "85%" not in skill
     assert "115%" not in skill
-    assert "不要自动循环压缩篇幅" in skill
+    assert "每次任务最多两次篇幅修改" in skill
 
 
 def test_removed_operational_rules_are_available_from_registered_tools():
@@ -109,26 +102,14 @@ def test_removed_operational_rules_are_available_from_registered_tools():
     assert "write_todolist" not in tools
     assert "先 read_node_content" in tools["insert_chapter_illustration"].description
     assert "final_report" in tools["list_research_artifacts"].description
-    assert "[C1]" in tools["create_context_compaction"].description
-    assert "[C...]" in tools["resolve_context_source"].description
 
 
 def test_prompt_requires_brief_final_user_reply():
     assert "给用户的最终回答必须简略" in PROMPT
     assert "控制在几句话以内" in PROMPT
-    assert "不要复述章节正文" in PROMPT
+    assert "正文与过程记录通过工具保存" in PROMPT
     assert "场景规划" in PROMPT
-    assert "评审意见" in PROMPT
-
-
-def test_prompt_requires_dedicated_plot_markers_and_post_write_review():
-    assert "`[[PLOT]]正文中已有的连续原文[[/PLOT]]`" in PROMPT
-    assert "Markdown 的 `**...**` 仅表示普通粗体" in PROMPT
-    assert "必须调用 `read_node_content` 重新读取已保存的整章正文" in PROMPT
-    assert "高亮采用正文中已经存在的连续原文" in PROMPT
-    assert "高亮的数量和长度由剧情表达需要决定" in PROMPT
-    assert "微型章节梗概" not in PROMPT
-    assert "`plot_highlight_validation`" not in PROMPT
+    assert "评审证据" in PROMPT
 
 
 def test_prompt_leaves_layout_to_frontend():
@@ -143,14 +124,13 @@ def test_prompt_leaves_layout_to_frontend():
 
 def test_prompt_explains_how_to_use_research_artifacts():
     assert "研究成果只提供写作方法参考" in PROMPT
-    assert "不得把参考小说的人名" in PROMPT
+    assert "当前作品的角色、设定和正文是创作事实依据" in PROMPT
 
 
 def test_prompt_requires_active_note_maintenance():
     assert "## 笔记维护" in PROMPT
-    assert "`get_canvas_index`" in PROMPT
-    assert 'type="note"' in PROMPT
-    assert "不得只把需求留在对话里" in PROMPT
+    assert "自动完整注入" in PROMPT
+    assert "完整可执行条目" in PROMPT
     assert "同一主题只维护一个笔记节点" in PROMPT
     assert "回读" in PROMPT
     skill = (
@@ -160,7 +140,7 @@ def test_prompt_requires_active_note_maintenance():
     assert "`note`" in skill
     architect = (
         Path(__file__).resolve().parents[1]
-        / "services/agents/prompts/specialists/premise_architect.txt"
+        / "services/agents/skills/references/premise_architect.txt"
     ).read_text(encoding="utf-8")
     assert "`note`" in architect
     assert "用户提出的需求" in architect
@@ -174,7 +154,7 @@ def _chapter_writer_shared_rules(writer: str) -> str:
 
 
 def test_prose_writing_prompts_share_chapter_writer_style_rules():
-    specialists = Path(__file__).resolve().parents[1] / "services/agents/prompts/specialists"
+    specialists = Path(__file__).resolve().parents[1] / "services/agents/skills/references"
     writer = (specialists / "chapter_writer.txt").read_text(encoding="utf-8")
     shared = _chapter_writer_shared_rules(writer)
     assert "# 十、避免孤立状态句与伪镜头式短句" in shared
@@ -193,11 +173,11 @@ def test_prose_writing_prompts_share_chapter_writer_style_rules():
 
 
 def test_writing_prompts_require_character_pov_analysis():
-    specialists = Path(__file__).resolve().parents[1] / "services/agents/prompts/specialists"
-    required = "必须先站在该角色的角度，结合其性格与当时的处境"
+    specialists = Path(__file__).resolve().parents[1] / "services/agents/skills/references"
+    required = "先站在角色的角度，结合其性格与当时处境"
     dialogue_review = (specialists / "dialogue_review.txt").read_text(encoding="utf-8")
     assert required in dialogue_review
-    assert "禁止用作者旁白代替角色本人的取舍" in dialogue_review
+    assert "分析他此刻知道什么、要什么、会如何选择" in dialogue_review
 
     scene_plan = (specialists / "scene_plan.txt").read_text(encoding="utf-8")
     assert "character_goal、known_information、choice、consequence" in scene_plan
@@ -219,7 +199,16 @@ def test_writing_prompts_require_character_pov_analysis():
 def test_chapter_writer_treats_scene_plan_as_facts_instead_of_draft_prose():
     prompt = (
         Path(__file__).resolve().parents[1]
-        / "services/agents/prompts/specialists/chapter_writer.txt"
+        / "services/agents/skills/references/chapter_writer.txt"
     ).read_text(encoding="utf-8")
     assert "场景计划提供的是事实、目标、选择、后果和信息变化" in prompt
     assert "根据现场语境独立完成具体措辞、句式、心理呈现和叙述节奏" in prompt
+
+
+def test_supervisor_delegates_writing_and_reads_back():
+    assert "必须调用 `read_node_content` 重新读取已保存的整章正文" in PROMPT
+    assert 'mode="replace"' in PROMPT
+    assert 'mode="overwrite"' in PROMPT
+    assert "Writer 子 Agent" in PROMPT
+    assert "character_knowledge" in PROMPT
+    assert "run_writing_agent" in PROMPT

@@ -6,6 +6,7 @@ from models.session import SupervisorMessage
 HISTORY_PAGE_VISIBLE_LIMIT = 40
 VISIBLE_ROLES = frozenset({"user", "assistant", "tool_call"})
 DIFF_CARD_OMIT = ("hunks", "original_content", "current_content", "baseline_content")
+NOTES_DIFF_CARD_OMIT = ("hunks", "original_notes", "current_notes", "baseline_notes")
 TOOL_CALL_META_KEYS = ("success", "tool_call_id")
 
 
@@ -37,6 +38,11 @@ def slim_history_message(message: dict) -> dict:
         for key in DIFF_CARD_OMIT:
             card.pop(key, None)
         meta["chapterContentDiffCard"] = card
+    elif meta.get("type") == "chapter_notes_diff_card":
+        card = dict(meta.get("chapterNotesDiffCard") or {})
+        for key in NOTES_DIFF_CARD_OMIT:
+            card.pop(key, None)
+        meta["chapterNotesDiffCard"] = card
     slimmed = dict(message)
     slimmed["meta"] = meta
     return slimmed
@@ -76,9 +82,12 @@ def get_diff_hunks(session_id: str, message_id: str) -> dict | None:
         if message is None or message.session_id != session_id:
             return None
         meta = message.meta or {}
-        if meta.get("type") != "chapter_content_diff_card":
+        if meta.get("type") == "chapter_content_diff_card":
+            card = meta.get("chapterContentDiffCard") or {}
+        elif meta.get("type") == "chapter_notes_diff_card":
+            card = meta.get("chapterNotesDiffCard") or {}
+        else:
             return None
-        card = meta.get("chapterContentDiffCard") or {}
         return {"hunks": card.get("hunks") or []}
     finally:
         db.close()

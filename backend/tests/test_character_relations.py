@@ -84,7 +84,7 @@ def test_validate_relation_type_accepts_natural_language():
 
 def test_validate_edge_endpoints_rejects_character_to_character():
     assert validate_edge_endpoints("character", "character", "minor", "major") is not None
-    assert "character_relations" in validate_edge_endpoints("character", "character", "minor", "major")
+    assert "角色不是画布连线端点" in validate_edge_endpoints("character", "character", "minor", "major")
 
 
 # ---------- HTTP API ----------

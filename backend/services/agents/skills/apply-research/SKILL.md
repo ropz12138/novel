@@ -1,21 +1,20 @@
 ---
 name: apply-research
-description: 将已有小说研究成果转化为当前作品可用的写作技法约束，并保留来源和作品隔离边界。
+description: Supervisor 将研究全文转化为当前作品可用技法。
 ---
 
 # 应用研究成果
 
+本技能由 Supervisor 亲自执行。参考规则通过 `read_skill_reference` 按阶段完整加载，工具仅负责读取与保存。
+参考文件中的结构化输出格式用于组织工作记录；章节正文创作交给 `run_writing_agent`，其他节点使用节点工具保存，用户回复使用 `respond_to_user`。
+
 ## 完成标准
 
-- 使用完整研究成果正文，来源 ID 可追踪。
-- 产物明确适用环节、可借鉴技法和当前作品中的实现方式。
-- 技法只迁移方法，保持当前作品事实。
+来源可追踪，应用建议明确，迁移写作方法并保持本作品事实。
 
 ## 执行流程
 
-1. 先列出并选择与任务直接相关的研究成果。
-2. `resolve_research_context` 按成果 ID 读取全文并保存研究上下文产物。
-3. `assemble_work_context` 装配当前作品完整资料。
-4. `apply_research_techniques` 生成技法应用产物。
-5. `review_artifact_quality` 检查来源、作品隔离和可执行性。
-6. 将通过的技法产物作为后续规划、写作或修订 Agent 的输入；独立调用时只汇报技法建议。
+1. 用 `list_research_artifacts` 找出相关成果，`read_research_artifacts` 读取完整正文及来源 ID。
+2. 读取当前作品相关节点和用户笔记，完整加载 `research_application.txt`。
+3. 亲自分析适用环节、可借鉴方法及本作品中的具体实现；核对角色与设定均来自当前作品。
+4. 在回复中给出完整建议与来源 ID。只要求分析时报告结论；要求实际创作时加载对应技能并执行节点编辑。

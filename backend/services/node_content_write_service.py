@@ -14,4 +14,6 @@ def write_node_content(db, node, content: str, *, summary: str | None = None) ->
         db.add(chapter)
     chapter.title = node.title
     chapter.content = content
-    chapter.summary = summary if summary is not None else ""
+    # 正文变化保留作者要求和设计；Supervisor 回读后同步事实部分。
+    if summary is not None:
+        chapter.notes = summary

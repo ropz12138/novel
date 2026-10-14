@@ -47,6 +47,31 @@ const { sessionApi } = await import("../lib/api");
 
 
 describe("useSupervisorChat", () => {
+  it("disconnects the old stream on unmount without stopping the backend task", async () => {
+    const abort = vi.spyOn(AbortController.prototype, "abort");
+    const { result, unmount } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    await act(async () => { result.current.handleSend("写第一章", "medium"); });
+    unmount();
+    expect(abort).toHaveBeenCalledTimes(1);
+    expect(sessionApi.stopSupervisor).not.toHaveBeenCalled();
+    abort.mockRestore();
+  });
+
+  it("ignores old history arriving after leaving a work", async () => {
+    let resolveHistory;
+    sessionApi.getSupervisorMessages.mockReturnValueOnce(new Promise((resolve) => { resolveHistory = resolve; }));
+    const onNodeContentDiffsReset = vi.fn();
+    const { result, unmount } = renderHook(() => useSupervisorChat({
+      workId: "w1", callbacks: { onNodeContentDiffsReset },
+    }));
+    let loading;
+    act(() => { loading = result.current.handleSelectSession({ id: "s1", status: "running" }); });
+    unmount();
+    await act(async () => { resolveHistory({ messages: [], has_more: false }); await loading; });
+    expect(onNodeContentDiffsReset).not.toHaveBeenCalled();
+    expect(sessionApi.getSupervisor).not.toHaveBeenCalled();
+  });
+
   it("submits while running and displays only the backend queue", async () => {
     const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
     act(() => {
@@ -136,6 +161,7 @@ describe("useSupervisorChat", () => {
     const resumeRequest = authFetchCalls.find(([url]) => url === "/api/supervisor/stream");
     expect(JSON.parse(resumeRequest[1].body)).toEqual({
       session_id: "session-1",
+      after_seq: 0,
     });
   });
 
@@ -605,6 +631,8 @@ describe("useSupervisorChat", () => {
         chapter_node_id: "chapter-1",
         title: "第一章",
         diff: { hunks: [{ type: "replace" }], summary: { modified: 1 } },
+        node_diff: { grouping: "agent_replacements", original_content: "旧", current_content: "新",
+          hunks: [{ type: "replace" }] },
         word_count: 1200,
         word_count_delta: 10,
       });
@@ -627,10 +655,52 @@ describe("useSupervisorChat", () => {
     }));
   });
 
+  it("handles chapter notes diffs like chapter body diffs", () => {
+    const onNodeNotesDiff = vi.fn();
+    const { result } = renderHook(() =>
+      useSupervisorChat({
+        workId: "w1",
+        callbacks: { onNodeNotesDiff },
+      }),
+    );
+
+    act(() => {
+      result.current._testOnSSE("chapter_notes_diff", {
+        chapter_node_id: "chapter-1",
+        title: "第一章",
+        original_notes: "事实：旧。",
+        current_notes: "事实：新。",
+        diff: {
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "事实：旧。", new_text: "事实：新。" }],
+          summary: { paragraphs_changed: 1 },
+        },
+      });
+    });
+
+    expect(result.current.timeline.at(-1)).toMatchObject({
+      type: "chapter_notes_diff_card",
+      chapterNotesDiffCard: {
+        chapter_node_id: "chapter-1",
+        original_notes: "事实：旧。",
+        current_notes: "事实：新。",
+      },
+    });
+    expect(onNodeNotesDiff).toHaveBeenCalledWith("chapter-1", expect.objectContaining({
+      original_content: "事实：旧。",
+      current_content: "事实：新。",
+    }));
+  });
+
   it("shows a streamed diff immediately when event and data arrive in separate reads", async () => {
     streamChunks = [
       "event: chapter_edit_diff\n",
-      'data: {"chapter_node_id":"chapter-live","node_type":"chapter","title":"第一章","baseline_content":"更早的正文","original_content":"旧文","current_content":"新文","diff":{"hunks":[{"type":"replace","paragraph_index":1,"old_text":"旧文","new_text":"新文"}]}}\n\n',
+      `data: ${JSON.stringify({
+        chapter_node_id: "chapter-live", node_type: "chapter", title: "第一章",
+        original_content: "旧文", current_content: "新文",
+        diff: { hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧文", new_text: "新文" }] },
+        node_diff: { grouping: "agent_replacements", original_content: "更早的正文", current_content: "新文",
+          hunks: [{ type: "replace", start_offset: 0, old_text: "更早的正文", new_text: "新文" }] },
+      })}\n\n`,
     ];
     const onNodeContentDiff = vi.fn();
     const { result } = renderHook(() => useSupervisorChat({
@@ -642,11 +712,11 @@ describe("useSupervisorChat", () => {
       expect.objectContaining({ type: "chapter_content_diff_card" }),
     ])));
     expect(onNodeContentDiff).toHaveBeenCalledWith("chapter-live", expect.objectContaining({
-      baseline_content: "更早的正文", original_content: "旧文", current_content: "新文",
+      grouping: "agent_replacements", original_content: "更早的正文", current_content: "新文",
     }));
   });
 
-  it("streams a read-only node content diff preview", () => {
+  it("waits for submitted agent groups instead of inferring a streaming diff", () => {
     const onNodeContentDiff = vi.fn();
     const { result } = renderHook(() => useSupervisorChat({
       workId: "w1",
@@ -668,12 +738,7 @@ describe("useSupervisorChat", () => {
       });
     });
 
-    expect(onNodeContentDiff).toHaveBeenLastCalledWith("chapter-1", expect.objectContaining({
-      preview: true,
-      original_content: "旧文",
-      current_content: "新文",
-      hunks: [expect.objectContaining({ type: "replace", old_text: "旧文", new_text: "新文" })],
-    }));
+    expect(onNodeContentDiff).not.toHaveBeenCalled();
     expect(result.current.timeline).toEqual([]);
   });
 

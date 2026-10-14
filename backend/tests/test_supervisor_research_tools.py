@@ -89,7 +89,9 @@ def test_list_research_artifacts_only_returns_current_users_results(monkeypatch)
         assert result["total"] == 1
         assert result["artifacts"][0]["id"] == owner_artifact.id
         assert result["artifacts"][0]["source_filename"] == "参考小说.txt"
-        assert "信息差" in result["artifacts"][0]["content_preview"]
+        assert result["artifacts"][0]["has_content"] is True
+        assert "content" not in result["artifacts"][0]
+        assert "content_preview" not in result["artifacts"][0]
     finally:
         db.close()
 

@@ -93,6 +93,7 @@ describe("toCanvasSnapshot", () => {
           type: "chapter",
           label: "第一章",
           content: "正文",
+          notes: "摘要与作者要求",
           extra_data: { a: 1 },
           layer: 2,
           sort_order: 3,
@@ -112,6 +113,7 @@ describe("toCanvasSnapshot", () => {
         type: "chapter",
         title: "第一章",
         content: "正文",
+          notes: "摘要与作者要求",
         extra_data: { a: 1 },
         layer: 2,
         sort_order: 3,
@@ -417,6 +419,12 @@ describe("applyNodeUpdateToData", () => {
     expect(next.extra_data).toEqual({ a: 1 });
   });
 
+  it("updates chapter notes in local node data", () => {
+    const prev = { label: "第一章", content: "正文", notes: "旧笔记", extra_data: {} };
+    const next = applyNodeUpdateToData(prev, { notes: "## 新笔记" });
+    expect(next.notes).toBe("## 新笔记");
+  });
+
   it("merges chapter_elements into extra_data preserving other fields", () => {
     const prev = {
       label: "x",
@@ -584,6 +592,7 @@ describe("Canvas forwardRef", () => {
     expect(document.querySelector('[data-testid="flow-minimap"]')).toBeNull();
     expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(false);
     expect(mocks.lastReactFlowProps.proOptions).toEqual({ hideAttribution: true });
+    expect(mocks.lastReactFlowProps.onlyRenderVisibleElements).toBe(true);
   });
 
   it("collapses the characters panel when the App canvas pane is clicked", async () => {

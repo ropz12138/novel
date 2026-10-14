@@ -22,6 +22,7 @@ PERSISTABLE_TODO_EVENTS = frozenset({
 PERSISTABLE_DIFF_EVENTS = frozenset({
     "chapter_edit_diff",
     "node_content_diff",
+    "chapter_notes_diff",
 })
 
 
@@ -95,6 +96,7 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                         "title": data.get("title", ""),
                         "hunks": diff.get("hunks", []),
                         "summary": diff.get("summary", {}),
+                        "grouping": diff.get("grouping"),
                         "baseline_content": data.get("baseline_content"),
                         "original_content": data.get("original_content"),
                         "current_content": data.get("current_content"),
@@ -102,6 +104,47 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                         "text_count_delta": data.get("text_count_delta"),
                         "word_count": data.get("word_count", 0),
                         "word_count_delta": data.get("word_count_delta", 0),
+                    },
+                },
+            )
+        )
+        db.commit()
+        return True
+
+    if event == "chapter_notes_diff":
+        from models.node import Node
+        from services.chapter_notes_diff_state import record_agent_change
+        source_node = db.get(Node, data.get("node_id") or data.get("chapter_node_id"))
+        if source_node is not None and data.get("original_notes") is not None:
+            record_agent_change(db, source_node, data["original_notes"])
+            from models.chapter_notes_diff_state import ChapterNotesDiffState
+            state = db.get(ChapterNotesDiffState, source_node.id)
+            if state is not None:
+                data["baseline_notes"] = state.baseline_notes
+        diff = data.get("diff") or {}
+        node_id = data.get("node_id") or data.get("chapter_node_id") or ""
+        db.add(
+            SupervisorMessage(
+                id=str(uuid.uuid4()),
+                session_id=session_id,
+                role="assistant",
+                content="",
+                work_id=sess.work_id,
+                sort_order=_next_sort_order(db, session_id),
+                meta={
+                    "type": "chapter_notes_diff_card",
+                    "chapterNotesDiffCard": {
+                        "node_id": node_id,
+                        "chapter_node_id": data.get("chapter_node_id") or node_id,
+                        "node_type": data.get("node_type", "chapter"),
+                        "title": data.get("title", ""),
+                        "hunks": diff.get("hunks", []),
+                        "summary": diff.get("summary", {}),
+                        "baseline_notes": data.get("baseline_notes"),
+                        "original_notes": data.get("original_notes"),
+                        "current_notes": data.get("current_notes"),
+                        "notes_count": data.get("notes_count", 0),
+                        "notes_count_delta": data.get("notes_count_delta", 0),
                     },
                 },
             )

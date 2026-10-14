@@ -29,7 +29,6 @@ class _RunStream:
     sealed: list[_StoredEvent] = field(default_factory=list)
     pending: list[_StoredEvent] = field(default_factory=list)
     subscribers: list[_Subscriber] = field(default_factory=list)
-    resume_after_seq: int = 0
     done: bool = False
 
 
@@ -118,17 +117,17 @@ class SupervisorStreamBroker:
             "pending_events": len(stream.pending),
         }
 
-    async def subscribe(self, session_id: str) -> AsyncIterator[tuple[str, dict]]:
+    async def subscribe(self, session_id: str, *, after_seq: int = 0) -> AsyncIterator[tuple[str, dict]]:
         stream = self._streams.get(session_id)
         if stream is None:
             return
         queue: asyncio.Queue = asyncio.Queue()
-        subscriber = _Subscriber(queue=queue, last_sent_seq=stream.resume_after_seq)
+        subscriber = _Subscriber(queue=queue, last_sent_seq=after_seq)
 
         for stored in stream.sealed:
-            if stored.end_seq > stream.resume_after_seq:
+            if stored.end_seq > after_seq:
                 queue.put_nowait((stored.end_seq, stored.event, dict(stored.data)))
-        pending = [item for item in stream.pending if item.end_seq > stream.resume_after_seq]
+        pending = [item for item in stream.pending if item.end_seq > after_seq]
         if pending:
             first = pending[0]
             data = dict(first.data)
@@ -147,12 +146,11 @@ class SupervisorStreamBroker:
                     break
                 seq, event, data = item
                 subscriber.last_sent_seq = seq
-                stream.resume_after_seq = max(stream.resume_after_seq, seq)
+                data["_stream_seq"] = seq
                 yield event, data
         finally:
             if subscriber in stream.subscribers:
                 stream.subscribers.remove(subscriber)
-            stream.resume_after_seq = max(stream.resume_after_seq, subscriber.last_sent_seq)
 
 
 supervisor_stream_broker = SupervisorStreamBroker()

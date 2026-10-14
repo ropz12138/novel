@@ -106,18 +106,16 @@ def test_interrupted_tool_calls_are_removed_from_model_history_too(db_session):
 
 def test_run_replays_persisted_prefix_after_process_restart(monkeypatch, db_session):
     import asyncio
-    from langchain_core.messages import AIMessageChunk
 
     sid = _session(db_session)
     requests = []
 
-    class LLM:
-        async def astream(self, messages):
-            requests.append(langchain_messages_to_dicts(messages))
-            yield AIMessageChunk(content="  已完成。\n", additional_kwargs={"reasoning_content": "完整思考"})
+    class Graph:
+        async def astream(self, state, **kwargs):
+            requests.append(langchain_messages_to_dicts(state["messages"]))
+            yield "updates", {"model": {"messages": [AIMessage(content="  已完成。\n")]}}
 
-    monkeypatch.setattr("services.agents.supervisor.get_llm", lambda **kw: LLM())
-    monkeypatch.setattr("services.agents.supervisor.bind_tools_to_llm", lambda model, tools, **kw: model)
+    monkeypatch.setattr(SupervisorAgent, "_build_graph", lambda self, **kwargs: Graph())
     for text in ["第一轮", "第二轮"]:
         session_store.add_message(sid, "user", text)
         result = asyncio.run(SupervisorAgent().run(text, {
@@ -126,3 +124,40 @@ def test_run_replays_persisted_prefix_after_process_restart(monkeypatch, db_sess
         assert result["success"], result
     assert requests[1][:len(requests[0])] == requests[0]
     assert len([r for r in session_store.get_messages(sid) if r["role"] == "system"]) == 1
+
+
+def test_run_restores_deep_agent_summarization_state(monkeypatch, db_session, tmp_path):
+    import asyncio
+    from services.agents.deep_agent_runtime import save_summarization_state
+
+    sid = _session(db_session)
+    session_store.add_message(sid, "user", "继续")
+    monkeypatch.setattr(
+        "services.agents.deep_agent_runtime.DEEP_AGENT_CONTEXT_ROOT",
+        tmp_path,
+    )
+    save_summarization_state("session", sid, {
+        "_summarization_event": {
+            "cutoff_index": 0,
+            "summary_message": HumanMessage(
+                content="持久摘要",
+                additional_kwargs={"lc_source": "summarization"},
+            ),
+            "file_path": "/conversation_history/session_saved.md",
+        },
+        "_summarization_session_id": "session_saved",
+    })
+    captured = {}
+
+    class Graph:
+        async def astream(self, state, **kwargs):
+            captured.update(state)
+            yield "updates", {"model": {"messages": [AIMessage(content="完成")]}}
+
+    monkeypatch.setattr(SupervisorAgent, "_build_graph", lambda self, **kwargs: Graph())
+
+    result = asyncio.run(SupervisorAgent().run("继续", {"session_id": sid}))
+
+    assert result["success"]
+    assert captured["_summarization_session_id"] == "session_saved"
+    assert captured["_summarization_event"]["summary_message"].content == "持久摘要"

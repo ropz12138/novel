@@ -4,6 +4,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import AppFloatingComposer from "./AppFloatingComposer";
 
 describe("AppFloatingComposer", () => {
+  it("shows the token count for each session including missing usage", () => {
+    render(<AppFloatingComposer ready sessions={[
+      { id: "s1", title: "已有对话", context_input_tokens: 12345 },
+      { id: "s2", title: "新对话", context_input_tokens: null },
+    ]} />);
+    fireEvent.click(screen.getByRole("button", { name: "会话列表" }));
+    expect(screen.getByText("【12,345】 tokens")).toBeDefined();
+    expect(screen.getByText("【0】 tokens")).toBeDefined();
+  });
   it("keeps Enter as a newline and sends only from the button", () => {
     const onSend = vi.fn();
     render(<AppFloatingComposer ready onSend={onSend} />);

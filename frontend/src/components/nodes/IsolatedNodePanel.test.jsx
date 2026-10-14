@@ -101,4 +101,11 @@ describe("IsolatedNodePanel", () => {
     expect(screen.getByTestId("isolated-node-panel").className).toContain("z-[55]");
   });
 
+  it("App 模式为底部悬浮输入框预留滚动空间", () => {
+    render(<IsolatedNodePanel nodes={nodes} appMode />);
+
+    expect(screen.getByTestId("isolated-node-panel").className)
+      .toContain("pb-[calc(7rem+env(safe-area-inset-bottom))]");
+  });
+
 });

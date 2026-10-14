@@ -1,20 +1,21 @@
 ---
 name: humanize-fiction
-description: 对章节正文进行自然化编辑，改善句法、节奏、对白和修辞，同时保持故事事实与系统标记。
+description: Supervisor 确定自然化目标，Writer 独立调整句法、节奏、对白与修辞。
 ---
 
 # 正文自然化
 
+Supervisor 负责确定调整范围，Writer 子 Agent 负责正文表达。参考规则通过 `read_skill_reference` 按阶段完整加载。
+正文通过 `run_writing_agent` 独立修改并保存，用户回复使用 `respond_to_user`。
+
 ## 完成标准
 
-- 完整自然化规则和目标正文均已加载。
-- 新草稿保持人物认知、剧情事实、专名、伏笔和系统标记。
-- 自然化结果直接写入真实章节节点，并完成自然度与事实保真审查。
+自然化规则及全文已读取；剧情事实、人物认知和专名保持一致；最终正文、状态已保存并回读。
 
 ## 执行流程
 
-1. `assemble_chapter_context` 与 `stage_existing_chapter_draft` 建立完整输入。必须传入已有 `chapter_node_id`，不得使用新建章节参数。
-2. 调用 `humanize_chapter_draft`，工具完整加载自然化规则、更新真实章节节点并记录新版本。
-3. 调用 `review_fiction_quality`；对白改动明显时同时调用 `review_chapter_dialogue`。Supervisor 阅读自然语言建议，决定值得采纳的修改项。
-4. 对最新草稿调用 `review_chapter_ai_taste`。决定采纳建议时调用 `decide_chapter_revision` 并按其结果修订。调用次数遵守当前评审强度。
-5. 生成摘要，固化状态并回读核对。
+1. 用 `read_node_content` 读取已有章节、相关设定和笔记。
+2. 完整读取本技能 `fiction_humanizer.txt` 和 `humanizer_agent.txt`，亲自定位句式、节奏、对白和修辞问题。
+3. 将当前有效事实、人物认知来源、叙述视角、完整文风要求与修改范围交接为 brief，提供相关 source_node_ids，调用 `run_writing_agent(operation="humanize")` 精确修改片段；写作运行时自行读取最新正文并建立并发写入基线，随后回读最新正文。整章重构使用 operation="rewrite" 并保留完整自然化要求。
+4. 写章流程调用本技能时，返回写章流程统一处理评审报告与进度。独立自然化任务按评审强度加载 `evaluate-fiction`，通过 `run_review_agent(perspectives=["ai_taste"])` 评审最终正文的表达自然度，中档每个视角一次，高档按实际修改复检。
+5. 独立任务执行 `maintain-story-memory` 收尾；嵌入写章任务时由写章流程统一更新完整章节笔记。

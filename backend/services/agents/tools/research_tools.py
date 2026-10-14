@@ -40,8 +40,8 @@ class ListResearchArtifactsInput(BaseModel):
     limit: int = Field(
         default=50,
         ge=1,
-        le=100,
-        description="最多返回多少条成果，范围 1-100。",
+        le=50,
+        description="最多返回多少条成果，范围 1-50。",
     )
     reason: Optional[str] = Field(
         default=None,
@@ -52,10 +52,10 @@ class ListResearchArtifactsInput(BaseModel):
 class ReadResearchArtifactsInput(BaseModel):
     artifact_ids: list[str] = Field(
         min_length=1,
-        max_length=20,
+        max_length=5,
         description=(
             "要读取的研究成果 ID 列表，必须来自 list_research_artifacts。"
-            "一次最多读取 20 条。"
+            "一次最多读取 5 条。"
         ),
     )
     reason: Optional[str] = Field(
@@ -103,7 +103,7 @@ def _list_research_artifacts_sync(
 
         rows = (
             query.order_by(ResearchArtifact.created_at.desc())
-            .limit(max(1, min(int(limit), 100)))
+            .limit(limit)
             .all()
         )
         artifacts = [
@@ -120,7 +120,7 @@ def _list_research_artifacts_sync(
                 },
                 "artifact_type": artifact.artifact_type,
                 "title": artifact.title,
-                "content_preview": (artifact.content or "")[:500],
+                "has_content": bool(artifact.content),
                 "created_at": (
                     artifact.created_at.isoformat()
                     if artifact.created_at else None
@@ -149,7 +149,7 @@ def _read_research_artifacts_sync(
             "artifacts": [],
         }, ensure_ascii=False)
 
-    requested_ids = list(dict.fromkeys(artifact_ids))[:20]
+    requested_ids = list(dict.fromkeys(artifact_ids))
     db = _get_db()
     try:
         rows = (

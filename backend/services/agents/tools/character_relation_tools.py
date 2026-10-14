@@ -35,6 +35,8 @@ def _get_current_work_id():
 
 class QueryCharacterRelationsInput(BaseModel):
     character_name: Optional[str] = Field(default=None, description="按角色名筛选（可选）")
+    offset: int = Field(default=0, ge=0, description="分页偏移")
+    limit: int = Field(default=50, ge=1, le=50, description="本页关系数")
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
@@ -58,7 +60,7 @@ class DeleteCharacterRelationInput(BaseModel):
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
 
 
-def _query_character_relations_sync(character_name=None, reason=None):
+def _query_character_relations_sync(character_name=None, offset=0, limit=50, reason=None):
     work_id = _get_current_work_id()
     if not work_id:
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
@@ -66,7 +68,18 @@ def _query_character_relations_sync(character_name=None, reason=None):
     db = _get_db()
     try:
         q = db.query(CharacterRelation).filter(CharacterRelation.work_id == work_id)
-        relations = q.order_by(CharacterRelation.created_at.asc()).all()
+        if character_name:
+            matching_nodes = db.query(Node.id).filter(
+                Node.work_id == work_id,
+                Node.type == "character",
+                Node.title.ilike(f"%{character_name}%"),
+            )
+            q = q.filter(
+                (CharacterRelation.source_id.in_(matching_nodes))
+                | (CharacterRelation.target_id.in_(matching_nodes))
+            )
+        total = q.count()
+        relations = q.order_by(CharacterRelation.created_at.asc()).offset(offset).limit(limit).all()
         if not relations:
             return "暂无角色关系线。"
 
@@ -82,13 +95,16 @@ def _query_character_relations_sync(character_name=None, reason=None):
             tgt = nodes.get(rel.target_id)
             if not src or not tgt:
                 continue
-            if character_name and character_name not in src.title and character_name not in tgt.title:
-                continue
             label_part = f"（{rel.label}）" if rel.label else ""
             lines.append(
                 f"- [{rel.id}] {src.title} → {tgt.title}：{rel.relation_type}{label_part}"
             )
-        return "\n".join(lines) if lines else "未找到匹配的角色关系。"
+        return json.dumps({
+            "relations": lines,
+            "total": total,
+            "offset": offset,
+            "has_more": offset + len(relations) < total,
+        }, ensure_ascii=False)
     finally:
         db.close()
 

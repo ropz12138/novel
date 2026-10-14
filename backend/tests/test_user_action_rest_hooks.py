@@ -45,6 +45,37 @@ def _actions(db, work_id):
 
 # ---------- 节点 ----------
 
+def test_content_diff_api_restores_and_reviews_exact_agent_groups(mock_auth):
+    from models.node import Node
+    from services.chapter_edit_service import build_replacement_diff
+    from services.node_agent_diff import record_change
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db, mock_auth.id)
+        old = "A\n\nB\n\nC"
+        new = "X\n\nA′\n\nB′\n\nC′"
+        node = Node(work_id=work.id, type="plot", title="原始分组", content=new, sort_order=1)
+        db.add(node)
+        db.flush()
+        record_change(db, node, old, build_replacement_diff(old, [
+            {"old": "A", "new": "X\n\nA′"}, {"old": "B", "new": "B′"}, {"old": "C", "new": "C′"}]))
+        db.commit()
+        response = client.get(f"/api/works/{work.id}/content-diffs")
+        assert response.status_code == 200
+        snapshot = response.json()[0]
+        assert snapshot["grouping"] == "agent_replacements"
+        assert [(h["old_text"], h["new_text"]) for h in snapshot["hunks"]] == [
+            ("A", "X\n\nA′"), ("B", "B′"), ("C", "C′")]
+        response = client.put(f"/api/nodes/{node.id}/content-diff-decision", json={
+            "expected_content": new, "expected_baseline": old,
+            "baseline_content": old, "current_content": old, "groups": [],
+        })
+        assert response.status_code == 200
+        assert response.json()["hunks"] == []
+        assert client.get(f"/api/works/{work.id}/content-diffs").json() == []
+    finally:
+        db.close()
+
 def test_create_node_via_rest_logs_action(mock_auth):
     db = database.SessionLocal()
     try:
@@ -109,6 +140,46 @@ def test_update_node_title_via_rest_logs_action(mock_auth):
         db.close()
 
 
+def test_update_node_content_accepts_matching_expected_content(mock_auth):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db, mock_auth.id)
+        node_id = client.post(
+            f"/api/works/{work.id}/nodes",
+            json={"sort_order": 1, "type": "chapter", "title": "第一章", "content": "旧正文"},
+        ).json()["id"]
+
+        response = client.put(
+            f"/api/nodes/{node_id}",
+            json={"content": "新正文", "expected_content": "旧正文"},
+        )
+
+        assert response.status_code == 200
+        assert response.json()["content"] == "新正文"
+    finally:
+        db.close()
+
+
+def test_update_node_content_rejects_stale_expected_content(mock_auth):
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db, mock_auth.id)
+        node_id = client.post(
+            f"/api/works/{work.id}/nodes",
+            json={"sort_order": 1, "type": "chapter", "title": "第一章", "content": "服务器新正文"},
+        ).json()["id"]
+
+        response = client.put(
+            f"/api/nodes/{node_id}",
+            json={"content": "用户编辑正文", "expected_content": "用户打开时正文"},
+        )
+
+        assert response.status_code == 409
+        assert "正文已发生变化" in response.json()["detail"]
+    finally:
+        db.close()
+
+
 def test_update_node_position_only_does_not_log(mock_auth):
     db = database.SessionLocal()
     try:
@@ -152,8 +223,8 @@ def test_update_node_locked_only_does_not_log(mock_auth):
 def _make_two_nodes(work_id):
     db = database.SessionLocal()
     try:
-        # 同级连线非法，用 character → chapter 的引用边
-        a = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 1, "type": "character", "title": "源", "content": ""}).json()
+        # 画布连线使用合法的 plot → chapter 父子关系。
+        a = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 1, "type": "plot", "title": "源", "content": ""}).json()
         b = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 2, "type": "chapter", "title": "目标", "content": ""}).json()
         return a["id"], b["id"]
     finally:

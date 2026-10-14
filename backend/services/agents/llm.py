@@ -5,7 +5,8 @@ from langchain_core.messages import AIMessage
 
 from config import settings
 from services.llm.factory import build_model_config, resolve_model_names
-from services.llm.langchain_adapter import NovelLLM
+from services.llm.langchain_adapter import DeepAgentChatModel, NovelLLM
+from services.llm.llm_service import create_provider
 from services.thinking_llm import FallbackLLM
 
 logger = logging.getLogger(__name__)
@@ -27,6 +28,33 @@ def get_llm(
         wrapped = FallbackLLM(primary_llm, fallback_llm)
         return wrapped
     return primary_llm
+
+
+def get_deep_agent_model(
+    temperature: float = 0.7,
+    primary: str | None = None,
+    fallback: str | None = None,
+) -> DeepAgentChatModel:
+    """创建 Deep Agents 使用的标准 ChatModel，底层仍统一走 BaseLLMProvider。"""
+    primary_name, fallback_name = resolve_model_names(primary, fallback)
+    primary_config = build_model_config(primary_name, temperature=temperature)
+    fallback_config = (
+        build_model_config(fallback_name, temperature=temperature)
+        if fallback_name else None
+    )
+    model = DeepAgentChatModel(
+        provider=create_provider(primary_config, fallback_config),
+        model_name=primary_name,
+        extra_body={
+            key: value
+            for key, value in dict(primary_config.extra_body or {}).items()
+            if key != "temperature"
+        } or None,
+    )
+    window = settings.get_model_context_window(primary_name)
+    if window is not None:
+        model.profile = {"max_input_tokens": window}
+    return model
 
 
 def context_model_pref_kwargs() -> dict:

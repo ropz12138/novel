@@ -1,5 +1,6 @@
 import { ChevronDown, ChevronRight } from "lucide-react";
 import { useState } from "react";
+import InlineTextDiff from "../InlineTextDiff";
 
 const TYPE_LABEL = {
   replace: "替换",
@@ -53,7 +54,7 @@ export function ChapterContentDiffViewer({
         const type = hunk.type || "replace";
         const isOpen = !!expanded[idx];
         return (
-          <div key={idx} className={`rounded-lg border overflow-hidden ${TYPE_COLOR[type] || TYPE_COLOR.replace}`}>
+          <div key={idx} className={`rounded-lg border overflow-visible ${TYPE_COLOR[type] || TYPE_COLOR.replace}`}>
             <button
               type="button"
               onClick={() => toggle(idx)}
@@ -65,18 +66,12 @@ export function ChapterContentDiffViewer({
             </button>
             {isOpen && (
               <div className="border-t border-black/5 px-3 py-2 text-[13px] leading-relaxed space-y-2 bg-white/60">
-                {type !== "insert_after" && hunk.old_text ? (
-                  <div>
-                    <div className="text-[11px] text-red-600 mb-0.5">原文</div>
-                    <div className="whitespace-pre-wrap text-red-800/90 line-through decoration-red-400/60">{hunk.old_text}</div>
-                  </div>
-                ) : null}
-                {type !== "delete" && hunk.new_text ? (
-                  <div>
-                    <div className="text-[11px] text-green-600 mb-0.5">新文</div>
-                    <div className="whitespace-pre-wrap text-green-900">{hunk.new_text}</div>
-                  </div>
-                ) : null}
+                <InlineTextDiff
+                  oldText={hunk.old_text || ""}
+                  newText={hunk.new_text || ""}
+                  showOld={type !== "insert_after"}
+                  showNew={type !== "delete"}
+                />
               </div>
             )}
           </div>

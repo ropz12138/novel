@@ -1,19 +1,26 @@
 import { Children, cloneElement, createContext, useContext, memo, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Undo2, ChevronLeft, ChevronRight } from "lucide-react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Copy, Undo2, ChevronLeft, ChevronRight } from "lucide-react";
 import {
   buildStackedInlineDiffBlocks,
   contentAfterBatches,
   buildContentDiffFromContents,
+  commitUserParagraphEdit,
+  commitUserTextEdit,
   hydrateDiffBatches,
+  joinParagraphs,
   pendingHunksFromBatches,
   setAllHunkStatusInBatches,
   setHunkStatusInBatches,
+  splitParagraphs,
 } from "../../lib/inlineContentDiff";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import AuthIllustrationImage, { isIllustrationApiPath } from "./AuthIllustrationImage";
 import { compareSiblings } from "../../lib/canvasOrder";
 import { remarkHtmlBreaks } from "../../lib/markdown";
+import InlineTextDiff from "../InlineTextDiff";
+import { agentDiffBlocks, decideAgentGroup } from "../../lib/agentContentDiff";
+import { editorScrollDelta, useKeyboardInset } from "../../lib/keyboardInset";
 
 const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
 const HIGHLIGHT_TOKEN_SUFFIX = "%%";
@@ -175,6 +182,34 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }) {
   );
 });
 
+const PlainTextRenderer = memo(function PlainTextRenderer({ content }) {
+  const quote = useContext(SourceReferenceContext);
+  const value = content || "";
+  let children;
+
+  if (quote) {
+    const start = value.indexOf(quote);
+    children = start < 0 ? value : (
+      <>
+        {value.slice(0, start)}
+        <span data-node-reference-hit style={{ backgroundColor: "#fef3c7", borderRadius: "4px" }}>
+          {value.slice(start, start + quote.length)}
+        </span>
+        {value.slice(start + quote.length)}
+      </>
+    );
+  } else {
+    const { masked, highlights } = maskPlotHighlights(value);
+    children = renderHighlightTokens(masked, highlights, "plain");
+  }
+
+  return (
+    <p className="my-0 whitespace-pre-wrap break-words leading-8 tracking-wider text-gray-700">
+      {children}
+    </p>
+  );
+});
+
 const NODE_TYPE_CONFIG = {
   outline: { icon: FileText, label: "大纲", bg: "bg-blue-100", text: "text-blue-600", badge: "text-blue-700" },
   volume: { icon: Layers, label: "卷", bg: "bg-indigo-100", text: "text-indigo-600", badge: "text-indigo-700" },
@@ -204,6 +239,13 @@ function selectionQuoteFromContainer(container) {
     x: rect.left,
     y: rect.bottom || rect.top,
   };
+}
+
+function hasTextSelectionInside(container) {
+  const selection = window.getSelection?.();
+  if (!selection?.toString().trim() || selection.rangeCount === 0) return false;
+  const ancestor = selection.getRangeAt(0).commonAncestorContainer;
+  return ancestor === container || container.contains(ancestor);
 }
 
 function useRememberedDetailScroll(nodeId) {
@@ -312,61 +354,282 @@ function ChapterElementsBar({ elements, stacked = false }) {
   );
 }
 
-function InlineDiffHunk({ hunk, onAccept, onReject, readOnly = false }) {
-  const type = hunk.type || "replace";
+function InlineTextEditor({ initialText, label, saveLabel, onSave, onCancel, onEditingChange, appMode = false }) {
+  const [value, setValue] = useState(initialText);
+  const [saving, setSaving] = useState(false);
+  const editorRef = useRef(null);
+  const stableViewportHeightRef = useRef(typeof window === "undefined" ? 0 : window.innerHeight);
+  const keyboardInset = useKeyboardInset(appMode);
+
+  useEffect(() => {
+    onEditingChange?.(true);
+    return () => onEditingChange?.(false);
+  }, [onEditingChange]);
+
+  useLayoutEffect(() => {
+    if (!appMode || keyboardInset <= 0) return undefined;
+    const frame = requestAnimationFrame(() => {
+      const editor = editorRef.current;
+      const scrollContainer = editor?.closest('[data-testid="node-detail-scroll"]');
+      if (!editor || !scrollContainer) return;
+      const visualViewport = window.visualViewport;
+      const currentVisualBottom = visualViewport
+        ? visualViewport.offsetTop + visualViewport.height
+        : window.innerHeight;
+      stableViewportHeightRef.current = Math.max(stableViewportHeightRef.current, window.innerHeight, currentVisualBottom);
+      const visibleBottom = Math.min(
+        currentVisualBottom,
+        stableViewportHeightRef.current - keyboardInset,
+      );
+      const delta = editorScrollDelta(editor.getBoundingClientRect(), visibleBottom);
+      if (delta > 0) scrollContainer.scrollBy({ top: delta, behavior: "smooth" });
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [appMode, keyboardInset]);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const saved = await onSave(value);
+      if (saved !== false) onCancel();
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <section data-testid="inline-diff-hunk" className="my-4 overflow-hidden rounded-lg border border-blue-200">
-      {!readOnly && <div className="flex items-center justify-end gap-1 border-b border-blue-100 bg-blue-50 px-2 py-1">
-        <button
-          type="button"
-          aria-label="保留修改"
-          onClick={onAccept}
-          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
-        >
-          <Check className="h-3.5 w-3.5" />
-          保留修改
+    <div ref={editorRef} className="space-y-2" data-inline-editor-active="true">
+      <textarea
+        autoFocus
+        aria-label={label}
+        value={value}
+        onChange={(event) => setValue(event.target.value)}
+        className="min-h-28 w-full resize-y rounded-md border border-blue-300 bg-white px-3 py-2 text-sm leading-relaxed text-slate-800 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-100"
+      />
+      <div className="flex justify-end gap-2">
+        <button type="button" onClick={onCancel} className="rounded px-2 py-1 text-xs text-slate-500 hover:bg-slate-100">
+          取消
         </button>
-        <button
-          type="button"
-          aria-label="撤回修改"
-          onClick={onReject}
-          className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
-        >
-          <Undo2 className="h-3.5 w-3.5" />
-          撤回修改
+        <button type="button" aria-label={saveLabel} disabled={saving} onClick={handleSave} className="rounded bg-blue-500 px-3 py-1 text-xs font-medium text-white hover:bg-blue-600 disabled:opacity-50">
+          {saving ? "保存中..." : "保存"}
         </button>
-      </div>}
-      {type !== "insert_after" && hunk.old_text ? (
-        <div className="bg-red-50 px-3 py-2 text-red-900">
-          <div className="mb-1 text-[11px] text-red-600">原文</div>
-          <div className="whitespace-pre-wrap leading-relaxed line-through decoration-red-400/70">{hunk.old_text}</div>
-        </div>
-      ) : null}
-      {type !== "delete" && hunk.new_text ? (
-        <div className="bg-emerald-50 px-3 py-2 text-emerald-950">
-          <div className="mb-1 text-[11px] text-emerald-700">新文</div>
-          <div className="whitespace-pre-wrap leading-relaxed">{hunk.new_text}</div>
-        </div>
-      ) : null}
+      </div>
+    </div>
+  );
+}
+
+function EditableParagraph({ text, onSave, onEditingChange, editing, onStartEditing, onStopEditing, plainText = false, appMode = false }) {
+  if (editing) {
+    return (
+      <InlineTextEditor
+        initialText={text}
+        label="编辑段落内容"
+        saveLabel="保存段落"
+        onSave={onSave}
+        onCancel={onStopEditing}
+        onEditingChange={onEditingChange}
+        appMode={appMode}
+      />
+    );
+  }
+
+  return (
+    <div className="group relative rounded-md transition-colors hover:bg-blue-50/60">
+      <div
+        role="button"
+        tabIndex={0}
+        aria-label="编辑段落"
+        onClick={(event) => {
+          if (!hasTextSelectionInside(event.currentTarget)) onStartEditing();
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault();
+            onStartEditing();
+          }
+        }}
+        className="cursor-text rounded-md outline-none focus:ring-2 focus:ring-blue-200"
+      >
+        {plainText ? <PlainTextRenderer content={text} /> : <MarkdownRenderer content={text} />}
+      </div>
+      <Pencil className="pointer-events-none absolute right-1 top-1 h-3.5 w-3.5 text-blue-400 opacity-0 transition-opacity group-hover:opacity-100" />
+    </div>
+  );
+}
+
+function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, editingNew, onStartEditing, onStopEditing, readOnly = false, appMode = false }) {
+  const type = hunk.type || "replace";
+  const headerActions = !readOnly ? (
+    <>
+      <button
+        type="button"
+        aria-label="保留修改"
+        onClick={onAccept}
+        className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50"
+      >
+        <Check className="h-3.5 w-3.5" />
+        保留修改
+      </button>
+      <button
+        type="button"
+        aria-label="撤回修改"
+        onClick={onReject}
+        className="inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50"
+      >
+        <Undo2 className="h-3.5 w-3.5" />
+        撤回修改
+      </button>
+    </>
+  ) : null;
+  return (
+    <section data-testid="inline-diff-hunk" className="my-2 overflow-visible">
+      <div className="space-y-1">
+        {editingNew ? (
+          <>
+            {headerActions ? <div className="flex items-center justify-end gap-1 rounded-t-lg bg-slate-100 px-2 py-1">{headerActions}</div> : null}
+            <div>
+              <div className="mb-1 text-[11px] text-emerald-700">新文</div>
+              <InlineTextEditor
+                initialText={hunk.new_text || ""}
+                label="编辑新文内容"
+                saveLabel="保存新文"
+                onSave={onEditNew}
+                onCancel={onStopEditing}
+                onEditingChange={onEditingChange}
+                appMode={appMode}
+              />
+            </div>
+          </>
+        ) : (
+          <div
+            className={onEditNew && !readOnly && type !== "delete" ? "cursor-text" : ""}
+            onClick={(event) => {
+              if (!onEditNew || readOnly || type === "delete") return;
+              if (event.target.closest('button, [role="button"]')) return;
+              if (!event.target.closest('[data-testid="inline-diff-new"]')) return;
+              if (!hasTextSelectionInside(event.currentTarget)) onStartEditing();
+            }}
+          >
+            <InlineTextDiff
+              oldText={hunk.old_text || ""}
+              newText={hunk.new_text || ""}
+              showOld={type !== "insert_after"}
+              showNew={type !== "delete"}
+              headerActions={headerActions}
+            />
+          </div>
+        )}
+      </div>
     </section>
   );
 }
 
-function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnly = false }) {
+function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onEditingChange, closeEditorOnOutside = false, readOnly = false, plainText = false, appMode = false }) {
   const quote = useContext(SourceReferenceContext);
-  if (quote) return <MarkdownRenderer content={content} />;
-  const pending = pendingHunksFromBatches(batches);
+  const [activeEditorKey, setActiveEditorKey] = useState(null);
+  const pending = useMemo(() => pendingHunksFromBatches(batches), [batches]);
+  const grouped = batches[0]?.grouping === "agent_replacements";
+  const blocks = useMemo(() => grouped ? agentDiffBlocks(batches[0]) : buildStackedInlineDiffBlocks(batches), [batches, grouped]);
+  useEffect(() => {
+    if (!closeEditorOnOutside || !activeEditorKey) return undefined;
+    const closeOnOutside = (event) => {
+      if (event.target.closest?.('[data-inline-editor-active="true"]')) return;
+      setActiveEditorKey(null);
+    };
+    document.addEventListener("pointerdown", closeOnOutside);
+    return () => document.removeEventListener("pointerdown", closeOnOutside);
+  }, [activeEditorKey, closeEditorOnOutside]);
+  if (quote) return plainText ? <PlainTextRenderer content={content} /> : <MarkdownRenderer content={content} />;
   if (!pending.length) {
-    return content ? <MarkdownRenderer content={content} /> : <p className="whitespace-pre-wrap">暂无内容</p>;
+    if (!content) return <p className="whitespace-pre-wrap">暂无内容</p>;
+    if (!onEditParagraph || readOnly) return plainText ? <PlainTextRenderer content={content} /> : <MarkdownRenderer content={content} />;
+    return (
+      <div className="space-y-1">
+        {splitParagraphs(content).map((paragraph, index) => (
+          <EditableParagraph
+            key={`editable-${index}`}
+            text={paragraph}
+            onSave={(nextText) => onEditParagraph(index + 1, nextText)}
+            onEditingChange={onEditingChange}
+            editing={activeEditorKey === `paragraph-${index}`}
+            onStartEditing={() => setActiveEditorKey(`paragraph-${index}`)}
+            onStopEditing={() => setActiveEditorKey(null)}
+            plainText={plainText}
+            appMode={appMode}
+          />
+        ))}
+      </div>
+    );
   }
 
-  const blocks = buildStackedInlineDiffBlocks(batches);
+  if (grouped) {
+    const currentCharacters = Array.from(contentAfterBatches(batches));
+    const renderUnchanged = (block, blockIndex) => {
+      let position = block.currentStart;
+      return splitParagraphs(block.text).map((text, index) => {
+        const start = position;
+        position += Array.from(text).length;
+        const end = position;
+        position += 2;
+        const wholeParagraph = (start === 0 || currentCharacters.slice(start - 2, start).join("") === "\n\n")
+          && (end === currentCharacters.length || currentCharacters.slice(end, end + 2).join("") === "\n\n");
+        const key = `unchanged-${blockIndex}-${index}`;
+        const paragraphIndex = currentCharacters.slice(0, start).join("").split("\n\n").length;
+        return <span key={key}>
+          {index > 0 ? "\n\n" : null}
+          {text && wholeParagraph ? (onEditParagraph && !readOnly
+            ? <EditableParagraph text={text} plainText={plainText} appMode={appMode}
+              onSave={(nextText) => onEditParagraph(paragraphIndex, nextText)}
+              onEditingChange={onEditingChange} editing={activeEditorKey === key}
+              onStartEditing={() => setActiveEditorKey(key)} onStopEditing={() => setActiveEditorKey(null)} />
+            : plainText ? <PlainTextRenderer content={text} /> : <MarkdownRenderer content={text} />)
+            : text}
+        </span>;
+      });
+    };
+    return <div className="whitespace-pre-wrap leading-relaxed">
+      {blocks.map((block, index) => block.kind === "text"
+        ? <span key={`text-${index}`}>{renderUnchanged(block, index)}</span>
+        : <InlineDiffHunk
+          key={`group-${block.index}`} hunk={block.hunk} readOnly={readOnly}
+          onAccept={() => onAcceptHunk(0, block.index)}
+          onReject={() => onRejectHunk(0, block.index)}
+          onEditNew={onEditHunkNew ? (text) => onEditHunkNew(block.index, text, true) : undefined}
+          onEditingChange={onEditingChange}
+          editingNew={activeEditorKey === `group-${block.index}`}
+          onStartEditing={() => setActiveEditorKey(`group-${block.index}`)}
+          onStopEditing={() => setActiveEditorKey(null)} appMode={appMode}
+        />)}
+    </div>;
+  }
+
+  let currentParagraphIndex = 0;
   return (
     <div className="space-y-1">
       {blocks.map((block, index) => {
         if (block.kind === "paragraph") {
-          return <MarkdownRenderer key={`p-${index}`} content={block.text} />;
+          currentParagraphIndex += 1;
+          const paragraphIndex = currentParagraphIndex;
+          return onEditParagraph && !readOnly ? (
+            <EditableParagraph
+              key={`p-${index}`}
+              text={block.text}
+              onSave={(nextText) => onEditParagraph(paragraphIndex, nextText)}
+              onEditingChange={onEditingChange}
+              editing={activeEditorKey === `paragraph-${index}`}
+              onStartEditing={() => setActiveEditorKey(`paragraph-${index}`)}
+              onStopEditing={() => setActiveEditorKey(null)}
+              plainText={plainText}
+              appMode={appMode}
+            />
+          ) : plainText
+            ? <PlainTextRenderer key={`p-${index}`} content={block.text} />
+            : <MarkdownRenderer key={`p-${index}`} content={block.text} />;
         }
+        if ((block.hunk.type || "replace") !== "delete") {
+          currentParagraphIndex += Math.max(1, splitParagraphs(block.hunk.new_text || "").length);
+        }
+        const displayedParagraphIndex = currentParagraphIndex;
         return (
           <InlineDiffHunk
             key={`h-${block.batchIndex}-${block.hunkIndex}`}
@@ -374,6 +637,12 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnl
             readOnly={readOnly}
             onAccept={() => onAcceptHunk(block.batchIndex, block.hunkIndex)}
             onReject={() => onRejectHunk(block.batchIndex, block.hunkIndex)}
+            onEditNew={onEditHunkNew ? (nextText) => onEditHunkNew(displayedParagraphIndex, nextText) : undefined}
+            onEditingChange={onEditingChange}
+            editingNew={activeEditorKey === `hunk-${block.batchIndex}-${block.hunkIndex}`}
+            onStartEditing={() => setActiveEditorKey(`hunk-${block.batchIndex}-${block.hunkIndex}`)}
+            onStopEditing={() => setActiveEditorKey(null)}
+            appMode={appMode}
           />
         );
       })}
@@ -381,7 +650,7 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, readOnl
   );
 }
 
-function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = false, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false, previousChapter, nextChapter, onChapterNavigate }) {
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = false, onTextSelect, batches = [], notesBatches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onInlineEditingChange, onAcceptNotesHunk, onRejectNotesHunk, readOnlyDiff = false, previousChapter, nextChapter, onChapterNavigate }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
@@ -393,6 +662,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
 
   const [metaExpanded, setMetaExpanded] = useState(false);
   const hasChapterMeta = chapterCharacters.length > 0 || chapterElements.length > 0;
+  const pendingNotesCount = useMemo(() => pendingHunksFromBatches(notesBatches).length, [notesBatches]);
 
   const handleTouchStart = (event) => {
     if (!appMode) return;
@@ -549,15 +819,42 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
         data-testid="node-detail-scroll"
         className={`flex-1 touch-pan-y overflow-y-auto bg-amber-50 ${appMode ? "pb-32" : ""}`}
       >
+        <details className="mx-auto max-w-3xl border-b border-amber-200 px-8 py-4">
+          <summary className="cursor-pointer font-medium text-amber-900">章节笔记</summary>
+          {pendingNotesCount > 0 && !readOnlyDiff && (
+            <div className="mt-2 flex items-center gap-1">
+              <button type="button" aria-label="全部保留笔记" onClick={() => onAcceptNotesHunk?.()} className="rounded-md px-2 py-1 text-xs font-medium text-emerald-700 hover:bg-emerald-50">全部保留</button>
+              <button type="button" aria-label="全部撤回笔记" onClick={() => onRejectNotesHunk?.()} className="rounded-md px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50">全部撤回</button>
+            </div>
+          )}
+          <div data-testid="chapter-notes" className="mt-3 break-words text-sm leading-relaxed text-gray-700">
+            {(node.notes || pendingNotesCount > 0) ? (
+              <NodeContentBody
+                content={node.notes}
+                batches={notesBatches}
+                onAcceptHunk={onAcceptNotesHunk}
+                onRejectHunk={onRejectNotesHunk}
+                readOnly={readOnlyDiff}
+              />
+            ) : "暂无章节笔记"}
+          </div>
+        </details>
         <div data-testid="chapter-body" className={`${isFullscreen ? "max-w-5xl px-6 py-10 sm:px-12 sm:py-16" : "max-w-3xl px-8 py-12"} mx-auto`}>
           <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none`}>
             <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
               <NodeContentBody
+                key={`chapter-body-${node.id}`}
                 content={node.content}
                 batches={batches}
                 onAcceptHunk={onAcceptHunk}
                 onRejectHunk={onRejectHunk}
+                onEditParagraph={onEditParagraph}
+                onEditHunkNew={onEditHunkNew}
+                onEditingChange={onInlineEditingChange}
+                closeEditorOnOutside
                 readOnly={readOnlyDiff}
+                plainText
+                appMode={appMode}
               />
             </div>
           </div>
@@ -648,10 +945,11 @@ function StorylinesPanel({ storylines }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, readOnlyDiff = false, appMode = false, previousNode, nextNode, onNavigate }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onInlineEditingChange, readOnlyDiff = false, appMode = false, previousNode, nextNode, onNavigate }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
   const swipeStartRef = useRef(null);
+  const pendingCount = useMemo(() => pendingHunksFromBatches(batches).length, [batches]);
 
   const handleTouchStart = (event) => {
     const touch = event.touches[0];
@@ -685,18 +983,24 @@ function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAccept
           </div>
         </div>
 
-        {(node.content || pendingHunksFromBatches(batches).length > 0) && (
+        {(node.content || pendingCount > 0) && (
           <div>
             <h4 className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">
               内容
             </h4>
             <div className="text-sm text-gray-700 leading-relaxed bg-gray-50 rounded-lg p-4">
               <NodeContentBody
+                key={`node-body-${node.id}`}
                 content={node.content}
                 batches={batches}
                 onAcceptHunk={onAcceptHunk}
                 onRejectHunk={onRejectHunk}
+                onEditParagraph={onEditParagraph}
+                onEditHunkNew={onEditHunkNew}
+                onEditingChange={onInlineEditingChange}
+                closeEditorOnOutside
                 readOnly={readOnlyDiff}
+                appMode={appMode}
               />
             </div>
           </div>
@@ -735,10 +1039,12 @@ function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAccept
 function EditView({
   title,
   content,
+  notes,
   isChapter,
   chapterElements,
   onTitleChange,
   onContentChange,
+  onNotesChange,
   onChapterElementsChange,
   isCharacter,
   storylines,
@@ -771,6 +1077,19 @@ function EditView({
           className="w-full min-h-[360px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y font-mono"
         />
       </div>
+      {isChapter && (
+        <div>
+          <label htmlFor="chapter-notes-editor" className="block text-xs font-semibold text-gray-500 uppercase tracking-wide mb-1">
+            章节笔记（支持 Markdown）
+          </label>
+          <textarea
+            id="chapter-notes-editor"
+            value={notes}
+            onChange={(e) => onNotesChange(e.target.value)}
+            className="w-full min-h-[180px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y font-mono"
+          />
+        </div>
+      )}
       {isChapter && (
         <div data-testid="chapter-elements-editor">
           <div className="flex items-center justify-between mb-2">
@@ -871,7 +1190,7 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onAddContext, onContentDiffChange, chapterNodes, navigationNodes, onChapterNavigate }) {
+function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes, navigationNodes, onChapterNavigate, onEditingChange }) {
   const orderedChapterNodes = useMemo(
     () => [...chapterNodes].sort((left, right) => compareSiblings(
       { id: left.id, data: left },
@@ -882,9 +1201,13 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
+  const [inlineEditingCount, setInlineEditingCount] = useState(0);
   const [editContentScrollRatio, setEditContentScrollRatio] = useState(0);
+  const returnToReadingPositionRef = useRef(false);
+  const readingScrollRatioRef = useRef(0);
   const [editTitle, setEditTitle] = useState(node.label);
   const [editContent, setEditContent] = useState(node.content || "");
+  const [editNotes, setEditNotes] = useState(node.notes || "");
   const [editChapterElements, setEditChapterElements] = useState(() =>
     isChapter ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el })) : []
   );
@@ -898,10 +1221,85 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
       : []
   );
   const [saving, setSaving] = useState(false);
+  const [copyStatus, setCopyStatus] = useState("idle");
   const [isFullscreen, setIsFullscreen] = useState(appMode);
   const [selectionAction, setSelectionAction] = useState(null);
   const [diffBatches, setDiffBatches] = useState(() => hydrateDiffBatches(node.content || "", contentDiff).batches);
+  const [notesDiffBatches, setNotesDiffBatches] = useState(() => hydrateDiffBatches(node.notes || "", notesDiff).batches);
+  const operationHistoryRef = useRef({ undo: [], redo: [], running: false });
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
+
+  const recordOperation = useCallback((operation) => {
+    operationHistoryRef.current.undo.push(operation);
+    operationHistoryRef.current.redo = [];
+  }, []);
+
+  const replayOperation = useCallback(async (direction) => {
+    const history = operationHistoryRef.current;
+    if (history.running) return;
+    const source = direction === "undo" ? history.undo : history.redo;
+    const destination = direction === "undo" ? history.redo : history.undo;
+    const operation = source.pop();
+    if (!operation) return;
+    history.running = true;
+    try {
+      await operation[direction]();
+      destination.push(operation);
+    } catch {
+      source.push(operation);
+    } finally {
+      history.running = false;
+    }
+  }, []);
+
+  useEffect(() => {
+    operationHistoryRef.current = { undo: [], redo: [], running: false };
+  }, [node.id]);
+
+  useEffect(() => {
+    const handleHistoryShortcut = (event) => {
+      if (!event.ctrlKey || event.altKey || event.repeat || event.defaultPrevented) return;
+      const target = event.target;
+      if (target instanceof Element && target.closest("input, textarea, [contenteditable='true']")) return;
+      const key = event.key.toLocaleLowerCase();
+      const direction = key === "z" && !event.shiftKey
+        ? "undo"
+        : (key === "y" || (key === "z" && event.shiftKey) ? "redo" : null);
+      if (!direction) return;
+      event.preventDefault();
+      replayOperation(direction);
+    };
+    document.addEventListener("keydown", handleHistoryShortcut);
+    return () => document.removeEventListener("keydown", handleHistoryShortcut);
+  }, [replayOperation]);
+  useLayoutEffect(() => {
+    if (isEditing || !returnToReadingPositionRef.current) return undefined;
+    returnToReadingPositionRef.current = false;
+
+    const scheduleRestore = typeof requestAnimationFrame === "function"
+      ? requestAnimationFrame
+      : (callback) => setTimeout(callback, 0);
+    const cancelRestore = typeof cancelAnimationFrame === "function"
+      ? cancelAnimationFrame
+      : clearTimeout;
+    const frame = scheduleRestore(() => {
+      const reader = detailScrollRef.current;
+      if (!reader) return;
+      const maxScrollTop = Math.max(0, reader.scrollHeight - reader.clientHeight);
+      const nextScrollTop = maxScrollTop * readingScrollRatioRef.current;
+      reader.scrollTop = nextScrollTop;
+      detailScrollPositions.set(node.id, nextScrollTop);
+    });
+
+    return () => cancelRestore(frame);
+  }, [isEditing, node.id, detailScrollRef]);
+  const handleInlineEditingChange = useCallback((editing) => {
+    setInlineEditingCount((count) => Math.max(0, count + (editing ? 1 : -1)));
+  }, []);
+  useEffect(() => {
+    onEditingChange?.(isEditing || inlineEditingCount > 0);
+  }, [isEditing, inlineEditingCount, onEditingChange]);
+  useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
   useEffect(() => {
     if (appMode || !node.sourceReference || isEditing) return;
     const frame = requestAnimationFrame(() => detailScrollRef.current?.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" }));
@@ -913,7 +1311,10 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
     const maxScrollTop = reader
       ? Math.max(0, reader.scrollHeight - reader.clientHeight)
       : 0;
-    setEditContentScrollRatio(maxScrollTop > 0 ? reader.scrollTop / maxScrollTop : 0);
+    const scrollRatio = maxScrollTop > 0 ? reader.scrollTop / maxScrollTop : 0;
+    readingScrollRatioRef.current = scrollRatio;
+    returnToReadingPositionRef.current = true;
+    setEditContentScrollRatio(scrollRatio);
     setIsEditing(true);
   }, [detailScrollRef]);
 
@@ -923,9 +1324,11 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
 
   useEffect(() => {
     setIsEditing(false);
+    setCopyStatus("idle");
     setSelectionAction(null);
     setEditTitle(node.label);
     setEditContent(node.content || "");
+    setEditNotes(node.notes || "");
     setEditChapterElements(
       node.type === "chapter"
         ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }))
@@ -942,9 +1345,22 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
     );
   }, [appMode, node]);
 
+  const handleCopyChapterContent = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(node.content || "");
+      setCopyStatus("copied");
+    } catch {
+      setCopyStatus("failed");
+    }
+  }, [node.content]);
+
   useEffect(() => {
     setDiffBatches(hydrateDiffBatches(node.content || "", contentDiff).batches);
   }, [contentDiff]);
+
+  useEffect(() => {
+    setNotesDiffBatches(hydrateDiffBatches(node.notes || "", notesDiff).batches);
+  }, [notesDiff]);
 
   useEffect(() => {
     if (!onAddContext) return undefined;
@@ -956,11 +1372,19 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
   }, [onAddContext, node.id]);
 
   const handleSave = async () => {
-    const payload = { title: editTitle, content: editContent };
+    const payload = { title: editTitle, content: editContent, expected_content: node.content || "" };
+    const previousPayload = {
+      title: node.label,
+      content: node.content || "",
+      expected_content: editContent,
+    };
     if (node.type === "chapter") {
+      payload.notes = editNotes;
       payload.chapter_elements = editChapterElements
         .map((el) => ({ ...el }))
         .filter((el) => (el.title || "").trim() || (el.content || "").trim());
+      previousPayload.notes = node.notes || "";
+      previousPayload.chapter_elements = (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }));
     }
     if (node.type === "character") {
       payload.storylines = editStorylines
@@ -972,11 +1396,22 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
             .filter(Boolean),
         }))
         .filter((line) => line.name && line.body.length > 0);
+      previousPayload.storylines = (node.extra_data?.storylines || []).map((line) => ({
+        name: line.name || "",
+        description: line.description || "",
+        body: Array.isArray(line.body) ? [...line.body] : [],
+      }));
     }
     setSaving(true);
     try {
       await onUpdate?.(node.id, payload);
+      recordOperation({
+        undo: () => onUpdate?.(node.id, previousPayload),
+        redo: () => onUpdate?.(node.id, { ...payload, expected_content: previousPayload.content }),
+      });
       setIsEditing(false);
+    } catch {
+      // 上层负责展示保存错误；保留编辑状态供用户处理冲突后重试。
     } finally {
       setSaving(false);
     }
@@ -1002,30 +1437,217 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
     window.getSelection?.()?.removeAllRanges?.();
   };
 
+  const publishContentDiff = useCallback((baselineContent, currentContent, groupedDiff) => {
+    if (groupedDiff) {
+      setDiffBatches(hydrateDiffBatches(currentContent, groupedDiff).batches);
+      onContentDiffChange?.(groupedDiff.hunks.length ? groupedDiff : null);
+      return;
+    }
+    const hunks = buildContentDiffFromContents(baselineContent, currentContent);
+    const batches = hunks.length ? [{ original_content: baselineContent, hunks }] : [];
+    setDiffBatches(batches);
+    if (hunks.length) {
+      onContentDiffChange?.({
+        original_content: baselineContent,
+        current_content: currentContent,
+        hunks,
+        batches,
+      });
+    } else {
+      onContentDiffChange?.(null);
+    }
+  }, [onContentDiffChange]);
+
+  const writeContentDiffState = useCallback(async ({ expectedContent, expectedBaseline, nextBaseline, nextContent, nextDiff }) => {
+    await onContentDiffDecision?.(node.id, {
+      expected_content: expectedContent,
+      expected_baseline: expectedBaseline,
+      baseline_content: nextBaseline,
+      current_content: nextContent,
+      ...(nextDiff ? { groups: nextDiff.hunks.map(({ start_offset, old_text, new_text }) => ({ start_offset, old_text, new_text })) } : {}),
+    });
+    publishContentDiff(nextBaseline, nextContent, nextDiff);
+  }, [node.id, onContentDiffDecision, publishContentDiff]);
+
+  const persistContentDiff = async ({ expectedContent, expectedBaseline, nextBaseline, nextContent, nextDiff }) => {
+    const previousDiff = diffBatches[0]?.grouping === "agent_replacements" ? {
+      ...diffBatches[0], current_content: expectedContent,
+    } : undefined;
+    try {
+      await writeContentDiffState({ expectedContent, expectedBaseline, nextBaseline, nextContent, nextDiff });
+      recordOperation({
+        undo: () => writeContentDiffState({
+          expectedContent: nextContent,
+          expectedBaseline: nextBaseline,
+          nextBaseline: expectedBaseline,
+          nextContent: expectedContent,
+          nextDiff: previousDiff,
+        }),
+        redo: () => writeContentDiffState({
+          expectedContent,
+          expectedBaseline,
+          nextBaseline,
+          nextContent,
+          nextDiff,
+        }),
+      });
+      return true;
+    } catch (error) {
+      alert("处理正文修改失败：" + (error?.message || "未知错误"));
+      return false;
+    }
+  };
+
   const applyHunkDecisions = async (nextBatches) => {
+    if (diffBatches[0]?.grouping === "agent_replacements") {
+      let nextDiff = diffBatches[0];
+      for (let index = nextBatches[0].hunks.length - 1; index >= 0; index -= 1) {
+        const status = nextBatches[0].hunks[index].status;
+        if (status) nextDiff = decideAgentGroup(nextDiff, index, status === "accepted" ? "accept" : "reject");
+      }
+      return persistGroupedDiff(nextDiff);
+    }
     // diffBatches 描述的是用户作决定前、Agent 已实际写入的正文。
     // 画布节点刷新带防抖，node.content 在短窗口内可能仍是修改前的旧值。
     const expectedContent = contentAfterBatches(diffBatches);
     const expectedBaseline = diffBatches[0]?.original_content ?? contentDiff?.original_content ?? "";
     const nextContent = contentAfterBatches(nextBatches);
     const nextBaseline = contentAfterBatches(setAllHunkStatusInBatches(nextBatches, "rejected"));
-    try {
-      await onContentDiffDecision?.(node.id, {
-        expected_content: expectedContent,
-        expected_baseline: expectedBaseline,
-        baseline_content: nextBaseline,
-        current_content: nextContent,
+    return persistContentDiff({ expectedContent, expectedBaseline, nextBaseline, nextContent });
+  };
+
+  const persistGroupedDiff = (nextDiff) => persistContentDiff({
+    expectedContent: contentAfterBatches(diffBatches),
+    expectedBaseline: diffBatches[0].original_content,
+    nextBaseline: nextDiff.original_content,
+    nextContent: nextDiff.current_content,
+    nextDiff,
+  });
+
+  const handleEditParagraph = async (paragraphIndex, nextText) => {
+    const hasPendingDiff = pendingHunksFromBatches(diffBatches).length > 0;
+    const currentContent = hasPendingDiff ? contentAfterBatches(diffBatches) : (node.content || "");
+    const paragraphs = splitParagraphs(currentContent);
+    if (paragraphIndex < 1 || paragraphIndex > paragraphs.length) return false;
+    paragraphs[paragraphIndex - 1] = nextText;
+    const nextContent = joinParagraphs(paragraphs);
+    if (nextContent === currentContent) return true;
+
+    if (hasPendingDiff && diffBatches[0]?.grouping !== "agent_replacements") {
+      const expectedBaseline = diffBatches[0]?.original_content ?? contentDiff?.original_content ?? "";
+      const baselineContent = contentAfterBatches(setAllHunkStatusInBatches(diffBatches, "rejected"));
+      const committed = commitUserParagraphEdit(baselineContent, currentContent, paragraphIndex, nextText);
+      return persistContentDiff({
+        expectedContent: currentContent,
+        expectedBaseline,
+        nextBaseline: committed.baselineContent,
+        nextContent: committed.currentContent,
       });
-      const hunks = buildContentDiffFromContents(nextBaseline, nextContent);
-      if (hunks.length) {
-        onContentDiffChange?.({ original_content: nextBaseline, current_content: nextContent,
-          hunks, batches: [{ original_content: nextBaseline, hunks }] });
-      } else {
-        onContentDiffChange?.(null);
-      }
-    } catch (error) {
-      alert("处理正文修改失败：" + (error?.message || "未知错误"));
     }
+
+    try {
+      await onUpdate?.(node.id, { content: nextContent, expected_content: currentContent });
+      recordOperation({
+        undo: () => onUpdate?.(node.id, { content: currentContent, expected_content: nextContent }),
+        redo: () => onUpdate?.(node.id, { content: nextContent, expected_content: currentContent }),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  const handleEditHunkNew = (paragraphIndex, nextText, grouped = false) => {
+    if (grouped) {
+      const group = diffBatches[0].hunks[paragraphIndex];
+      const committed = commitUserTextEdit(group.old_text, group.new_text, nextText);
+      return persistGroupedDiff(decideAgentGroup(diffBatches[0], paragraphIndex, "update", {
+        oldText: committed.baselineText, newText: committed.currentText,
+      }));
+    }
+    const currentContent = contentAfterBatches(diffBatches);
+    const baselineContent = contentAfterBatches(setAllHunkStatusInBatches(diffBatches, "rejected"));
+    const currentParagraphs = splitParagraphs(currentContent);
+    const baselineParagraphs = splitParagraphs(baselineContent);
+    const position = paragraphIndex - 1;
+    if (position < 0 || position >= currentParagraphs.length || position >= baselineParagraphs.length) return false;
+    const committed = commitUserTextEdit(
+      baselineParagraphs[position],
+      currentParagraphs[position],
+      nextText,
+    );
+    baselineParagraphs[position] = committed.baselineText;
+    currentParagraphs[position] = committed.currentText;
+    const nextBaseline = joinParagraphs(baselineParagraphs);
+    const nextContent = joinParagraphs(currentParagraphs);
+    const nextBatches = [{
+      original_content: nextBaseline,
+      hunks: buildContentDiffFromContents(nextBaseline, nextContent),
+    }];
+    return applyHunkDecisions(nextBatches);
+  };
+
+  const publishNotesDiff = useCallback((baselineNotes, currentNotes) => {
+    const hunks = buildContentDiffFromContents(baselineNotes, currentNotes);
+    const batches = hunks.length ? [{ original_content: baselineNotes, hunks }] : [];
+    setNotesDiffBatches(batches);
+    if (hunks.length) {
+      onNotesDiffChange?.({
+        original_content: baselineNotes,
+        current_content: currentNotes,
+        hunks,
+        batches,
+      });
+    } else {
+      onNotesDiffChange?.(null);
+    }
+  }, [onNotesDiffChange]);
+
+  const writeNotesDiffState = useCallback(async ({ expectedNotes, expectedBaseline, nextBaseline, nextNotes }) => {
+    await onNotesDiffDecision?.(node.id, {
+      expected_notes: expectedNotes,
+      expected_baseline: expectedBaseline,
+      baseline_notes: nextBaseline,
+      current_notes: nextNotes,
+    });
+    publishNotesDiff(nextBaseline, nextNotes);
+  }, [node.id, onNotesDiffDecision, publishNotesDiff]);
+
+  const applyNotesHunkDecisions = async (nextBatches) => {
+    const expectedNotes = contentAfterBatches(notesDiffBatches);
+    const expectedBaseline = notesDiffBatches[0]?.original_content ?? notesDiff?.original_content ?? "";
+    const nextNotes = contentAfterBatches(nextBatches);
+    const nextBaseline = contentAfterBatches(setAllHunkStatusInBatches(nextBatches, "rejected"));
+    try {
+      await writeNotesDiffState({ expectedNotes, expectedBaseline, nextBaseline, nextNotes });
+      recordOperation({
+        undo: () => writeNotesDiffState({
+          expectedNotes: nextNotes,
+          expectedBaseline: nextBaseline,
+          nextBaseline: expectedBaseline,
+          nextNotes: expectedNotes,
+        }),
+        redo: () => writeNotesDiffState({ expectedNotes, expectedBaseline, nextBaseline, nextNotes }),
+      });
+    } catch (error) {
+      alert("处理笔记修改失败：" + (error?.message || "未知错误"));
+    }
+  };
+
+  const handleAcceptNotesHunk = (batchIndex, hunkIndex) => {
+    if (batchIndex == null) {
+      applyNotesHunkDecisions(setAllHunkStatusInBatches(notesDiffBatches, "accepted"));
+      return;
+    }
+    applyNotesHunkDecisions(setHunkStatusInBatches(notesDiffBatches, batchIndex, hunkIndex, "accepted"));
+  };
+
+  const handleRejectNotesHunk = (batchIndex, hunkIndex) => {
+    if (batchIndex == null) {
+      applyNotesHunkDecisions(setAllHunkStatusInBatches(notesDiffBatches, "rejected"));
+      return;
+    }
+    applyNotesHunkDecisions(setHunkStatusInBatches(notesDiffBatches, batchIndex, hunkIndex, "rejected"));
   };
 
   const handleAcceptHunk = (batchIndex, hunkIndex) => {
@@ -1135,11 +1757,30 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
             </>
           ) : (
             <>
+              {isChapter && (
+                <button
+                  type="button"
+                  onClick={handleCopyChapterContent}
+                  className={`flex items-center gap-1 rounded-md px-2 py-1.5 text-xs transition-colors ${
+                    copyStatus === "copied"
+                      ? "bg-emerald-50 text-emerald-600"
+                      : copyStatus === "failed"
+                        ? "bg-red-50 text-red-600"
+                        : "text-gray-500 hover:bg-amber-100 hover:text-amber-700"
+                  }`}
+                  title={copyStatus === "copied" ? "正文已复制" : copyStatus === "failed" ? "复制失败" : "复制正文"}
+                  aria-label={copyStatus === "copied" ? "正文已复制" : copyStatus === "failed" ? "复制失败" : "复制正文"}
+                >
+                  {copyStatus === "copied" ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
+                  <span>{copyStatus === "copied" ? "已复制" : copyStatus === "failed" ? "复制失败" : "复制正文"}</span>
+                </button>
+              )}
               {onUpdate && (
                 <button
                   onClick={handleStartEditing}
                   className="p-1.5 rounded-md text-gray-400 hover:text-blue-500 hover:bg-blue-50 transition-colors"
-                  title="编辑节点"
+                  title="编辑全文"
+                  aria-label="编辑全文"
                 >
                   <Pencil className="w-4 h-4" />
                 </button>
@@ -1169,10 +1810,12 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
         <EditView
           title={editTitle}
           content={editContent}
+          notes={editNotes}
           isChapter={isChapter}
           chapterElements={editChapterElements}
           onTitleChange={setEditTitle}
           onContentChange={setEditContent}
+          onNotesChange={setEditNotes}
           onChapterElementsChange={setEditChapterElements}
           isCharacter={isCharacter}
           storylines={editStorylines}
@@ -1187,8 +1830,14 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
           appMode={appMode}
           onTextSelect={handleTextSelect}
           batches={diffBatches}
+          notesBatches={notesDiffBatches}
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
+          onEditParagraph={onUpdate ? handleEditParagraph : undefined}
+          onEditHunkNew={onContentDiffDecision ? handleEditHunkNew : undefined}
+          onInlineEditingChange={handleInlineEditingChange}
+          onAcceptNotesHunk={handleAcceptNotesHunk}
+          onRejectNotesHunk={handleRejectNotesHunk}
           readOnlyDiff={isDiffPreview}
           previousChapter={navigationNodes ? previousNode : previousChapter}
           nextChapter={navigationNodes ? nextNode : nextChapter}
@@ -1202,6 +1851,9 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
           batches={diffBatches}
           onAcceptHunk={handleAcceptHunk}
           onRejectHunk={handleRejectHunk}
+          onEditParagraph={onUpdate ? handleEditParagraph : undefined}
+          onEditHunkNew={onContentDiffDecision ? handleEditHunkNew : undefined}
+          onInlineEditingChange={handleInlineEditingChange}
           readOnlyDiff={isDiffPreview}
           appMode={appMode}
           previousNode={previousNode}
@@ -1219,7 +1871,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, agentRunning, onClo
   );
 }
 
-export default function NodeDetailDrawer({ appMode = false, node, contentDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onAddContext, onContentDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate }) {
+export default function NodeDetailDrawer({ appMode = false, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate, onEditingChange }) {
   if (!node) return null;
 
   return (
@@ -1227,7 +1879,7 @@ export default function NodeDetailDrawer({ appMode = false, node, contentDiff, a
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
       <SourceReferenceContext.Provider value={appMode ? null : node.sourceReference}>
-        <NodeDetailDrawerInner appMode={appMode} node={node} contentDiff={contentDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} />
+        <NodeDetailDrawerInner appMode={appMode} node={node} contentDiff={contentDiff} notesDiff={notesDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onNotesDiffDecision={onNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} onNotesDiffChange={onNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} onEditingChange={onEditingChange} />
       </SourceReferenceContext.Provider>
     </div>
   );

@@ -36,6 +36,34 @@ def test_save_intermediate_persists_text_before_tool_call(monkeypatch):
     assert tool_msgs[0]["content"] == "get_canvas_index"
 
 
+def test_respond_to_user_call_does_not_persist_model_content_as_visible_text(monkeypatch):
+    saved = []
+
+    def fake_add(session_id, role, content, meta=None, work_id=None):
+        saved.append({"role": role, "content": content, "meta": meta or {}})
+
+    monkeypatch.setattr(
+        "services.session_store.session_store.add_message",
+        fake_add,
+    )
+
+    SupervisorAgent()._save_intermediate_messages(
+        "sess-1",
+        [AIMessage(
+            content="现状摘要已提交给作者。",
+            tool_calls=[{
+                "id": "respond-1",
+                "name": "respond_to_user",
+                "args": {"message": "完整总结"},
+            }],
+        )],
+        work_id="w1",
+    )
+
+    assert not [m for m in saved if m["role"] == "assistant"]
+    assert [m["content"] for m in saved if m["role"] == "tool_call"] == ["respond_to_user"]
+
+
 def test_save_intermediate_persists_tool_result(monkeypatch):
     saved = []
 

@@ -53,6 +53,10 @@ def test_research_tables_do_not_use_json_columns(db_session):
         "research_events",
         "research_artifacts",
         "research_instructions",
+        "research_sessions",
+        "research_messages",
+        "research_message_work_references",
+        "research_message_chapter_references",
     ):
         columns.extend(inspector.get_columns(table))
     assert all("JSON" not in str(column["type"]).upper() for column in columns)
@@ -424,16 +428,21 @@ def test_independent_agent_runs_until_complete_without_iteration_limit(
         ),
     ]
 
-    class FakeLLM:
-        async def ainvoke(self, _messages):
-            return responses.pop(0)
+    class FakeAgent:
+        def __init__(self, agent_tools):
+            self.tools = {tool.name: tool for tool in agent_tools}
 
-    fake = FakeLLM()
-    monkeypatch.setattr(research_agent_module, "get_llm", lambda **_kwargs: fake)
+        async def ainvoke(self, state, config=None):
+            response = responses.pop(0)
+            call = response.tool_calls[0]
+            await self.tools[call["name"]].ainvoke(call["args"])
+            return {"messages": [*state["messages"], response]}
+
+    monkeypatch.setattr(research_agent_module, "get_deep_agent_model", lambda **_kwargs: object())
     monkeypatch.setattr(
         research_agent_module,
-        "bind_tools_to_llm",
-        lambda _llm, _tools: fake,
+        "build_deep_agent",
+        lambda *, tools, **_kwargs: FakeAgent(tools),
     )
 
     manager = research_agent_module.ResearchAgentManager()

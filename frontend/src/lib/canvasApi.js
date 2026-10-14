@@ -58,6 +58,17 @@ export async function saveContentDiffDecision(nodeId, data) {
   }, "处理正文修改失败");
 }
 
+export async function fetchNotesDiffs(workId) {
+  return authJson(`${API_BASE}/works/${workId}/notes-diffs`, {}, "加载笔记修改失败");
+}
+
+export async function saveNotesDiffDecision(nodeId, data) {
+  return authJson(`${API_BASE}/nodes/${nodeId}/notes-diff-decision`, {
+    method: "PUT",
+    body: JSON.stringify(data),
+  }, "处理笔记修改失败");
+}
+
 export async function deleteNode(id) {
   return authJson(`${API_BASE}/nodes/${id}`, {
     method: "DELETE",

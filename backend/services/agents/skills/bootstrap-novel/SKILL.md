@@ -1,21 +1,21 @@
 ---
 name: bootstrap-novel
-description: 根据灵感或梗概从零创建作品骨架，包括创作定位、世界观、核心角色、总纲与初始故事结构。
+description: 从灵感搭建作品定位、世界观、人物、总纲与初始结构。
 ---
 
 # 初始化小说
 
+本技能由 Supervisor 亲自执行。参考规则通过 `read_skill_reference` 按阶段完整加载，工具仅负责读取与保存。
+参考文件中的结构化输出格式用于组织工作记录；设定使用节点工具保存，章节正文交给 `run_writing_agent`，用户回复使用 `respond_to_user`。
+
 ## 完成标准
 
-- 真实节点覆盖作品定位、世界规则、核心角色、总纲、首层故事结构和用户需求笔记（`note`）。
-- 结构节点通过真实 UUID 建立父子连线，同级顺序明确。
-- 节点内容已写入并完成回读。
-- 已读取全部既有 `note` 节点；用户约束已写入或更新到对应笔记，并完成回读。
+真实节点覆盖作品定位、核心角色、世界规则、总纲与用户需求笔记（`note`）；层级、顺序和内容已回读。
 
 ## 执行流程
 
-1. 读取当前画布和用户完整要求：用 `get_canvas_index` 找出既有 `note` 节点并用 `read_node_content` 读取；确定所需节点类型、标题、顺序及层级，包含用于沉淀用户需求的 `note`。
-2. 使用 `create_node` 建立真实节点，记录返回的 UUID；已有节点沿用其 UUID。
-3. 使用 `create_edge` 按真实 UUID 建立 outline→volume→plot→chapter 的父子连线。
-4. 调用 `develop_existing_nodes`，specialty=`architecture`，传入本轮节点 UUID 与用户完整要求，由专职 Agent 直接写入节点内容，其中 `note` 必须写全用户约束而非剧情摘要。
-5. 读取画布核对节点、连线和内容；如需修改，继续更新同一真实节点。对笔记节点用 `read_node_content` 确认与当前用户要求一致。
+1. 用 `get_canvas_index` 找出既有节点，`read_node_content` 读取全部笔记及相关作品资料，整理用户完整要求。
+2. 用 `read_skill_reference` 加载本技能的 `premise_architect.txt`，亲自完成架构构思，将用户提出的需求完整保存到同主题笔记。
+3. 用 `create_node` 建立真实节点，记录 UUID；沿用已有节点时，局部调整 `content` 使用 `update_node(mode="replace", replacements=[...])`，整体重构才使用 `mode="overwrite"`。使用真实 UUID 和 `create_edge` 建立 outline→volume→plot→chapter 父子连线。
+4. 由你把构思写入节点 `content`，将角色发展线写入 `storylines`，角色定位写入 `scope`。
+5. 回读节点和笔记，检查层级、因果、用户约束与内容一致性，修订更新原 UUID。

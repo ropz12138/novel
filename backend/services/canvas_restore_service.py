@@ -39,12 +39,16 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
     for snap_node in snapshot.nodes:
         existing = existing_nodes.get(snap_node.id)
         if existing:
+            old_content = existing.content or ""
             existing.type = snap_node.type
             existing.layer = snap_node.layer
             existing.sort_order = snap_node.sort_order
             existing.scope = snap_node.scope
             existing.title = snap_node.title
             existing.content = snap_node.content
+            if old_content != snap_node.content:
+                from services.node_agent_diff import record_manual_change
+                record_manual_change(db, existing, old_content)
             existing.extra_data = snap_node.extra_data
             existing.position_x = snap_node.position_x
             existing.position_y = snap_node.position_y
@@ -62,6 +66,13 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
                 position_x=snap_node.position_x,
                 position_y=snap_node.position_y,
             ))
+
+    db.flush()
+    from services.node_content_write_service import write_node_content
+    for snap_node in snapshot.nodes:
+        if snap_node.type == "chapter" and snap_node.notes is not None:
+            node = db.get(Node, snap_node.id)
+            write_node_content(db, node, snap_node.content, summary=snap_node.notes)
 
     for snap_edge in snapshot.edges:
         existing = existing_edges.get(snap_edge.id)

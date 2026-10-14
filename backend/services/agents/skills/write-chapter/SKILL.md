@@ -1,40 +1,27 @@
 ---
 name: write-chapter
-description: 创作或续写完整小说章节时，统筹结构化场景规划、正文生成、连续性审查、对白审查、定向修订、摘要与最终保存。
+description: Supervisor 规划与协调修订，独立 Writer 写作，Reviewer 评审阅读体验。
 ---
 
 # 写作章节工作流
 
-本技能由 Supervisor 加载并统筹执行。专职 Agent 负责文学任务，普通代码工具负责上下文、结构校验、版本与保存。
+Supervisor 负责规划、评审决策和记忆，阅读评审通过 `run_review_agent`，正文由 `run_writing_agent` 委派给独立 Writer。参考规则通过 `read_skill_reference` 按阶段完整加载。
+参考文件中的结构化输出格式用于组织工作记录；Writer 提交正文后由运行时校验并保存，用户回复使用 `respond_to_user`。
 
 ## 完成标准
 
-- 已装配目标章节所需的完整作品上下文。
-- 已遵守 `global_context` 中的全部 `note` 条目。
-- 场景规划包含明确的场景次序、人物、客观事件、人物目标、已知信息、行为选择、后果与对白目标；具体小说措辞由正文阶段完成。
-- 正文覆盖场景计划并形成完整开场、发展和结尾。
-- 按本次评审强度完成相应评审和修订。
-- 最终正文、章节摘要和必要的角色信息已保存，并完成回读确认。
+完整上下文和笔记已读取；场景因果明确；正文和角色信息已保存；按评审强度完成检查；完整章节笔记与状态已保存和回读。
 
 ## 执行流程
 
-1. 调用 `assemble_chapter_context`，获得 `chapter_context` 产物。已有章节只传 `chapter_node_id`。尚无章节节点时传 `parent_node_id`（必须是 plot）、`chapter_title`、`sort_order`；工具会创建空章节并建立 plot→chapter 的 contains 连线，再装配上下文。两组参数互斥，禁止先用 `create_node` 建章。
-2. 调用 `plan_chapter_scenes`，获得 `scene_plan` 产物。场景计划只承担事实与因果规划，不承担小说化成句、解释性心理、内心独白或修辞表达。
-3. 根据场景计划创建确有必要的新角色，再调用 `prepare_chapter_from_scene_plan`，传入场景计划产物 ID 和全部出场角色节点 ID，由工具将情节单元与出场角色确定性同步到章节的 `chapter_elements`、`characters`；该步骤保持章节 `content` 不变。
-4. `scene_plan_ready` 后调用 `write_chapter_draft`；生成正文直接写入已存在的章节节点，草稿产物记录完整版本供评审。
-5. 按本次评审强度执行：低档不调用任何评审工具，进入摘要和提交；中档每个评审工具最多调用一次，汇总自然语言建议；高档评审次数不限，按值得采纳的建议修订并复检最新草稿，直到建议无需采纳或评审 Agent 明确认为文本已经优秀。针对同一版 `chapter_draft` 且相互独立的多个只读评审，在同一次响应中并行调用对应评审工具，全部返回后统一进入修订决策。可用 `count_chapter_words` 查看篇幅，不要把字数区间当作完成条件，不要自动循环压缩篇幅。
-6. Supervisor 阅读评审建议和证据，自行判断哪些建议值得采纳。决定修改时调用 `decide_chapter_revision`，传入当前场景计划、最新草稿和相关评审产物 ID；由决策 Agent 选择 `replan`、`rewrite` 或 `local_edit`，并说明原因与执行要求。若仅因篇幅返回 `needs_revision`，向用户说明工具给出的字数与建议，等待用户是否要求调整篇幅。
-7. `replan`：调用 `replan_chapter_scenes` 重新划定本章范围；使用新计划同步章节结构，再调用 `write_chapter_draft` 生成新稿。保留 `deferred_scenes` 与 `next_chapter_handoff` 供下一章承接。`rewrite`：调用 `rewrite_chapter_draft` 生成完整新稿。`local_edit`：调用 `edit_chapter_draft_locally`，通过唯一原文片段替换得到新草稿，正文其他部分保持原样。
-8. 高档对本轮涉及的评审项复检最新草稿，再由 Supervisor 判断新建议是否值得采纳；值得采纳时回到第 6 步。中档不再次调用已使用的评审工具。
-9. 评审强度为中或高时，对已有 `chapter_context` 和最新 `chapter_draft` 执行去 AI 味：调用 `humanize_chapter_draft`，取得自然化后的最新草稿，再在同一次响应中并行调用 `review_fiction_quality` 和 `review_chapter_ai_taste`。Supervisor 汇总两项自然语言建议后决定是否修订；中档遵守每个评审工具最多一次，高档可对最新草稿继续并行复检。低强度写章流程跳过本步。
-10. 调用 `summarize_chapter_draft` 生成摘要及章末状态。
-11. 调用 `commit_chapter_workflow_result`，携带上下文产物返回的 `source_content_sha256` 固化通过验收版本的摘要与状态；随后使用 `read_node_content` 重新读取真实章节核对结果。内容质量仍需修订时，对最新版本重新执行第 6 步并重新生成摘要。
-
-## 状态处理
-
-- `completed`：读取 `gate.code` 并继续技能规定的下一步。
-- `needs_revision`：用于非评审工具的流程失败或篇幅提示；评审工具自身不判定是否需要修订。
-- `needs_user`：保留现有产物，向用户说明需要决定的冲突及其影响，当前任务保持未完成。
-- `failed`：报告失败阶段和结构化错误；已有中间产物保持可恢复。
-
-专业 Reviewer 提供自然语言建议与证据；Supervisor 决定采纳项；Revision Agent 生成新版本。
+1. 用 `get_canvas_index` 与 `read_node_content` 读取用户笔记、世界观、角色、所属结构、前文和已有目标章节的正文与笔记。新章使用 `create_node` 建 chapter，用 `create_edge` 建立 plot→chapter 父子关系。
+2. 场景规划前用 `list_chapters` 读取目录与 catalog_revision，按章节号分批调用 `read_chapter_context` 读取相关前章及目标章节完整正文，用 `read_chapter_notes` 读取完整笔记；每个 session 从作品持久数据重建事实。为缺少笔记的前章补齐有正文依据的事实，保留已有作者要求与设计。核对数量收支、人物能力与认知、伤势、时间地点、物品归属和未决线索，逐项记录来源章节 UUID 和正文证据。冲突需要作者决定时先确认。
+3. 用 `load_workflow_skill` 加载 `plan-chapter-scenes`，按该技能完整读取 `scene_plan.txt`。Supervisor 先完成章节“大方向”：确定叙事功能、目标体验、节奏强度、参与人物、开篇状态、目标章末状态并核对相邻章节节奏。当工具集中存在 `run_reference_agent`，且作者、既有大纲和章节笔记尚未给出完整具体事件链时，在展开场景事件前调用它；提交上述大方向、当前故事事实和小说 ID，由它从上传小说提供带来源的具体事件候选、叙事机制与适配方向。Supervisor 比较并选择、组合、本作化候选，最终落实为事件因果、情绪曲线、有效阻力、参与者目的、关键选择及局势变化。用 `save_chapter_notes(chapter_node_id, notes=完整章节笔记, expected_content_sha256=回读值)` 保存笔记；笔记包含章节摘要、作者要求、完整创作设计和连续性数据，待写事件明确标记为计划。完整计划交接到 brief.scene_plan，具体文学表达由 Writer 完成。
+4. 创建确有必要的新角色，用 `update_node` 把场景标题和目的写入 `chapter_elements`、真实角色 id/name 写入 `characters`。
+5. 完整加载 `chapter_writer.txt`，把当前版本的场景计划、世界事实、逐人已知信息及来源、叙述视角、完整作者要求和写作范围整理为 brief，相关前章/角色/世界观 UUID 放入 source_node_ids。编辑历史保留在 Supervisor，brief 表达当前目标状态。用 `run_writing_agent(operation="write", chapter_node_id, source_node_ids, brief)` 写空章；已有正文整体重构使用 operation="rewrite"。工具启动时自行读取目标章节最新正文并建立并发写入基线，独立生成并保存后，用 `read_node_content` 回读实际正文。
+6. 低档进入第 10 步。中、高档加载 `evaluate-fiction`，调用 `run_review_agent`，提供目标章节、完整作者要求与相关来源，使用 perspectives=["tired_reader", "ai_taste"] 并行评审阅读体验与表达自然度。保留报告对应的正文哈希、阅读感受、所需元素与具体问题。中档每个视角一次，高档针对实际修改后的最新正文复检。
+7. 根据报告与作者要求判断值得采纳的建议，区分表达问题与场景设计问题。自然化适用于作者明确提出或报告定位到的具体表达问题，此时加载 `humanize-fiction` 并交给 Writer 执行。
+8. 汇总本章全部检查结果，读取 `chapter_revision_decision.txt`，自行选择局部修改、整章重写或场景重规划，并按该决定执行。
+9. 局部修改完整读取 `chapter_local_edit.txt`，用 `run_writing_agent(operation="revise")`；整章重写读取 `chapter_rewrite.txt` 后使用 operation="rewrite"；场景重规划加载 `plan-chapter-scenes` 并读取 `chapter_replan.txt`，保存新计划及后续承接，再交给 Writer 生成正文。每次交接使用完整当前 brief，目标正文和并发写入基线由写作运行时读取建立，保存后回读。高档调用评审子 Agent 复检最新正文，直到具体问题解决或剩余建议无需采纳；中档汇总修改后进入收尾。
+10. 加载 `maintain-story-memory`，基于回读的最终正文更新完整章节笔记和章末状态，使用其保存步骤同步笔记、角色变化及未决线索，再回读确认。
+11. 篇幅按用户要求安排，可用 `count_chapter_words` 报告实际字数。用户明确要求调整时读取 `chapter_length_advice.txt`，每次任务最多进行两次篇幅修改，随后说明剩余差距。

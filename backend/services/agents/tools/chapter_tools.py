@@ -1,12 +1,10 @@
-"""Registered chapter evaluation and word-count tools."""
+"""确定性章节字数统计工具。"""
 import json
 from typing import Optional
 
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from models.chapter import Chapter
-from models.node import Node
 
 
 def _get_db():
@@ -22,96 +20,6 @@ def _get_current_work_id():
         return get_context().get("work_id")
     except Exception:
         return None
-
-
-class EvaluateChapterInput(BaseModel):
-    chapter_node_id: Optional[str] = Field(
-        default=None,
-        description="要评估的章节节点ID；省略则评估作品中按顺序最新且有正文的章节",
-    )
-    work_id: Optional[str] = Field(default=None, description="作品ID")
-    reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
-
-
-def _parse_evaluate_chapter_response(raw: str) -> dict:
-    text = raw.strip()
-    if text.startswith("```"):
-        lines = text.splitlines()
-        text = "\n".join(
-            line for line in lines if not line.strip().startswith("```")
-        ).strip()
-    data = json.loads(text)
-    if "evaluation" not in data or "chapter_overview" not in data:
-        raise ValueError("模型返回缺少 evaluation 或 chapter_overview")
-    return data
-
-
-def _upsert_chapter_summary(db, node: Node, overview: str) -> None:
-    chapter = db.query(Chapter).filter(Chapter.node_id == node.id).first()
-    if not chapter:
-        chapter = Chapter(
-            work_id=node.work_id,
-            node_id=node.id,
-            title=node.title or "",
-            content=node.content or "",
-        )
-        db.add(chapter)
-    chapter.summary = overview
-
-
-async def _evaluate_chapter_coroutine(
-    chapter_node_id=None,
-    reason=None,
-    work_id=None,
-) -> str:
-    from services.agents.llm import get_llm
-    from services.chapter_history_service import (
-        build_evaluate_chapter_messages,
-        resolve_chapter_for_evaluation,
-    )
-
-    db = _get_db()
-    try:
-        effective_work_id = work_id or _get_current_work_id()
-        if not effective_work_id:
-            return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
-
-        chapter = resolve_chapter_for_evaluation(
-            db, effective_work_id, chapter_node_id
-        )
-        if not chapter.content:
-            return json.dumps({"error": "章节正文为空，无法评估"}, ensure_ascii=False)
-
-        messages = build_evaluate_chapter_messages(db, effective_work_id, chapter)
-        llm = get_llm(temperature=0.5, streaming=False)
-        response = await llm.ainvoke(messages)
-        content = getattr(response, "content", str(response))
-        if isinstance(content, list):
-            content = "".join(
-                block.get("text", "") for block in content if isinstance(block, dict)
-            )
-        parsed = _parse_evaluate_chapter_response(content)
-        _upsert_chapter_summary(db, chapter, parsed["chapter_overview"])
-        db.commit()
-
-        return json.dumps(
-            {
-                "success": True,
-                "chapter": {"id": chapter.id, "title": chapter.title},
-                "evaluation": parsed["evaluation"],
-                "chapter_overview": parsed["chapter_overview"],
-            },
-            ensure_ascii=False,
-        )
-    except ValueError as exc:
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
-    except json.JSONDecodeError:
-        return json.dumps({"error": "模型返回不是合法 JSON"}, ensure_ascii=False)
-    except Exception as exc:
-        db.rollback()
-        return json.dumps({"error": str(exc)}, ensure_ascii=False)
-    finally:
-        db.close()
 
 
 class CountChapterWordsInput(BaseModel):
@@ -170,18 +78,6 @@ async def _count_chapter_words_coroutine(
         db.close()
 
 
-evaluate_chapter = StructuredTool.from_function(
-    coroutine=_evaluate_chapter_coroutine,
-    name="evaluate_chapter",
-    description=(
-        "以读者身份评估章节。system 注入角色设定；第一条 user 为前序章节"
-        "（最近5章全文，更早章节用已存档概览）；第二条 user 为待评估章节全文。"
-        "返回 evaluation（评估结果）与 chapter_overview（本章简短摘要，并写入章节摘要）。"
-        "chapter_node_id 可省略，省略时评估最新有正文的章节。"
-    ),
-    args_schema=EvaluateChapterInput,
-)
-
 count_chapter_words = StructuredTool.from_function(
     coroutine=_count_chapter_words_coroutine,
     name="count_chapter_words",
@@ -193,4 +89,4 @@ count_chapter_words = StructuredTool.from_function(
     args_schema=CountChapterWordsInput,
 )
 
-chapter_tools = [evaluate_chapter, count_chapter_words]
+chapter_tools = [count_chapter_words]

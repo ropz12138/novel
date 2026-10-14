@@ -42,6 +42,7 @@ app = FastAPI(title="Novel Canvas API")
 def on_startup():
     init_db()
     from services.session_store import session_store
+    from services.research_chat import migrate_legacy_research_conversations
 
     recovered = session_store.recover_stale_running_sessions()
     if recovered:
@@ -49,13 +50,12 @@ def on_startup():
             "Recovered %d stale running supervisor session(s) as interrupted",
             recovered,
         )
-
-
-@app.on_event("startup")
-async def on_research_startup():
-    from services.research_agent import research_agent_manager
-
-    research_agent_manager.recover_running()
+    migrated = migrate_legacy_research_conversations()
+    if migrated:
+        logging.getLogger(__name__).info(
+            "Migrated %d legacy research conversation(s) into independent sessions",
+            migrated,
+        )
 
 
 app.add_middleware(

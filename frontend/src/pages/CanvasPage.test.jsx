@@ -1,4 +1,4 @@
-import { forwardRef, useEffect, useImperativeHandle } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
@@ -8,6 +8,7 @@ const apiMocks = vi.hoisted(() => ({
   createWork: vi.fn(),
   deleteWork: vi.fn(),
   fetchContentDiffs: vi.fn(),
+  fetchNotesDiffs: vi.fn(),
 }));
 
 const agentChatRefMocks = vi.hoisted(() => ({
@@ -53,10 +54,11 @@ vi.mock("../lib/canvasApi", () => ({
   createWork: apiMocks.createWork,
   deleteWork: apiMocks.deleteWork,
   fetchContentDiffs: apiMocks.fetchContentDiffs,
+  fetchNotesDiffs: apiMocks.fetchNotesDiffs,
 }));
 
 vi.mock("../components/Canvas", () => ({
-  default: forwardRef(function CanvasMock({ workId, nodeContentDiffs, appMode, charactersPanelOpen, onAddContext }, _ref) {
+  default: forwardRef(function CanvasMock({ workId, nodeContentDiffs, appMode, charactersPanelOpen, onAddContext, onNodeEditingChange }, _ref) {
     useImperativeHandle(_ref, () => canvasRefMocks);
     return (
       <div data-testid="canvas-mock" data-work-id={workId}
@@ -68,13 +70,16 @@ vi.mock("../components/Canvas", () => ({
         <button type="button" onClick={() => onAddContext?.({ id: "chapter-1", type: "chapter", label: "第一章" }, "雨夜来客")}>
           引用此段
         </button>
+        <button type="button" onClick={() => onNodeEditingChange?.(true)}>进入节点编辑</button>
+        <button type="button" onClick={() => onNodeEditingChange?.(false)}>退出节点编辑</button>
       </div>
     );
   }),
 }));
 
 vi.mock("../components/AgentChat", () => ({
-  default: forwardRef(function AgentChatMock({ onNodeContentDiff, onOpenNodeDetail, onCollapse, onStateChange, insertPillRef, draft, onDraftChange }, ref) {
+  default: forwardRef(function AgentChatMock({ workId, onNodeContentDiff, onOpenNodeDetail, onCollapse, onStateChange, insertPillRef, draft, onDraftChange }, ref) {
+    const [sessionWorkId] = useState(workId);
     useImperativeHandle(ref, () => agentChatRefMocks);
     useEffect(() => {
       if (insertPillRef) insertPillRef.current = insertPillMock;
@@ -92,7 +97,7 @@ vi.mock("../components/AgentChat", () => ({
         chapterReviewIntensity: "low",
       });
     }, [onStateChange]);
-    return <div data-testid="agent-chat-mock">
+    return <div data-testid="agent-chat-mock" data-session-work-id={sessionWorkId}>
       <button aria-label="收起Agent侧边栏" onClick={onCollapse}>收起Agent侧边栏</button>
       <textarea
         aria-label="创作指令"
@@ -101,8 +106,9 @@ vi.mock("../components/AgentChat", () => ({
       />
       <button type="button" onClick={() => onOpenNodeDetail?.("chapter-1")}>打开diff节点</button>
       <button onClick={() => onNodeContentDiff?.("chapter-live", {
+        grouping: "agent_replacements",
         original_content: "旧正文", current_content: "新正文",
-        hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧正文", new_text: "新正文" }],
+        hunks: [{ type: "replace", paragraph_index: 1, start_offset: 0, old_text: "旧正文", new_text: "新正文" }],
       })}>模拟实时正文修改</button>
     </div>;
   }),
@@ -143,6 +149,7 @@ describe("CanvasPage delete work", () => {
     });
     apiMocks.deleteWork.mockResolvedValue(undefined);
     apiMocks.fetchContentDiffs.mockResolvedValue([]);
+    apiMocks.fetchNotesDiffs.mockResolvedValue([]);
   });
 
   it("shows delete button in work selector and calls deleteWork", async () => {
@@ -180,9 +187,20 @@ describe("CanvasPage delete work", () => {
     expect(screen.getByText("作品二")).toBeDefined();
   });
 
+  it("switches the chat session scope with the selected work", async () => {
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await waitFor(() => expect(screen.getByTestId("agent-chat-mock").dataset.sessionWorkId).toBe("w1"));
+    fireEvent.click(screen.getByText("作品:"));
+    fireEvent.click(screen.getByText("作品二"));
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset.workId).toBe("w2"));
+    expect(screen.getByTestId("agent-chat-mock").dataset.sessionWorkId).toBe("w2");
+  });
+
   it("restores pending agent body diffs from the server", async () => {
     apiMocks.fetchContentDiffs.mockResolvedValue([{
       node_id: "chapter-1", original_content: "旧正文", current_content: "新正文",
+      grouping: "agent_replacements",
+      hunks: [{ type: "replace", start_offset: 0, old_text: "旧正文", new_text: "新正文" }],
     }]);
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -307,6 +325,23 @@ describe("CanvasPage delete work", () => {
     expect(screen.queryByRole("textbox", { name: "快捷创作指令" })).toBeNull();
   });
 
+  it("hides the floating composer while a node is being edited in App mode", async () => {
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage appMode />
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("canvas-mock");
+    expect(screen.getByRole("textbox", { name: "快捷创作指令" })).toBeDefined();
+
+    fireEvent.click(screen.getByRole("button", { name: "进入节点编辑" }));
+    expect(screen.queryByRole("textbox", { name: "快捷创作指令" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "退出节点编辑" }));
+    expect(screen.getByRole("textbox", { name: "快捷创作指令" })).toBeDefined();
+  });
+
   it("shares one draft between the App floating composer and Agent conversation", async () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -374,6 +409,25 @@ describe("CanvasPage delete work", () => {
     backNavigationMocks.listener();
 
     expect(canvasRefMocks.closeNodeDetail).toHaveBeenCalledOnce();
+    expect(backNavigationMocks.exitNativeApp).not.toHaveBeenCalled();
+  });
+
+  it("closes the App conversation before an underlying node detail", async () => {
+    canvasRefMocks.closeNodeDetail.mockReturnValue(true);
+    render(
+      <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+        <CanvasPage appMode />
+      </MemoryRouter>,
+    );
+
+    await screen.findByTestId("canvas-mock");
+    fireEvent.click(screen.getByRole("button", { name: "展开Agent侧边栏" }));
+    await waitFor(() => expect(screen.getByTestId("agent-panel").getAttribute("aria-hidden")).toBe("false"));
+
+    backNavigationMocks.listener();
+
+    await waitFor(() => expect(screen.getByTestId("agent-panel").getAttribute("aria-hidden")).toBe("true"));
+    expect(canvasRefMocks.closeNodeDetail).not.toHaveBeenCalled();
     expect(backNavigationMocks.exitNativeApp).not.toHaveBeenCalled();
   });
 

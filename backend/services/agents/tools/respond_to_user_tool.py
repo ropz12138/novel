@@ -20,6 +20,7 @@ def _respond_to_user(message: str) -> str:
 respond_to_user = StructuredTool.from_function(
     func=_respond_to_user,
     name=RESPOND_TO_USER_TOOL,
+    return_direct=True,
     description=(
         "结束本轮并对用户说话。message 就是用户看到的最终回复。"
         "真正改画布、写章节、读节点时必须先调用对应工具；"

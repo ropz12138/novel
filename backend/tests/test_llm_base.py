@@ -100,6 +100,30 @@ def test_openai_client_parses_text_and_reasoning_sse():
     asyncio.run(_run())
 
 
+def test_openai_client_emits_terminal_usage_event():
+    async def _run():
+        lines = [
+            'data: {"choices":[{"delta":{"content":"好"}}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":13,"completion_tokens":3,"total_tokens":16}}',
+            "data: [DONE]",
+        ]
+        client = OpenAILLMClient(_cfg())
+        return [
+            ev async for ev in client.stream_chat(
+                [{"role": "user", "content": "hi"}],
+                client=_FakeAsyncClient(lines),
+            )
+        ]
+
+    events = asyncio.run(_run())
+    assert events[-1].kind == "usage"
+    assert events[-1].usage == {
+        "input_tokens": 13,
+        "output_tokens": 3,
+        "total_tokens": 16,
+    }
+
+
 def test_openai_client_assembles_tool_call_from_fragments():
     async def _run():
         lines = [

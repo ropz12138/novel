@@ -29,3 +29,11 @@ class Node(Base):
 
     # 关联
     work = relationship("CanvasWork", back_populates="nodes")
+
+    chapter_record = relationship("Chapter", uselist=False, viewonly=True)
+
+    @property
+    def notes(self):
+        if self.type == "chapter" and self.chapter_record is not None:
+            return self.chapter_record.notes or ""
+        return ""

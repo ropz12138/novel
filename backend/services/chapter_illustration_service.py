@@ -132,9 +132,8 @@ def create_chapter_illustration(
         insert_after_paragraph=insert_after_paragraph,
     )
     db.add(row)
-    node.content = new_content
-    from services.chapter_history_service import clear_chapter_summary_on_content_change
-    clear_chapter_summary_on_content_change(db, node)
+    from services.node_content_write_service import write_node_content
+    write_node_content(db, node, new_content)
     db.commit()
     db.refresh(row)
     db.refresh(node)

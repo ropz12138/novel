@@ -53,7 +53,7 @@ def test_humanizer_registered_tool_preserves_inputs():
 def test_agent_authored_content_uses_direct_save_path(monkeypatch):
     from services.agents.tools import node_tools
 
-    def save(node_id, title, content, *args):
+    def save(node_id, title, content, *args, **kwargs):
         assert node_id == "chapter-id"
         assert content == "原段开头。改写后的句子。原段结尾。"
         return json.dumps({"success": True, "node_id": node_id})

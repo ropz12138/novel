@@ -15,11 +15,36 @@ import {
   setHunkStatusInBatches,
   setAllHunkStatusInBatches,
   buildContentDiffFromContents,
+  commitUserParagraphEdit,
+  commitUserTextEdit,
 } from "./inlineContentDiff";
 
 const ORIGINAL = "第一段。\n\n第二段。\n\n第三段。";
 
 describe("inlineContentDiff", () => {
+  it("returns immediately when the two complete contents are identical", () => {
+    const content = Array.from({ length: 300 }, (_, index) => `第${index + 1}段内容。`).join("\n\n");
+    expect(buildContentDiffFromContents(content, content)).toEqual([]);
+  });
+
+  it("commits a user paragraph edit into both content and baseline without disturbing agent diffs", () => {
+    expect(commitUserParagraphEdit(
+      "Agent旧段。\n\n用户原文。",
+      "Agent新段。\n\n用户原文。",
+      2,
+      "用户手改。",
+    )).toEqual({
+      baselineContent: "Agent旧段。\n\n用户手改。",
+      currentContent: "Agent新段。\n\n用户手改。",
+    });
+  });
+
+  it("keeps user insertions inside an agent replacement out of the remaining diff", () => {
+    expect(commitUserTextEdit("他走进废墟。", "他走进雨中。", "他缓缓走进细雨中。")).toEqual({
+      baselineText: "他缓缓走进细废墟。",
+      currentText: "他缓缓走进细雨中。",
+    });
+  });
   it("restores the net unreviewed diff from a server baseline", () => {
     const restored = accumulateNodeContentDiff(null, {
       original_content: "旧段落",
@@ -38,6 +63,15 @@ describe("inlineContentDiff", () => {
     ];
 
     expect(applyHunks(ORIGINAL, hunks)).toBe("第一段。\n\n插入段。\n\n第二段改。");
+  });
+
+  it("preserves leading and trailing whitespace when rebuilding exact content", () => {
+    const original = "\n第一段旧。\n\n第二段。\n";
+    const current = "\n第一段新。\n\n第二段。\n";
+    const hunks = buildContentDiffFromContents(original, current);
+
+    expect(applyHunks(original, hunks)).toBe(current);
+    expect(reverseHunks(current, hunks)).toBe(original);
   });
 
   it("reverses applied hunks back to the original content", () => {
@@ -139,7 +173,48 @@ describe("inlineContentDiff", () => {
       "第一段改。\n\n新增段。\n\n第三段。",
     )).toEqual([
       { type: "replace", paragraph_index: 1, old_text: "第一段。", new_text: "第一段改。" },
-      { type: "replace", paragraph_index: 2, old_text: "第二段。", new_text: "新增段。" },
+      { type: "delete", paragraph_index: 2, old_text: "第二段。", new_text: "" },
+      { type: "insert_after", paragraph_index: 2, old_text: "", new_text: "新增段。" },
+    ]);
+  });
+
+  it("keeps the original paragraph index when only a small middle range changes", () => {
+    const paragraphs = Array.from({ length: 300 }, (_, index) => `第${index + 1}段。`);
+    const changed = [...paragraphs];
+    changed[199] = "第200段改。";
+
+    expect(buildContentDiffFromContents(
+      paragraphs.join("\n\n"),
+      changed.join("\n\n"),
+    )).toEqual([{
+      type: "replace",
+      paragraph_index: 200,
+      old_text: "第200段。",
+      new_text: "第200段改。",
+    }]);
+  });
+
+  it("globally aligns a deleted reaction, an edited paragraph, and a new reaction", () => {
+    const oldLong = "灰白晶核死死咬在掌心皮肉上。没等陆沉扣紧手指，一股冰冷的阴煞顺着皮下毛孔蛮横地扎了进去。";
+    const newLong = "灰白晶核死死吸附在掌心皮肉上。没等陆沉扣紧手指，一股冰冷的阴煞顺着皮下毛孔蛮横地扎了进去。";
+    const original = `前文。\n\n“啪！”\n\n${oldLong}\n\n后文。`;
+    const current = `前文。\n\n${newLong}\n\n“操。”\n\n后文。`;
+
+    const hunks = buildContentDiffFromContents(original, current);
+
+    expect(hunks).toEqual([
+      { type: "delete", paragraph_index: 2, old_text: "“啪！”", new_text: "" },
+      { type: "replace", paragraph_index: 3, old_text: oldLong, new_text: newLong },
+      { type: "insert_after", paragraph_index: 3, old_text: "", new_text: "“操。”" },
+    ]);
+    expect(applyHunks(original, hunks)).toBe(current);
+    expect(reverseHunks(current, hunks)).toBe(original);
+  });
+
+  it("does not pair unrelated short quoted reactions by shared punctuation", () => {
+    expect(buildContentDiffFromContents("“啪！”", "“操。”")).toEqual([
+      { type: "delete", paragraph_index: 1, old_text: "“啪！”", new_text: "" },
+      { type: "insert_after", paragraph_index: 1, old_text: "", new_text: "“操。”" },
     ]);
   });
 

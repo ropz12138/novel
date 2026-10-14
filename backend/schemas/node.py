@@ -25,6 +25,11 @@ class NodeUpdate(BaseModel):
     type: Optional[str] = Field(None, min_length=1, max_length=30)
     title: Optional[str] = Field(None, min_length=1, max_length=200)
     content: Optional[str] = None
+    expected_content: Optional[str] = Field(
+        None,
+        description="更新正文时的并发基线；若当前正文已变化则拒绝写入",
+    )
+    notes: Optional[str] = Field(None, description="仅 chapter 节点：章节笔记，支持 Markdown")
     extra_data: Optional[dict] = None
     layer: Optional[int] = None
     sort_order: Optional[int] = Field(None, description=f"新的{SORT_ORDER_DESC}")
@@ -50,6 +55,7 @@ class NodeUpdate(BaseModel):
 
 
 class NodeResponse(BaseModel):
+    notes: str = ""
     id: str
     type: str
     title: str

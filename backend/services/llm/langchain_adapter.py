@@ -2,14 +2,70 @@
 from __future__ import annotations
 
 import json
+import uuid
 from typing import Any, Sequence
 
+from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, ToolMessage
+from langchain_core.outputs import ChatGeneration, ChatGenerationChunk, ChatResult
+from pydantic import ConfigDict, Field
 from langchain_core.utils.function_calling import convert_to_openai_tool
 
+from services.agents.embedded_tool_content import EMBEDDED_TOOL_MODEL, parse_embedded_tool_content
 from services.llm.llm_service import BaseLLMProvider, create_provider
+from services.llm.llm_tool import ToolCallFinished, ToolStreamEvent
 from services.llm.llm_types import LLMModelConfig
 from services.llm_stream import chunk_to_ai_message
+
+
+async def normalize_provider_events(events, *, model_name: str):
+    """仅 deepseek-v4-flash-0731 在没有 reasoning_content 时，拆开塞进正文的思考和工具调用。"""
+    if model_name != EMBEDDED_TOOL_MODEL:
+        async for event in events:
+            yield event
+        return
+    buffered: list[str] = []
+    saw_tool = False
+    saw_reasoning = False
+    async for event in events:
+        if event.kind == "thinking" and event.text:
+            saw_reasoning = True
+            yield event
+            continue
+        if event.kind == "text":
+            buffered.append(event.text)
+            continue
+        if event.kind == "tool_call":
+            saw_tool = True
+            if buffered:
+                yield ToolStreamEvent(kind="text", text="".join(buffered))
+                buffered.clear()
+            yield event
+            continue
+        yield event
+    text = "".join(buffered)
+    if saw_tool or saw_reasoning:
+        if text:
+            yield ToolStreamEvent(kind="text", text=text)
+        return
+    parsed = parse_embedded_tool_content(text)
+    if parsed is None:
+        if text:
+            yield ToolStreamEvent(kind="text", text=text)
+        return
+    if parsed.reasoning:
+        yield ToolStreamEvent(kind="thinking", text=parsed.reasoning)
+    if parsed.content:
+        yield ToolStreamEvent(kind="text", text=parsed.content)
+    for call in parsed.tool_calls:
+        yield ToolStreamEvent(
+            kind="tool_call",
+            tool_call=ToolCallFinished(
+                tool_name=call["name"],
+                call_id=f"call_embedded_{uuid.uuid4().hex[:12]}",
+                arguments=call["arguments"],
+            ),
+        )
 
 
 _ROLE_MAP = {
@@ -155,11 +211,11 @@ class NovelLLM:
     async def astream(self, input, config=None, **kwargs):
         messages = langchain_messages_to_dicts(input)
         tool_index = 0
-        async for event in self.provider.stream_chat(
+        async for event in normalize_provider_events(self.provider.stream_chat(
             messages,
             tools=self._tools,
             tool_choice=self._tool_choice,
-        ):
+        ), model_name=self.model_name):
             if event.kind == "thinking":
                 yield AIMessageChunk(
                     content="",
@@ -181,3 +237,90 @@ class NovelLLM:
                     response_metadata={"finish_reason": "tool_calls"},
                 )
                 tool_index += 1
+            elif event.kind == "usage" and event.usage is not None:
+                yield AIMessageChunk(content="", usage_metadata=event.usage)
+
+
+class DeepAgentChatModel(BaseChatModel):
+    """让 Deep Agents 通过项目 BaseLLMProvider 调用模型。"""
+
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
+    provider: Any = Field(exclude=True)
+    model_name: str
+    extra_body: dict[str, Any] | None = None
+    bound_tools: list[dict[str, Any]] | None = Field(default=None, exclude=True)
+    tool_choice: Any = Field(default=None, exclude=True)
+
+    @property
+    def _llm_type(self) -> str:
+        return "novel"
+
+    def _get_ls_params(self, stop=None, **kwargs):
+        return {
+            "ls_provider": "novel",
+            "ls_model_name": self.model_name,
+            "ls_model_type": "chat",
+        }
+
+    def bind_tools(self, tools, *, tool_choice=None, **kwargs):
+        return self.model_copy(update={
+            "bound_tools": _convert_tools(list(tools)),
+            "tool_choice": tool_choice,
+        })
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        text = self.provider.complete(langchain_messages_to_dicts(messages))
+        return ChatResult(generations=[ChatGeneration(message=AIMessage(content=text))])
+
+    async def _agenerate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        aggregated = None
+        async for generation_chunk in self._astream(
+            messages,
+            stop=stop,
+            run_manager=run_manager,
+            **kwargs,
+        ):
+            aggregated = generation_chunk if aggregated is None else aggregated + generation_chunk
+        if aggregated is None:
+            raise RuntimeError("LLM 未返回任何响应")
+        return ChatResult(generations=[ChatGeneration(message=chunk_to_ai_message(aggregated.message))])
+
+    def _chunk(self, **kwargs) -> AIMessageChunk:
+        metadata = dict(kwargs.pop("response_metadata", None) or {})
+        metadata["model_provider"] = self._get_ls_params().get("ls_provider")
+        return AIMessageChunk(response_metadata=metadata, **kwargs)
+
+    async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
+        tool_index = 0
+        async for event in normalize_provider_events(self.provider.stream_chat(
+            langchain_messages_to_dicts(messages),
+            tools=self.bound_tools,
+            tool_choice=self.tool_choice,
+        ), model_name=self.model_name):
+            if event.kind == "thinking":
+                message = self._chunk(
+                    content="",
+                    additional_kwargs={"reasoning_content": event.text},
+                )
+            elif event.kind == "text":
+                message = self._chunk(content=event.text)
+            elif event.kind == "tool_call" and event.tool_call is not None:
+                call = event.tool_call
+                message = self._chunk(
+                    content="",
+                    tool_call_chunks=[{
+                        "name": call.tool_name,
+                        "args": json.dumps(call.arguments, ensure_ascii=False),
+                        "id": call.call_id,
+                        "index": tool_index,
+                        "type": "tool_call_chunk",
+                    }],
+                    response_metadata={"finish_reason": "tool_calls"},
+                )
+                tool_index += 1
+            elif event.kind == "usage" and event.usage is not None:
+                message = self._chunk(content="", usage_metadata=event.usage)
+            else:
+                continue
+            yield ChatGenerationChunk(message=message)

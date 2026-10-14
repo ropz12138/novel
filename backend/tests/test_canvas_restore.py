@@ -203,3 +203,27 @@ def test_restore_nonexistent_work_returns_404(mock_auth):
         "nodes": [], "edges": [],
     })
     assert resp.status_code == 404
+
+
+def test_restore_content_keeps_grouped_diff_state_consistent(mock_auth):
+    from services.chapter_edit_service import build_replacement_diff
+    from services.node_agent_diff import record_change, get_snapshot
+    db = database.SessionLocal()
+    try:
+        work = _make_work(db, mock_auth.id)
+        node = _make_node(db, work.id)
+        node.content = "甲新。\n\n乙新。"
+        record_change(db, node, "甲旧。\n\n乙旧。", build_replacement_diff("甲旧。\n\n乙旧。", [
+            {"old": "甲旧", "new": "甲新"}, {"old": "乙旧", "new": "乙新"}]))
+        db.commit()
+        response = client.post(f"/api/works/{work.id}/canvas/restore", json={
+            "nodes": [{**_node_payload(node), "content": "甲旧。\n\n乙新。"}], "edges": [],
+        })
+        assert response.status_code == 200
+        db.expire_all()
+        snapshot = get_snapshot(db, node)
+        assert snapshot["current_content"] == "甲旧。\n\n乙新。"
+        assert len(snapshot["hunks"]) == 1
+        assert snapshot["hunks"][0]["old_text"] == "乙旧"
+    finally:
+        db.close()

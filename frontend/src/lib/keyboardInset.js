@@ -10,12 +10,16 @@ export function composerKeyboardOffset(innerHeight, visualViewport) {
   return Math.max(0, Math.round(covered));
 }
 
+export function editorScrollDelta(editorRect, visibleBottom, margin = 16) {
+  return Math.max(0, Math.ceil(editorRect.bottom + margin - visibleBottom));
+}
 
-export function useKeyboardInset() {
+export function useKeyboardInset(enabled = true) {
   const [keyboardInset, setKeyboardInset] = useState(0);
   const stableHeightRef = useRef(0);
 
   useEffect(() => {
+    if (!enabled) return undefined;
     if (Capacitor.isNativePlatform()) {
       let disposed = false;
       let listenerHandle;
@@ -60,7 +64,7 @@ export function useKeyboardInset() {
       viewport.removeEventListener("resize", update);
       viewport.removeEventListener("scroll", update);
     };
-  }, []);
+  }, [enabled]);
 
   return keyboardInset;
 }

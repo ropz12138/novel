@@ -36,6 +36,7 @@ def _work_to_snapshot(db: Session, work_id: str) -> CanvasSnapshot:
                 type=n.type,
                 title=n.title,
                 content=n.content or "",
+                notes=n.notes,
                 extra_data=n.extra_data or {},
                 layer=n.layer,
                 sort_order=n.sort_order,

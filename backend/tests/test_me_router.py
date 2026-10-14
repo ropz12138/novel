@@ -37,7 +37,7 @@ def test_get_models_returns_available_and_defaults():
     data = resp.json()
     assert set(data["available_models"]) == set(settings.available_models)
     assert data["default_primary"] == settings.default_model
-    assert data["default_fallback"] == settings.fallback_model
+    assert data["default_fallback"] == (settings.fallback_model or None)
 
 
 def test_user_cannot_access_model_configuration(mock_auth):

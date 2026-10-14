@@ -2,34 +2,30 @@
 from __future__ import annotations
 
 import asyncio
-import gzip
-import hashlib
 import json
 import logging
 import os
 import uuid
-from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from langchain_core.messages import HumanMessage, SystemMessage
+from langchain_core.messages import HumanMessage, messages_from_dict, messages_to_dict
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 from sqlalchemy import func
 
 from models.research import (
     ResearchArtifact,
-    ResearchContextEpoch,
     ResearchEvent,
     ResearchInstruction,
     ResearchJob,
     ResearchTextVersion,
 )
-from config import settings
 from models.user import User
-from services.agents.llm import bind_tools_to_llm, get_llm
-from services.message_content_utils import extract_text_content, extract_tool_calls
+from services.agents.llm import get_deep_agent_model
+from services.agents.deep_agent_runtime import build_deep_agent
+from services.message_content_utils import extract_text_content
 from services import research_text_tools as text_tools
 
 
@@ -37,17 +33,78 @@ logger = logging.getLogger(__name__)
 PROMPT_PATH = (
     Path(__file__).parent / "agents" / "prompts" / "research_system.txt"
 )
-RECENT_CONTEXT_CHAR_LIMIT = 1_500_000
-CONTEXT_COMPACTION_THRESHOLD = 0.90
-COMPACTION_OUTPUT_RESERVE_TOKENS = 12_000
-CHARS_PER_ESTIMATED_TOKEN = 3
-CONTEXT_ARCHIVE_SCHEMA_VERSION = 1
-DEFAULT_RESEARCH_CONTEXT_WINDOW = 128_000
 
 
 def _get_db():
     from database import SessionLocal
     return SessionLocal()
+
+
+def _research_agent_state_path(job_id: str) -> Path:
+    return text_tools._job_dir(job_id) / "agent_messages.json"
+
+
+def _save_research_agent_messages(job_id: str, messages: list) -> None:
+    """原样持久化 Deep Agent 消息状态，供暂停或进程重启后继续。"""
+    path = _research_agent_state_path(job_id)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid.uuid4()}.tmp")
+    temporary.write_text(
+        json.dumps(messages_to_dict(messages), ensure_ascii=False),
+        encoding="utf-8",
+    )
+    os.replace(temporary, path)
+
+
+def _load_research_agent_messages(job_id: str) -> list:
+    path = _research_agent_state_path(job_id)
+    if not path.is_file():
+        return []
+    return messages_from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+def _build_research_initial_messages(job_id: str) -> tuple[list, list[str]]:
+    """构造一次性的稳定任务说明；运行事件不再反复拼入提示词。"""
+    db = _get_db()
+    try:
+        job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
+        if not job:
+            raise ValueError("研究任务不存在")
+        active = db.query(ResearchTextVersion).filter(
+            ResearchTextVersion.id == job.active_version_id
+        ).first()
+        instructions = db.query(ResearchInstruction).filter(
+            ResearchInstruction.job_id == job_id,
+            ResearchInstruction.consumed.is_(False),
+        ).order_by(ResearchInstruction.sequence).all()
+        pending = "\n".join(f"- {row.content}" for row in instructions) or "（无）"
+        prompt = (
+            "## 小说研究任务\n"
+            f"- job_id: {job.id}\n"
+            f"- 文件: {job.original_filename}\n"
+            f"- 当前文本版本: {f'v{active.version_number} / {active.id}' if active else '无'}\n\n"
+            f"## 用户要求\n{pending}\n\n"
+            "请使用研究工具持续推进，及时保存研究进度、工作记忆和产出；"
+            "完成全书分析并保存 final_report 后调用 complete_research。"
+        )
+        return [HumanMessage(content=prompt)], [row.id for row in instructions]
+    finally:
+        db.close()
+
+
+def _pending_research_instruction(job_id: str) -> tuple[HumanMessage | None, list[str]]:
+    db = _get_db()
+    try:
+        rows = db.query(ResearchInstruction).filter(
+            ResearchInstruction.job_id == job_id,
+            ResearchInstruction.consumed.is_(False),
+        ).order_by(ResearchInstruction.sequence).all()
+        if not rows:
+            return None, []
+        content = "\n".join(f"- {row.content}" for row in rows)
+        return HumanMessage(content=f"## 用户追加要求\n{content}"), [row.id for row in rows]
+    finally:
+        db.close()
 
 
 TextVersion = Literal["original", "active"]
@@ -441,114 +498,6 @@ class CompleteInput(BaseModel):
 
 
 ContextCitationType = Literal["event", "artifact", "version", "workspace_file"]
-
-
-class ContextCitation(BaseModel):
-    source_type: ContextCitationType = Field(
-        description="引用来源：event、artifact、version 或 workspace_file",
-    )
-    source_id: str = Field(
-        min_length=1,
-        description=(
-            "event 填事件序号或ID；artifact/version 填ID；"
-            "workspace_file 填任务工作区相对路径"
-        ),
-    )
-    note: str = Field(
-        default="",
-        description="该来源支持哪条结论，便于新上下文按需回查",
-    )
-
-
-class CompactResearchContextInput(BaseModel):
-    stage: str = Field(description="压缩时的研究阶段")
-    completed_work: list[str] = Field(
-        default_factory=list,
-        description="已经完成且无需重复执行的工作",
-    )
-    confirmed_findings: list[str] = Field(
-        default_factory=list,
-        description="已有充分依据的关键结论",
-    )
-    tentative_findings: list[str] = Field(
-        default_factory=list,
-        description="仍需验证、不可当作事实使用的暂定结论",
-    )
-    open_questions: list[str] = Field(
-        default_factory=list,
-        description="尚未解决的问题、风险与矛盾",
-    )
-    operational_lessons: list[str] = Field(
-        default_factory=list,
-        description="工具使用、文本格式、读取范围等可复用经验",
-    )
-    next_actions: list[str] = Field(
-        min_length=1,
-        description="新上下文启动后应按顺序执行的具体动作",
-    )
-    citations: list[ContextCitation] = Field(
-        min_length=1,
-        description="关键结论对应的原始事件、产出、版本或工作区文件引用",
-    )
-    compact_through_sequence: int = Field(
-        ge=0,
-        description="系统指定的事件水位线；必须原样填写，不能自行提前或延后",
-    )
-
-
-class QueryArchivedEventsInput(BaseModel):
-    query: str = Field(
-        default="",
-        description="可选关键词；为空时按事件序号范围读取",
-    )
-    epoch_id: str = Field(
-        default="",
-        description="可选上下文分代ID；为空时使用当前分代的归档范围",
-    )
-    event_types: list[str] = Field(
-        default_factory=list,
-        description="可选事件类型过滤，例如 tool_call、tool_result、agent",
-    )
-    start_sequence: int = Field(default=0, ge=0)
-    end_sequence: int = Field(
-        default=0,
-        ge=0,
-        description="0 表示使用所选分代的水位线",
-    )
-    limit: int = Field(default=30, ge=1, le=200)
-    max_chars: int = Field(default=20_000, ge=500, le=80_000)
-
-
-class ReadContextArchiveInput(BaseModel):
-    epoch_id: str = Field(
-        default="",
-        description="可选上下文分代ID；为空时读取当前分代",
-    )
-    start_char: int = Field(default=0, ge=0)
-    max_chars: int = Field(default=20_000, ge=500, le=80_000)
-
-
-@dataclass(frozen=True)
-class ResearchSnapshot:
-    text: str
-    instruction_ids: list[str]
-    max_event_sequence: int
-    active_epoch_id: str | None
-    compact_through_sequence: int
-
-
-@dataclass(frozen=True)
-class CompactionContext:
-    system_prompt: str
-    snapshot: str
-    tool_schemas_text: str
-    model_name: str
-    estimated_input_tokens: int
-    compact_through_sequence: int
-    source_event_start: int
-    previous_epoch_id: str | None
-
-
 def _json(data: Any) -> str:
     return json.dumps(data, ensure_ascii=False, default=str)
 
@@ -774,278 +723,14 @@ def _complete_research(job_id: str, summary: str) -> dict:
         db.close()
 
 
-def _active_context_epoch(db, job_id: str) -> ResearchContextEpoch | None:
-    return db.query(ResearchContextEpoch).filter(
-        ResearchContextEpoch.job_id == job_id,
-        ResearchContextEpoch.status == "active",
-    ).order_by(ResearchContextEpoch.epoch_number.desc()).first()
-
-
-def _select_context_epoch(
-    db,
-    job_id: str,
-    epoch_id: str = "",
-) -> ResearchContextEpoch:
-    query = db.query(ResearchContextEpoch).filter(
-        ResearchContextEpoch.job_id == job_id,
-    )
-    row = (
-        query.filter(ResearchContextEpoch.id == epoch_id).first()
-        if epoch_id
-        else query.filter(ResearchContextEpoch.status == "active").order_by(
-            ResearchContextEpoch.epoch_number.desc()
-        ).first()
-    )
-    if not row:
-        raise ValueError("找不到可查询的上下文分代")
-    return row
-
-
-def _validate_context_citations(
-    db,
-    job_id: str,
-    citations: list[dict],
-    watermark: int,
-) -> None:
-    for citation in citations:
-        source_type = citation["source_type"]
-        source_id = str(citation["source_id"]).strip()
-        if source_type == "event":
-            query = db.query(ResearchEvent).filter(
-                ResearchEvent.job_id == job_id,
-                ResearchEvent.sequence <= watermark,
-            )
-            row = (
-                query.filter(ResearchEvent.sequence == int(source_id)).first()
-                if source_id.isdigit()
-                else query.filter(ResearchEvent.id == source_id).first()
-            )
-        elif source_type == "artifact":
-            row = db.query(ResearchArtifact).filter(
-                ResearchArtifact.job_id == job_id,
-                ResearchArtifact.id == source_id,
-            ).first()
-        elif source_type == "version":
-            row = db.query(ResearchTextVersion).filter(
-                ResearchTextVersion.job_id == job_id,
-                ResearchTextVersion.id == source_id,
-            ).first()
-        else:
-            try:
-                _, path = text_tools._resolve_workspace_path(job_id, source_id)
-                row = path if path.is_file() else None
-            except ValueError:
-                row = None
-        if not row:
-            raise ValueError(
-                f"压缩包引用无效或不属于当前任务：{source_type}:{source_id}"
-            )
-
-
-def _commit_context_compaction(
-    job_id: str,
-    context: CompactionContext,
-    **package_fields,
-) -> dict:
-    watermark = int(package_fields["compact_through_sequence"])
-    if watermark != context.compact_through_sequence:
-        raise ValueError(
-            "事件水位线不一致："
-            f"必须填写 {context.compact_through_sequence}，实际为 {watermark}"
-        )
-
-    citations = [
-        item.model_dump() if isinstance(item, BaseModel) else item
-        for item in package_fields["citations"]
-    ]
-    package_fields = {**package_fields, "citations": citations}
-    archive_path: Path | None = None
-    db = _get_db()
-    try:
-        if not db.query(ResearchJob.id).filter(ResearchJob.id == job_id).first():
-            raise ValueError("研究任务不存在")
-        _validate_context_citations(db, job_id, citations, watermark)
-
-        current = _active_context_epoch(db, job_id)
-        if context.previous_epoch_id != (current.id if current else None):
-            raise ValueError("上下文分代已变化，请基于最新快照重新压缩")
-        epoch_number = (current.epoch_number if current else 0) + 1
-        epoch_id = str(uuid.uuid4())
-        package = {
-            "schema_version": CONTEXT_ARCHIVE_SCHEMA_VERSION,
-            "epoch_id": epoch_id,
-            "epoch_number": epoch_number,
-            **package_fields,
-        }
-        structured_pack_text = json.dumps(
-            package,
-            ensure_ascii=False,
-            indent=2,
-        )
-        archive_payload = {
-            "schema_version": CONTEXT_ARCHIVE_SCHEMA_VERSION,
-            "job_id": job_id,
-            "epoch_id": epoch_id,
-            "epoch_number": epoch_number,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "model_name": context.model_name,
-            "source_event_start": context.source_event_start,
-            "compact_through_sequence": watermark,
-            "estimated_input_tokens": context.estimated_input_tokens,
-            "rendered_request": {
-                "system_prompt": context.system_prompt,
-                "snapshot": context.snapshot,
-                "tool_schemas": json.loads(context.tool_schemas_text),
-            },
-        }
-        archive_bytes = gzip.compress(
-            json.dumps(
-                archive_payload,
-                ensure_ascii=False,
-                indent=2,
-            ).encode("utf-8"),
-            mtime=0,
-        )
-        archive_dir = text_tools._job_dir(job_id) / "context"
-        archive_dir.mkdir(parents=True, exist_ok=True)
-        archive_path = archive_dir / f"epoch-{epoch_number:04d}-{epoch_id}.json.gz"
-        temporary = archive_path.with_name(f".{archive_path.name}.{uuid.uuid4()}.tmp")
-        temporary.write_bytes(archive_bytes)
-        os.replace(temporary, archive_path)
-
-        if current:
-            current.status = "superseded"
-        row = ResearchContextEpoch(
-            id=epoch_id,
-            job_id=job_id,
-            epoch_number=epoch_number,
-            status="active",
-            source_event_start=context.source_event_start,
-            compact_through_sequence=watermark,
-            archive_path=str(archive_path),
-            archive_sha256=hashlib.sha256(archive_bytes).hexdigest(),
-            structured_pack_text=structured_pack_text,
-            rendered_context_chars=len(context.system_prompt) + len(context.snapshot),
-            estimated_input_tokens=context.estimated_input_tokens,
-            model_name=context.model_name,
-            schema_version=CONTEXT_ARCHIVE_SCHEMA_VERSION,
-        )
-        db.add(row)
-        db.commit()
-        return {
-            "success": True,
-            "epoch_id": epoch_id,
-            "epoch_number": epoch_number,
-            "compact_through_sequence": watermark,
-            "archive_sha256": row.archive_sha256,
-            "next_step": "当前上下文已封存；系统将使用压缩包启动新的上下文分代",
-        }
-    except Exception:
-        db.rollback()
-        if archive_path and archive_path.exists():
-            archive_path.unlink()
-        raise
-    finally:
-        db.close()
-
-
-def _query_archived_events(
-    job_id: str,
-    query: str = "",
-    epoch_id: str = "",
-    event_types: list[str] | None = None,
-    start_sequence: int = 0,
-    end_sequence: int = 0,
-    limit: int = 30,
-    max_chars: int = 20_000,
-) -> dict:
-    db = _get_db()
-    try:
-        epoch = _select_context_epoch(db, job_id, epoch_id)
-        # 当前压缩包可能沿用并引用更早分代的结论，因此默认允许回查该任务
-        # 从第一条事件到所选水位线的全部不可变事件。
-        lower = max(1, int(start_sequence or 0))
-        upper = min(
-            epoch.compact_through_sequence,
-            int(end_sequence or epoch.compact_through_sequence),
-        )
-        rows_query = db.query(ResearchEvent).filter(
-            ResearchEvent.job_id == job_id,
-            ResearchEvent.sequence >= lower,
-            ResearchEvent.sequence <= upper,
-        )
-        if event_types:
-            rows_query = rows_query.filter(
-                ResearchEvent.event_type.in_(event_types[:30])
-            )
-        rows = rows_query.order_by(ResearchEvent.sequence).all()
-        needle = query.casefold().strip()
-        if needle:
-            rows = [
-                row for row in rows
-                if needle in row.content.casefold() or needle in row.meta_text.casefold()
-            ]
-        selected = []
-        remaining = max_chars
-        for row in rows[: max(1, min(limit, 200))]:
-            content = row.content[:remaining]
-            if not content:
-                break
-            selected.append({
-                "id": row.id,
-                "sequence": row.sequence,
-                "event_type": row.event_type,
-                "content": content,
-                "meta_text": row.meta_text[:2000],
-            })
-            remaining -= len(content)
-            if remaining <= 0:
-                break
-        return {
-            "epoch_id": epoch.id,
-            "range": [lower, upper],
-            "count": len(selected),
-            "events": selected,
-            "truncated": len(selected) < len(rows),
-        }
-    finally:
-        db.close()
-
-
-def _read_context_archive(
-    job_id: str,
-    epoch_id: str = "",
-    start_char: int = 0,
-    max_chars: int = 20_000,
-) -> dict:
-    db = _get_db()
-    try:
-        epoch = _select_context_epoch(db, job_id, epoch_id)
-        path = Path(epoch.archive_path)
-        data = path.read_bytes()
-        if hashlib.sha256(data).hexdigest() != epoch.archive_sha256:
-            raise ValueError("上下文归档校验失败，文件可能已被修改")
-        text = gzip.decompress(data).decode("utf-8")
-        start = min(int(start_char), len(text))
-        end = min(len(text), start + int(max_chars))
-        return {
-            "epoch_id": epoch.id,
-            "start_char": start,
-            "end_char": end,
-            "total_chars": len(text),
-            "content": text[start:end],
-            "has_more": end < len(text),
-        }
-    finally:
-        db.close()
-
-
 def _wrap_text_tool(
     job_id: str,
     name: str,
     description: str,
     args_schema: type[BaseModel],
     func: Callable,
+    *,
+    return_direct: bool = False,
 ) -> StructuredTool:
     def call(**kwargs):
         # StructuredTool/Pydantic 的不同版本可能把嵌套模型保留为
@@ -1057,13 +742,15 @@ def _wrap_text_tool(
             ] if isinstance(value, list) else value
             for key, value in kwargs.items()
         }
-        return _json(func(job_id=job_id, **kwargs))
+        result = _json(func(job_id=job_id, **kwargs))
+        return result
 
     return StructuredTool.from_function(
         func=call,
         name=name,
         description=description,
         args_schema=args_schema,
+        return_direct=return_direct,
     )
 
 
@@ -1197,169 +884,12 @@ def build_research_tools(job_id: str) -> list[StructuredTool]:
             ProgressInput, _update_progress,
         ),
         _wrap_text_tool(
-            job_id, "query_archived_research_events",
-            (
-                "按关键词、事件类型或序号范围查询已经压缩归档的原始研究事件。"
-                "当结构化压缩包缺少细节或需要核对原始工具结果时使用。"
-            ),
-            QueryArchivedEventsInput, _query_archived_events,
-        ),
-        _wrap_text_tool(
-            job_id, "read_research_context_archive",
-            (
-                "分页读取某次上下文分代落盘的完整原始请求，包含系统提示词、"
-                "当时快照和工具定义；仅在事件查询无法还原细节时使用。"
-            ),
-            ReadContextArchiveInput, _read_context_archive,
-        ),
-        _wrap_text_tool(
             job_id, "complete_research",
             "全书分析真正完成后结束后台循环；调用前必须已经保存final_report。",
             CompleteInput, _complete_research,
+            return_direct=True,
         ),
     ]
-
-
-def build_context_compaction_tool(
-    job_id: str,
-    context: CompactionContext,
-) -> StructuredTool:
-    return _wrap_text_tool(
-        job_id,
-        "compact_research_context",
-        (
-            "强制上下文换代工具。把当前完整研究状态总结为结构化压缩包，"
-            "同时由工具将本轮完整原始请求不可变归档到磁盘。"
-            "compact_through_sequence 必须使用系统指定水位线。"
-        ),
-        CompactResearchContextInput,
-        lambda job_id, **kwargs: _commit_context_compaction(
-            job_id,
-            context,
-            **kwargs,
-        ),
-    )
-
-
-def _compaction_tool_schemas_text() -> str:
-    return json.dumps(
-        [{
-            "name": "compact_research_context",
-            "description": (
-                "强制上下文换代工具。把当前完整研究状态总结为结构化压缩包，"
-                "同时由工具将本轮完整原始请求不可变归档到磁盘。"
-                "compact_through_sequence 必须使用系统指定水位线。"
-            ),
-            "parameters": CompactResearchContextInput.model_json_schema(),
-        }],
-        ensure_ascii=False,
-        sort_keys=True,
-    )
-
-
-def _build_job_snapshot(
-    job_id: str,
-    recent_context_char_limit: int = RECENT_CONTEXT_CHAR_LIMIT,
-) -> ResearchSnapshot:
-    db = _get_db()
-    try:
-        job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
-        if not job:
-            raise ValueError("研究任务不存在")
-        active = db.query(ResearchTextVersion).filter(
-            ResearchTextVersion.id == job.active_version_id
-        ).first()
-        artifacts = db.query(ResearchArtifact).filter(
-            ResearchArtifact.job_id == job_id
-        ).order_by(ResearchArtifact.created_at.desc()).limit(250).all()
-        instructions = db.query(ResearchInstruction).filter(
-            ResearchInstruction.job_id == job_id,
-            ResearchInstruction.consumed.is_(False),
-        ).order_by(ResearchInstruction.sequence).all()
-        epoch = _active_context_epoch(db, job_id)
-        watermark = epoch.compact_through_sequence if epoch else 0
-        events = db.query(ResearchEvent).filter(
-            ResearchEvent.job_id == job_id,
-            ResearchEvent.sequence > watermark,
-        ).order_by(ResearchEvent.sequence.desc()).all()
-        max_event_sequence = (
-            db.query(func.max(ResearchEvent.sequence))
-            .filter(ResearchEvent.job_id == job_id)
-            .scalar()
-            or 0
-        )
-
-        artifact_index = "\n".join(
-            f"- {row.id} | {row.artifact_type} | {row.title}"
-            for row in reversed(artifacts)
-        ) or "（尚无）"
-        event_parts = []
-        budget = max(10_000, int(recent_context_char_limit))
-        for event in events:
-            shown = event.content
-            if len(shown) > 50_000:
-                shown = shown[:50_000] + "\n…（事件内容已截断）"
-            part = f"[event:{event.sequence}][{event.event_type}] {shown}"
-            if len(part) > budget:
-                continue
-            event_parts.append(part)
-            budget -= len(part)
-        recent = "\n\n".join(reversed(event_parts)) or "（尚无）"
-        pending = "\n".join(f"- {row.content}" for row in instructions) or "（无）"
-
-        context_section = (
-            "## 当前上下文分代\n"
-            f"- epoch_id: {epoch.id}\n"
-            f"- epoch_number: {epoch.epoch_number}\n"
-            f"- 事件水位线: {epoch.compact_through_sequence}\n\n"
-            "### 结构化压缩包\n"
-            f"{epoch.structured_pack_text}\n\n"
-            "旧事件和完整原始请求未丢失；缺少细节时使用 "
-            "query_archived_research_events 或 read_research_context_archive 回查。"
-            if epoch
-            else (
-                "## 长期工作记忆\n"
-                f"{job.working_memory or '（尚未建立；请尽快在完成初步格式检查后更新）'}"
-            )
-        )
-        snapshot = f"""
-## 当前研究任务
-- job_id: {job.id}
-- 文件: {job.original_filename}
-- 状态: {job.status}
-- 阶段: {job.stage}
-- 当前文本版本: {f"v{active.version_number} / {active.id}" if active else "无"}
-- 进度: {job.progress_current}/{job.progress_total} {job.progress_unit}
-- 进度说明: {job.progress_detail or "无"}
-
-## 用户尚未处理的新要求
-{pending}
-
-{context_section}
-
-## 已保存产出索引
-{artifact_index}
-
-## 当前分代执行记录（水位线之后）
-{recent}
-
-请决定并执行下一步。只要全书分析尚未真正完成，就继续调用工具推进。
-""".strip()
-        return ResearchSnapshot(
-            text=snapshot,
-            instruction_ids=[row.id for row in instructions],
-            max_event_sequence=max_event_sequence,
-            active_epoch_id=epoch.id if epoch else None,
-            compact_through_sequence=watermark,
-        )
-    finally:
-        db.close()
-
-
-def _job_snapshot(job_id: str) -> tuple[str, list[str]]:
-    """保留原有测试/调用接口；运行循环使用包含水位线元数据的版本。"""
-    snapshot = _build_job_snapshot(job_id)
-    return snapshot.text, snapshot.instruction_ids
 
 
 def _mark_instructions_consumed(ids: list[str]) -> None:
@@ -1386,80 +916,6 @@ def _job_model_pref(job_id: str) -> dict:
         }
     finally:
         db.close()
-
-
-def _tool_schemas_text(tools: list[StructuredTool]) -> str:
-    schemas = []
-    for tool in tools:
-        args_schema = getattr(tool, "args_schema", None)
-        if args_schema and hasattr(args_schema, "model_json_schema"):
-            parameters = args_schema.model_json_schema()
-        elif args_schema and hasattr(args_schema, "schema"):
-            parameters = args_schema.schema()
-        else:
-            parameters = {}
-        schemas.append({
-            "name": tool.name,
-            "description": tool.description,
-            "parameters": parameters,
-        })
-    return json.dumps(schemas, ensure_ascii=False, sort_keys=True)
-
-
-def _research_context_limit(pref: dict) -> int:
-    limits = []
-    for model_name in (
-        pref.get("primary") or settings.default_model,
-        pref.get("fallback") if pref.get("fallback") is not None else settings.fallback_model,
-    ):
-        if not model_name:
-            continue
-        try:
-            limit = settings.get_model_context_window(model_name)
-        except (KeyError, ValueError):
-            limit = None
-        if limit:
-            limits.append(limit)
-    return min(limits) if limits else DEFAULT_RESEARCH_CONTEXT_WINDOW
-
-
-def _estimate_context_tokens(
-    system_prompt: str,
-    snapshot: str,
-    tool_schemas_text: str,
-) -> int:
-    chars = len(system_prompt) + len(snapshot) + len(tool_schemas_text)
-    return max(1, (chars + CHARS_PER_ESTIMATED_TOKEN - 1) // CHARS_PER_ESTIMATED_TOKEN)
-
-
-def _context_requires_compaction(
-    estimated_input_tokens: int,
-    context_limit: int,
-) -> bool:
-    projected = estimated_input_tokens + COMPACTION_OUTPUT_RESERVE_TOKENS
-    return projected >= int(context_limit * CONTEXT_COMPACTION_THRESHOLD)
-
-
-def _snapshot_event_budget(
-    context_limit: int,
-    system_prompt: str,
-    tool_schemas_text: str,
-) -> int:
-    """让快照略微越过触发线但仍留在模型上限内。
-
-    这也保护升级前已经积累大量事件的任务：首次运行新代码时不会先构造一个
-    远超模型上限的请求，而是携带最近的可容纳事件并立即进入压缩流程。
-    """
-    target_input_tokens = (
-        int(context_limit * (CONTEXT_COMPACTION_THRESHOLD + 0.02))
-        - COMPACTION_OUTPUT_RESERVE_TOKENS
-    )
-    target_chars = target_input_tokens * CHARS_PER_ESTIMATED_TOKEN
-    fixed_chars = len(system_prompt) + len(tool_schemas_text) + 40_000
-    return min(
-        RECENT_CONTEXT_CHAR_LIMIT,
-        max(70_000, target_chars - fixed_chars),
-    )
 
 
 def _set_job_status(job_id: str, status: str, stage: str | None = None, error: str = ""):
@@ -1534,218 +990,70 @@ class ResearchAgentManager:
         _set_job_status(job_id, "running", "Agent正在检查文件")
         add_research_event(job_id, "started", "独立研究 Agent 已开始工作")
         tools = build_research_tools(job_id)
-        tools_by_name = {tool.name: tool for tool in tools}
         pref = _job_model_pref(job_id)
-        system_prompt = PROMPT_PATH.read_text(encoding="utf-8")
-        normal_tool_schemas = _tool_schemas_text(tools)
-        context_limit = _research_context_limit(pref)
-        snapshot_event_budget = _snapshot_event_budget(
-            context_limit,
-            system_prompt,
-            normal_tool_schemas,
+        model = get_deep_agent_model(
+            temperature=0.2,
+            primary=pref.get("primary"),
+            fallback=pref.get("fallback"),
         )
-        effective_model = pref.get("primary") or settings.default_model
+        agent = build_deep_agent(
+            model=model,
+            tools=tools,
+            system_prompt=PROMPT_PATH.read_text(encoding="utf-8"),
+            scope_kind="research",
+            scope_id=job_id,
+            atomic_tools=False,
+            completion_tool_name="complete_research",
+        )
+        messages = _load_research_agent_messages(job_id)
+        if messages:
+            instruction_ids: list[str] = []
+        else:
+            messages, instruction_ids = _build_research_initial_messages(job_id)
         retry_delay = 3
-
-        def create_llm_pair():
-            llm = get_llm(
-                temperature=0.2,
-                streaming=False,
-                primary=pref.get("primary"),
-                fallback=pref.get("fallback"),
-            )
-            return llm, bind_tools_to_llm(llm, tools)
-
-        llm, llm_with_tools = create_llm_pair()
+        from services.agents.deep_agent_runtime import load_summarization_state
+        summary_state = load_summarization_state("research", job_id)
+        event = summary_state.get("_summarization_event")
+        if event and event["cutoff_index"] > len(messages):
+            raise RuntimeError("持久化的研究上下文压缩点超出当前消息历史")
 
         try:
             while _get_job_status(job_id) == "running":
-                snapshot_state = _build_job_snapshot(
-                    job_id,
-                    recent_context_char_limit=snapshot_event_budget,
-                )
-                snapshot = snapshot_state.text
-                instruction_ids = snapshot_state.instruction_ids
-                estimated_tokens = _estimate_context_tokens(
-                    system_prompt,
-                    snapshot,
-                    normal_tool_schemas,
-                )
-                if _context_requires_compaction(estimated_tokens, context_limit):
-                    watermark = snapshot_state.max_event_sequence
-                    compaction_prompt = (
-                        f"{snapshot}\n\n"
-                        "## 系统强制上下文换代\n"
-                        f"预计本轮输入 {estimated_tokens} tokens，上下文上限 "
-                        f"{context_limit} tokens，已达到 "
-                        f"{CONTEXT_COMPACTION_THRESHOLD:.0%} 门槛。\n"
-                        "你现在只能调用 compact_research_context。请完整保留研究进度、"
-                        "已确认与待验证结论、关键工具经验和下一步动作；关键结论必须"
-                        "提供可回查引用。\n"
-                        f"compact_through_sequence 必须填写 {watermark}。"
-                    )
-                    compaction_schemas = _compaction_tool_schemas_text()
-                    compaction_context = CompactionContext(
-                        system_prompt=system_prompt,
-                        snapshot=compaction_prompt,
-                        tool_schemas_text=compaction_schemas,
-                        model_name=effective_model,
-                        estimated_input_tokens=_estimate_context_tokens(
-                            system_prompt,
-                            compaction_prompt,
-                            compaction_schemas,
-                        ),
-                        compact_through_sequence=watermark,
-                        source_event_start=snapshot_state.compact_through_sequence + 1,
-                        previous_epoch_id=snapshot_state.active_epoch_id,
-                    )
-                    compaction_tool = build_context_compaction_tool(
-                        job_id,
-                        compaction_context,
-                    )
-                    forced_llm = llm.bind_tools(
-                        [compaction_tool],
-                        tool_choice=compaction_tool.name,
-                    )
-                    add_research_event(
-                        job_id,
-                        "compaction_required",
-                        (
-                            f"上下文预计使用 {estimated_tokens}/{context_limit} tokens，"
-                            f"强制压缩至事件水位线 {watermark}"
-                        ),
-                    )
-                    try:
-                        response = await forced_llm.ainvoke([
-                            SystemMessage(content=system_prompt),
-                            HumanMessage(content=compaction_prompt),
-                        ])
-                        calls = extract_tool_calls(response)
-                        if not calls and getattr(response, "tool_calls", None):
-                            calls = list(response.tool_calls)
-                        calls = [
-                            call for call in calls
-                            if call.get("name") == compaction_tool.name
-                        ]
-                        if len(calls) != 1:
-                            raise ValueError("模型未按要求调用唯一的上下文压缩工具")
-                        args = calls[0].get("args") or {}
-                        add_research_event(
-                            job_id,
-                            "tool_call",
-                            "调用 compact_research_context",
-                            {"tool": compaction_tool.name, "args": args},
-                        )
-                        result = await compaction_tool.ainvoke(args)
-                        parsed_result = json.loads(str(result))
-                        add_research_event(
-                            job_id,
-                            "tool_result",
-                            str(result),
-                            {"tool": compaction_tool.name},
-                        )
-                        if not parsed_result.get("success"):
-                            raise ValueError(
-                                parsed_result.get("error") or "上下文压缩未成功"
-                            )
-                        _mark_instructions_consumed(instruction_ids)
-                        add_research_event(
-                            job_id,
-                            "context_compacted",
-                            (
-                                f"已切换到上下文分代 {parsed_result['epoch_number']}，"
-                                f"水位线 {parsed_result['compact_through_sequence']}"
-                            ),
-                            {"epoch_id": parsed_result["epoch_id"]},
-                        )
-                        # 新建模型绑定，明确切断旧一代调用对象及其任何供应商侧状态。
-                        llm, llm_with_tools = create_llm_pair()
-                        retry_delay = 3
-                        await asyncio.sleep(0)
-                        continue
-                    except asyncio.CancelledError:
-                        raise
-                    except Exception as exc:
-                        logger.exception(
-                            "research context compaction failed job_id=%s",
-                            job_id,
-                        )
-                        add_research_event(
-                            job_id,
-                            "retry",
-                            f"上下文压缩失败，将基于最新水位线重试：{exc}",
-                        )
-                        await asyncio.sleep(retry_delay)
-                        retry_delay = min(60, retry_delay * 2)
-                        continue
-
                 try:
-                    response = await llm_with_tools.ainvoke([
-                        SystemMessage(content=system_prompt),
-                        HumanMessage(content=snapshot),
-                    ])
+                    instruction, pending_ids = _pending_research_instruction(job_id)
+                    if instruction and not set(pending_ids).issubset(instruction_ids):
+                        messages.append(instruction)
+                        instruction_ids.extend(
+                            item for item in pending_ids if item not in instruction_ids
+                        )
+                    result = await agent.ainvoke(
+                        {"messages": messages, **summary_state},
+                        config={"recursion_limit": 500},
+                    )
+                    messages = list(result.get("messages") or [])
+                    _save_research_agent_messages(job_id, messages)
+                    summary_state = load_summarization_state("research", job_id)
+                    _mark_instructions_consumed(instruction_ids)
+                    instruction_ids = []
                     retry_delay = 3
+                    if messages:
+                        content = extract_text_content(getattr(messages[-1], "content", ""))
+                        if content:
+                            add_research_event(job_id, "agent", content)
+                    if _get_job_status(job_id) == "running":
+                        messages.append(HumanMessage(content=(
+                            "研究任务尚未完成。请根据当前进度继续调用工具推进；"
+                            "完成全书分析并保存 final_report 后调用 complete_research。"
+                        )))
+                        _save_research_agent_messages(job_id, messages)
+                    await asyncio.sleep(0)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:
                     logger.exception("research llm call failed job_id=%s", job_id)
-                    add_research_event(
-                        job_id,
-                        "retry",
-                        f"模型调用失败，将自动重试：{exc}",
-                    )
+                    add_research_event(job_id, "retry", f"模型调用失败，将自动重试：{exc}")
                     await asyncio.sleep(retry_delay)
                     retry_delay = min(60, retry_delay * 2)
-                    continue
-
-                _mark_instructions_consumed(instruction_ids)
-                content = extract_text_content(getattr(response, "content", ""))
-                if content:
-                    add_research_event(job_id, "agent", content)
-                calls = extract_tool_calls(response)
-                if not calls and getattr(response, "tool_calls", None):
-                    calls = list(response.tool_calls)
-                if not calls:
-                    add_research_event(
-                        job_id,
-                        "continue",
-                        "Agent尚未调用工具，系统将继续要求其推进任务。",
-                    )
-                    await asyncio.sleep(0)
-                    continue
-
-                for call in calls:
-                    if _get_job_status(job_id) != "running":
-                        break
-                    name = call.get("name") or ""
-                    args = call.get("args") or {}
-                    add_research_event(
-                        job_id,
-                        "tool_call",
-                        f"调用 {name}",
-                        {"tool": name, "args": args},
-                    )
-                    tool = tools_by_name.get(name)
-                    if not tool:
-                        result = _json({"success": False, "error": f"未知工具 {name}"})
-                    else:
-                        try:
-                            result = await tool.ainvoke(args)
-                        except asyncio.CancelledError:
-                            raise
-                        except Exception as exc:
-                            result = _json({
-                                "success": False,
-                                "error": str(exc),
-                                "tool": name,
-                            })
-                    add_research_event(
-                        job_id,
-                        "tool_result",
-                        str(result),
-                        {"tool": name},
-                    )
-                await asyncio.sleep(0)
         except asyncio.CancelledError:
             if _get_job_status(job_id) == "running":
                 _set_job_status(job_id, "paused", "任务已中断")

@@ -6,6 +6,7 @@ import {
   useMemo,
   useState,
   useRef,
+  memo,
 } from "react";
 import {
   ReactFlow,
@@ -31,6 +32,7 @@ import {
   createNode,
   updateNode,
   saveContentDiffDecision,
+  saveNotesDiffDecision,
   fetchEdges,
   createEdge,
   deleteEdge,
@@ -126,15 +128,15 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = forwardRef(function Canvas({ workId, onAddContext, onNodeEdited, nodeContentDiffs = {}, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange }, ref) {
+const Canvas = memo(forwardRef(function Canvas({ workId, onAddContext, onNodeEdited, nodeContentDiffs = {}, nodeNotesDiffs = {}, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} onNodeEdited={onNodeEdited} nodeContentDiffs={nodeContentDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} agentRunning={agentRunning} appMode={appMode} charactersPanelOpen={charactersPanelOpen} onCharactersPanelOpenChange={onCharactersPanelOpenChange} ref={ref} />
+      <CanvasContent workId={workId} onAddContext={onAddContext} onNodeEdited={onNodeEdited} nodeContentDiffs={nodeContentDiffs} nodeNotesDiffs={nodeNotesDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeNotesDiffChange={onNodeNotesDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} onNodeNotesDiffsRefresh={onNodeNotesDiffsRefresh} agentRunning={agentRunning} appMode={appMode} charactersPanelOpen={charactersPanelOpen} onCharactersPanelOpenChange={onCharactersPanelOpenChange} onNodeEditingChange={onNodeEditingChange} ref={ref} />
     </ReactFlowProvider>
   );
-});
+}));
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, onNodeEdited, nodeContentDiffs, onNodeContentDiffChange, onNodeContentDiffsRefresh, agentRunning, appMode, charactersPanelOpen, onCharactersPanelOpenChange }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, onNodeEdited, nodeContentDiffs, nodeNotesDiffs, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode, charactersPanelOpen, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
@@ -162,6 +164,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const isDraggingRef = useRef(false);
   const selectedNodeIdsRef = useRef([]);
   const restoringRef = useRef(false);
+  const displayedNodesCacheRef = useRef(new Map());
 
   useEffect(() => {
     nodesRef.current = nodes;
@@ -371,15 +374,17 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const handleNodeUpdate = useCallback(async (nodeId, data) => {
     try {
       await updateNode(nodeId, data);
+      const localData = { ...data };
+      delete localData.expected_content;
       const editedNode = nodesRef.current.find((node) => node.id === nodeId);
-      if (editedNode && Object.keys(data).some((key) => !["position_x", "position_y", "locked"].includes(key))) {
-        onNodeEdited?.({ id: nodeId, ...applyNodeUpdateToData(editedNode.data, data) });
+      if (editedNode && Object.keys(localData).some((key) => !["position_x", "position_y", "locked"].includes(key))) {
+        onNodeEdited?.({ id: nodeId, ...applyNodeUpdateToData(editedNode.data, localData) });
       }
       // 本地更新画布节点显示
       setNodes((nds) => {
         const next = nds.map((n) =>
           n.id === nodeId
-            ? { ...n, data: applyNodeUpdateToData(n.data, data) }
+            ? { ...n, data: applyNodeUpdateToData(n.data, localData) }
             : n
         );
         nodesRef.current = next;
@@ -387,14 +392,31 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       });
       // 同步更新抽屉里的节点（即时显示新内容，含 chapter_elements）
       setSelectedNode((prev) =>
-        prev && prev.id === nodeId ? applyNodeUpdateToData(prev, data) : prev
+        prev && prev.id === nodeId ? applyNodeUpdateToData(prev, localData) : prev
       );
-      if (Object.hasOwn(data, "content")) await onNodeContentDiffsRefresh?.();
+      if (Object.hasOwn(localData, "content")) {
+        if (nodeContentDiffs[nodeId]) await onNodeContentDiffsRefresh?.();
+        else onNodeContentDiffChange?.(nodeId, null);
+      }
+      if (Object.hasOwn(localData, "notes")) await onNodeNotesDiffsRefresh?.();
     } catch (err) {
       console.error("Failed to update node:", err);
       alert("保存失败：" + (err?.message || "未知错误"));
+      throw err;
     }
-  }, [setNodes, updateNode, onNodeContentDiffsRefresh, onNodeEdited]);
+  }, [setNodes, updateNode, nodeContentDiffs, onNodeContentDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, onNodeEdited]);
+
+  const handleNotesDiffDecision = useCallback(async (nodeId, data) => {
+    const result = await saveNotesDiffDecision(nodeId, data);
+    if (data.current_notes !== data.expected_notes) {
+      setNodes((nds) => nds.map((n) => n.id === nodeId
+        ? { ...n, data: applyNodeUpdateToData(n.data, { notes: result.current_notes }) }
+        : n));
+      setSelectedNode((prev) => prev?.id === nodeId
+        ? applyNodeUpdateToData(prev, { notes: result.current_notes }) : prev);
+    }
+    return result;
+  }, [setNodes]);
 
   const handleContentDiffDecision = useCallback(async (nodeId, data) => {
     const result = await saveContentDiffDecision(nodeId, data);
@@ -754,6 +776,12 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const handleCloseDrawer = useCallback(() => {
     setSelectedNode(null);
   }, []);
+  const handleSelectedContentDiffChange = useCallback((diff) => {
+    if (selectedNode) onNodeContentDiffChange?.(selectedNode.id, diff);
+  }, [selectedNode, onNodeContentDiffChange]);
+  const handleSelectedNotesDiffChange = useCallback((diff) => {
+    if (selectedNode) onNodeNotesDiffChange?.(selectedNode.id, diff);
+  }, [selectedNode, onNodeNotesDiffChange]);
 
   // 节点坐标由布局推导，拖动不会改变位置，这里只跟踪拖动状态：
   // 框选拖动期间不清空详情抽屉。
@@ -767,7 +795,34 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
   // ── 可见子图投影与动态布局 ──
   // nodes / edges 保存完整语义图；下面派生出当前视图，隐藏节点不会被丢弃。
-  const graphIndex = useMemo(() => buildGraphIndex(nodes, edges), [nodes, edges]);
+  const structuralNodesKey = useMemo(
+    () => JSON.stringify(nodes.map((node) => [
+      node.id,
+      node.data?.type,
+      node.data?.sort_order,
+      node.data?.layer,
+      node.width,
+      node.height,
+    ])),
+    [nodes],
+  );
+  const structuralNodes = useMemo(
+    () => nodes.map((node) => ({
+      id: node.id,
+      type: node.type,
+      position: node.position,
+      width: node.width,
+      height: node.height,
+      measured: node.measured,
+      data: {
+        type: node.data?.type,
+        sort_order: node.data?.sort_order,
+        layer: node.data?.layer,
+      },
+    })),
+    [structuralNodesKey],
+  );
+  const graphIndex = useMemo(() => buildGraphIndex(structuralNodes, edges), [structuralNodes, edges]);
 
   const visibleGraph = useMemo(
     () => projectVisibleGraph({
@@ -840,7 +895,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
   useEffect(() => {
     persistViewState(expandedNodeIds);
-  }, [persistViewState, expandedNodeIds, nodes]);
+  }, [persistViewState, expandedNodeIds, structuralNodesKey]);
 
   // onMoveEnd 是移动结束事件而非每帧回调，直接写入即可
   const handleMoveEnd = useCallback(
@@ -852,15 +907,35 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     [persistViewState, expandedNodeIds],
   );
 
-  const displayedNodes = useMemo(
+  const currentNodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const layoutNodes = useMemo(
     () => visibleGraph.visibleNodes.map((node) => ({
       ...node,
       position: layoutPositions.get(node.id) ?? node.position,
-      // 位置由可见子图推导，手动拖动不参与布局
       draggable: false,
     })),
     [visibleGraph, layoutPositions],
   );
+  const displayedNodes = useMemo(() => {
+    const previous = displayedNodesCacheRef.current;
+    const next = new Map();
+    const result = layoutNodes.map((layoutNode) => {
+      const source = currentNodeById.get(layoutNode.id) || layoutNode;
+      const position = layoutNode.position;
+      const cached = previous.get(layoutNode.id);
+      if (cached?.source === source
+        && cached.position.x === position.x
+        && cached.position.y === position.y) {
+        next.set(layoutNode.id, cached);
+        return cached.displayed;
+      }
+      const displayed = { ...source, position, draggable: false };
+      next.set(layoutNode.id, { source, position, displayed });
+      return displayed;
+    });
+    displayedNodesCacheRef.current = next;
+    return result;
+  }, [currentNodeById, layoutNodes]);
 
   // 连线的连接点与标签避让必须基于布局后的坐标，否则会指向节点的旧位置
   const visibleStructuralEdges = useMemo(
@@ -875,15 +950,15 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
   const displayStructuralEdges = useMemo(
     () => applyEdgeLabelAvoidance(
-      displayedNodes,
-      applyEdgeHandles(displayedNodes, visibleStructuralEdges),
+      layoutNodes,
+      applyEdgeHandles(layoutNodes, visibleStructuralEdges),
     ),
-    [displayedNodes, visibleStructuralEdges],
+    [layoutNodes, visibleStructuralEdges],
   );
 
   const displayCharacterRelations = useMemo(
-    () => applyEdgeHandles(displayedNodes, visibleCharacterRelations, { relation: true }),
-    [displayedNodes, visibleCharacterRelations],
+    () => applyEdgeHandles(layoutNodes, visibleCharacterRelations, { relation: true }),
+    [layoutNodes, visibleCharacterRelations],
   );
 
   const displayedEdges = useMemo(
@@ -970,6 +1045,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
           fitView={!initialViewState?.viewport}
           attributionPosition="bottom-left"
           proOptions={appMode ? { hideAttribution: true } : undefined}
+          onlyRenderVisibleElements={appMode}
         >
           <Background />
           {!appMode && <Controls />}
@@ -1068,6 +1144,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       <IsolatedNodePanel
         nodes={nodes}
         onSelect={handleNodeClick}
+        appMode={appMode}
         initialCollapsed={appMode}
         collapsed={appMode ? !charactersPanelOpen : undefined}
         onCollapsedChange={appMode
@@ -1077,7 +1154,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer appMode={appMode} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onAddContext={onAddContext} onContentDiffChange={(diff) => selectedNode && onNodeContentDiffChange?.(selectedNode.id, diff)} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} />
+      <NodeDetailDrawer appMode={appMode} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} notesDiff={selectedNode ? nodeNotesDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onNotesDiffDecision={handleNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={handleSelectedContentDiffChange} onNotesDiffChange={handleSelectedNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} onEditingChange={onNodeEditingChange} />
     </div>
   );
 });

@@ -49,7 +49,9 @@ class SessionStore:
             session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
             if not session:
                 return None
-            return self._session_to_dict(session)
+            result = self._session_to_dict(session)
+            result["context_input_tokens"] = self._context_inputs(db, [session_id]).get(session_id)
+            return result
         finally:
             db.close()
 
@@ -61,9 +63,23 @@ class SessionStore:
             if work_id:
                 query = query.filter(SupervisorSession.work_id == work_id)
             sessions = query.order_by(SupervisorSession.updated_at.desc()).all()
-            return [self._session_to_dict(s) for s in sessions]
+            inputs = self._context_inputs(db, [s.id for s in sessions])
+            return [{**self._session_to_dict(s), "context_input_tokens": inputs.get(s.id)} for s in sessions]
         finally:
             db.close()
+
+    @staticmethod
+    def _context_inputs(db, session_ids: list[str]) -> dict:
+        """批量读取每个会话最近一次已记录的输入用量，不加载正文或累计用量。"""
+        if not session_ids:
+            return {}
+        tokens = SupervisorMessage.meta["usage_metadata"]["input_tokens"].as_integer()
+        rows = (db.query(SupervisorMessage.session_id, tokens)
+                .filter(SupervisorMessage.session_id.in_(session_ids), tokens.isnot(None))
+                .distinct(SupervisorMessage.session_id)
+                .order_by(SupervisorMessage.session_id, SupervisorMessage.sort_order.desc(),
+                          SupervisorMessage.created_at.desc(), SupervisorMessage.id.desc()).all())
+        return dict(rows)
 
     def mark_session_interrupted(self, session_id: str) -> bool:
         """将会话标记为 interrupted（仅当 status=running 时生效）。"""
@@ -198,44 +214,6 @@ class SessionStore:
             result = [self._message_to_dict(m) for m in messages]
             from services.supervisor_event_persist import enrich_messages_with_todolist
             return enrich_messages_with_todolist(db, session_id, result)
-        finally:
-            db.close()
-
-    def add_context_compaction(
-        self,
-        session_id: str,
-        *,
-        content: str,
-        meta: dict,
-        work_id: Optional[str] = None,
-    ) -> Optional[dict]:
-        """保存一条会话压缩包消息。压缩包是派生上下文，不改原始节点/消息。"""
-        compact_meta = dict(meta or {})
-        compact_meta["type"] = "context_compaction"
-        return self.add_message(
-            session_id,
-            role="assistant",
-            content=content,
-            meta=compact_meta,
-            work_id=work_id,
-        )
-
-    def get_active_context_compaction(self, session_id: str) -> Optional[dict]:
-        """返回当前 session 最新的压缩包消息。"""
-        db = self._get_db()
-        try:
-            row = (
-                db.query(SupervisorMessage)
-                .filter(SupervisorMessage.session_id == session_id)
-                .filter(SupervisorMessage.role == "assistant")
-                .order_by(SupervisorMessage.sort_order.desc())
-                .all()
-            )
-            for message in row:
-                meta = message.meta or {}
-                if isinstance(meta, dict) and meta.get("type") == "context_compaction":
-                    return self._message_to_dict(message)
-            return None
         finally:
             db.close()
 

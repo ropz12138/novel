@@ -99,6 +99,32 @@ def test_novel_llm_astream_uses_provider_and_emits_chunks():
     assert aggregated.tool_calls[0]["name"] == "query_nodes"
 
 
+def test_novel_llm_astream_attaches_terminal_usage_to_aggregated_message():
+    provider = _FakeProvider([
+        ToolStreamEvent(kind="text", text="正文"),
+        ToolStreamEvent(
+            kind="usage",
+            usage={"input_tokens": 22716, "output_tokens": 70, "total_tokens": 22786},
+        ),
+    ])
+    llm = NovelLLM(provider=provider, model_name="m")
+
+    async def _run():
+        chunks = [chunk async for chunk in llm.astream([HumanMessage(content="hi")])]
+        aggregated = chunks[0]
+        for chunk in chunks[1:]:
+            aggregated = aggregated + chunk
+        return aggregated
+
+    aggregated = asyncio.run(_run())
+    assert aggregated.content == "正文"
+    assert aggregated.usage_metadata == {
+        "input_tokens": 22716,
+        "output_tokens": 70,
+        "total_tokens": 22786,
+    }
+
+
 def test_bind_tools_uses_instance_extra_body():
     provider = _FakeProvider([])
     llm = NovelLLM(provider=provider, model_name="x", extra_body={"thinking": {"type": "adaptive"}})

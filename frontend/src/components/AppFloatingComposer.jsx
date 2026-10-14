@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { Bot, Minus, Send, Square } from "lucide-react";
 import { useKeyboardInset } from "../lib/keyboardInset";
 import ModifiedNodeCapsules from "./ModifiedNodeCapsules";
+import SessionContextUsage from "./SessionContextUsage";
 
 const COMPOSER_BOTTOM_GAP_PX = 12;
 
@@ -237,7 +238,10 @@ export default function AppFloatingComposer({
                     : "text-slate-600 hover:bg-slate-50"
                 }`}
               >
-                {session.title || "未命名对话"}
+                <span className="flex min-w-0 flex-col">
+                  <span className="truncate">{session.title || "未命名对话"}</span>
+                  <SessionContextUsage tokens={session.context_input_tokens} />
+                </span>
               </button>
             ))}
           </div>

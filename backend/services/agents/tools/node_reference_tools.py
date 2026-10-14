@@ -15,7 +15,7 @@ class NodeReferenceInput(BaseModel):
 
 
 class CreateNodeReferencesInput(BaseModel):
-    references: list[NodeReferenceInput] = Field(min_length=1, description="批量生成原文定位引用")
+    references: list[NodeReferenceInput] = Field(min_length=1, max_length=10, description="批量生成原文定位引用，一次最多 10 条")
 
 
 def make_reference(node_id, title, content, quote):

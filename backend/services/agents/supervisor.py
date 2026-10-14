@@ -23,6 +23,7 @@ from services.agents.supervisor_turn import (
     count_supervisor_work_tool_calls,
     get_supervisor_iteration_limits,
     prepare_supervisor_ai_message,
+    terminal_respond_to_user_message,
 )
 from services.llm_stream import chunk_to_ai_message, emit_llm_stream_deltas
 from services.message_content_utils import extract_text_content, extract_tool_calls
@@ -34,7 +35,6 @@ from models.user import User
 logger = logging.getLogger(__name__)
 PROMPT_DIR = Path(__file__).parent / "prompts"
 MAX_TOOL_CALL_PARSE_RETRIES = 2
-INVALID_TOOL_CALL_ARGS_LIMIT = 12000
 INVALID_TOOL_CALL_CONTEXT_WINDOW = 240
 
 
@@ -51,7 +51,7 @@ def _collect_messages_from_graph_event(
     msgs = node_output.get("messages", [])
     if not msgs:
         return all_messages
-    if node_name in ("agent", "tools"):
+    if node_name in ("agent", "model", "tools"):
         return [*all_messages, *msgs]
     return all_messages
 
@@ -191,15 +191,13 @@ def _build_tool_call_parse_feedback(message) -> str:
         "要求：只重新调用工具，不要用普通文本回答；修复 JSON 语法；尽量保持原本要创建或修改的内容不变；JSON 字符串里的英文双引号必须转义，或改用中文引号。",
     ]
 
-    for idx, call in enumerate(invalid_tool_calls[:3], start=1):
+    for idx, call in enumerate(invalid_tool_calls, start=1):
         if not isinstance(call, dict):
             continue
         name = call.get("name") or "unknown"
         call_id = call.get("id") or ""
         raw_args = call.get("args") or ""
         args_text = raw_args if isinstance(raw_args, str) else json.dumps(raw_args, ensure_ascii=False, default=str)
-        truncated = len(args_text) > INVALID_TOOL_CALL_ARGS_LIMIT
-        shown_args = args_text[:INVALID_TOOL_CALL_ARGS_LIMIT]
         details = _json_error_details(args_text)
 
         sections.append(
@@ -214,7 +212,7 @@ def _build_tool_call_parse_feedback(message) -> str:
                 "错误附近内容:",
                 details["context"] or "(无)",
                 "原始 args:",
-                shown_args + ("\n...(args truncated)" if truncated else ""),
+                args_text,
             ])
         )
 
@@ -305,13 +303,13 @@ class SupervisorAgent:
 
         review_instructions = {
             "low": (
-                "本次章节评审强度为低：不调用任何评审工具，"
-                "完成创作、摘要和提交。本条覆盖系统提示中的默认中档。"
+                "本次章节评审强度为低：执行规划、创作、保存回读和摘要。"
+                "专项文学评审在用户明确要求时执行。本条覆盖系统提示中的默认中档。"
             ),
             "high": (
-                "本次章节评审强度为高：评审次数不限，各评审 Agent 会以严苛的读者视角给出建议。"
+                "本次章节评审强度为高：评审次数不限，通过 run_review_agent 由独立 Reviewer 以严苛的读者视角阅读并记录证据。"
                 "由你判断建议是否值得采纳；值得采纳时修订并对最新草稿复检，"
-                "直到评审建议无需采纳，或评审 Agent 明确认为文本已经优秀。"
+                "直到具体问题已解决，或剩余建议无需采纳。"
                 "本条覆盖系统提示中的默认中档。"
             ),
         }
@@ -322,10 +320,41 @@ class SupervisorAgent:
             return None
         return "\n\n".join(parts)
 
+    def _load_work_note_context(self, work_id: str | None) -> str | None:
+        """读取作品的全部笔记节点，作为靠后的动态提示词注入。"""
+        if not work_id:
+            return None
+        from models.node import Node
+
+        db = _get_db()
+        try:
+            notes = (
+                db.query(Node)
+                .filter(Node.work_id == work_id, Node.type == "note")
+                .order_by(Node.sort_order.asc(), Node.created_at.asc(), Node.id.asc())
+                .all()
+            )
+        finally:
+            db.close()
+        sections = [
+            "## 作品笔记（自动注入）",
+            "本消息是当前作品笔记的最新完整版本，覆盖历史中的旧版本。创作与修改时直接将其作为用户需求、偏好和备忘执行。",
+        ]
+        if not notes:
+            sections.append("当前作品暂无笔记节点。")
+        for note in notes:
+            sections.append(
+                f"### {note.title}\n"
+                f"节点 ID：{note.id}\n\n"
+                f"{note.content or ''}"
+            )
+        return "\n\n".join(sections)
+
     def _assemble_initial_messages(
         self,
         history: list,
         current_turn: list,
+        note_context: str | None = None,
         context_node_ids: list | None = None,
         chapter_review_intensity: str = "medium",
         session_id: str | None = None,
@@ -333,6 +362,20 @@ class SupervisorAgent:
     ) -> list:
         base_prompt = self._build_system_prompt()
         messages = [SystemMessage(content=base_prompt), *history]
+        previous_note_context = next((
+            message.content for message in reversed(history)
+            if isinstance(message, SystemMessage)
+            and message.additional_kwargs.get("type") == "injected_work_notes"
+        ), None)
+        if note_context is not None and note_context != previous_note_context:
+            meta = {"type": "injected_work_notes"}
+            if session_id:
+                from services.session_store import session_store
+                session_store.add_message(
+                    session_id, role="system", content=note_context,
+                    meta=meta, before_message_id=before_message_id,
+                )
+            messages.append(SystemMessage(content=note_context, additional_kwargs=meta))
         in_history = self._build_in_history_system_prompt(
             context_node_ids=context_node_ids,
             chapter_review_intensity=chapter_review_intensity,
@@ -356,20 +399,30 @@ class SupervisorAgent:
         return messages
 
     def _get_tools(self):
-        """单 Agent：直接挂全部操作工具，不再 dispatch 到子 agent。"""
+        """Supervisor 管理作品，通过显式任务调用隔离的写作与评审子 Agent。"""
         from services.agents.tools.query_tools import query_tools
-        from services.agents.tools.node_tools import node_tools
-        from services.agents.tools.chapter_tools import evaluate_chapter, count_chapter_words
+        from services.agents.tools.supervisor_node_tools import supervisor_node_tools as node_tools
+        from services.agents.tools.writing_agent_tools import run_writing_agent
+        from services.agents.tools.review_agent_tools import run_review_agent
+        from services.agents.tools.chapter_tools import count_chapter_words
         from services.agents.tools.illustration_tools import insert_chapter_illustration
         from services.agents.tools.character_relation_tools import character_relation_tools
-        from services.agents.tools.context_tools import context_tools
         from services.agents.tools.research_tools import research_tools
         from services.agents.tools.humanizer_tools import humanizer_tools
-        from services.agents.tools.specialist_agent_tools import specialist_agent_tools
-        from services.agents.tools.workflow_agent_tools import workflow_agent_tools
+        from services.agents.tools.workflow_skill_tools import workflow_skill_tools
         from services.agents.tools.respond_to_user_tool import respond_to_user
 
-        return [respond_to_user] + query_tools + node_tools + [evaluate_chapter, count_chapter_words, insert_chapter_illustration] + character_relation_tools + context_tools + research_tools + humanizer_tools + specialist_agent_tools + workflow_agent_tools
+        reference_tools = []
+        user_id = get_context().get("user_id")
+        if user_id:
+            from services.agents.tools.reference_agent_tools import (
+                run_reference_agent,
+                user_has_uploaded_novels,
+            )
+            if user_has_uploaded_novels(user_id):
+                reference_tools.append(run_reference_agent)
+
+        return [respond_to_user, run_writing_agent, run_review_agent] + reference_tools + query_tools + node_tools + [count_chapter_words, insert_chapter_illustration] + character_relation_tools + research_tools + humanizer_tools + workflow_skill_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""
@@ -395,7 +448,6 @@ class SupervisorAgent:
             return [], []
         from services.session_store import session_store
         from services.message_langchain import db_message_dicts_to_langchain
-        from services.agents.tools.context_tools import _compact_message_for_llm
 
         msgs = session_store.get_messages(session_id)
         conv = [
@@ -411,29 +463,7 @@ class SupervisorAgent:
         while conv and conv[-1].get("role") == "user":
             current_turn.insert(0, conv.pop())
 
-        compaction = session_store.get_active_context_compaction(session_id)
-        if compaction:
-            compact_order = compaction.get("sort_order", -1)
-            after = []
-            for msg in conv:
-                if msg.get("sort_order", -1) <= compact_order:
-                    continue
-                meta = msg.get("meta") if isinstance(msg.get("meta"), dict) else {}
-                if meta.get("type") == "context_compaction":
-                    continue
-                if msg.get("role") == "tool_call" and msg.get("content") == "create_context_compaction":
-                    continue
-                if msg.get("role") == "tool_result" and meta.get("tool_name") == "create_context_compaction":
-                    continue
-                after.append(msg)
-            history = [
-                SystemMessage(content=_compact_message_for_llm(compaction)),
-                *db_message_dicts_to_langchain(after),
-            ]
-        else:
-            history = db_message_dicts_to_langchain(conv)
-
-        return history, current_turn
+        return db_message_dicts_to_langchain(conv), current_turn
 
     def _build_graph(
         self,
@@ -443,170 +473,26 @@ class SupervisorAgent:
         emit: Optional[Callable] = None,
         chapter_review_intensity: str = "medium",
     ):
-        """构建LangGraph"""
-        emit = emit or self._default_emit
-        tool_call_limit, _ = get_supervisor_iteration_limits(chapter_review_intensity)
-        tools = self._get_tools()
-        tool_node = ToolNode(tools, handle_tool_errors=_structured_tool_error)
+        """构建 Deep Agents 单 Supervisor 图。"""
+        del emit, chapter_review_intensity
+        from services.agents.deep_agent_runtime import build_deep_agent
+        from services.agents.llm import get_deep_agent_model
 
         primary = model_pref.get("primary") if model_pref else None
         fallback = model_pref.get("fallback") if model_pref else None
-        llm = get_llm(temperature=0.5, primary=primary, fallback=fallback)
-        llm_with_tools = bind_tools_to_llm(llm, tools)
-        from services.agents.tools.respond_to_user_tool import respond_to_user
-        llm_end_only = bind_tools_to_llm(llm, [respond_to_user])
-        run_start_work_tool_calls: int | None = None
-
-        async def agent_node(state: SupervisorState):
-            """Agent 节点：流式推送 reasoning + content，并返回完整 AIMessage。"""
-            nonlocal run_start_work_tool_calls
-            messages = list(state["messages"])
-            response = None
-            parse_attempt = 0
-            turn_retry = 0
-            total_work_tool_calls = count_supervisor_work_tool_calls(messages)
-            if run_start_work_tool_calls is None:
-                run_start_work_tool_calls = total_work_tool_calls
-            current_run_work_tool_calls = count_current_run_work_tool_calls(
-                messages,
-                run_start_work_tool_calls,
-            )
-            hit_limit = current_run_work_tool_calls >= tool_call_limit
-            active_llm = llm_end_only if hit_limit else llm_with_tools
-            if hit_limit:
-                messages.append(HumanMessage(content=SUPERVISOR_TOOL_LIMIT_INSTRUCTION))
-
-            while True:
-                if emit:
-                    if parse_attempt > 0:
-                        label = "修复工具参数"
-                    elif turn_retry > 0:
-                        label = "继续执行"
-                    else:
-                        label = "AI 思考中"
-                    await emit("stage_start", {"stage": "thinking", "label": label})
-
-                aggregated = None
-                from services.agents.sampling_override import supervisor_sampling_scope
-                with supervisor_sampling_scope(active_llm):
-                    async for chunk in active_llm.astream(messages):
-                        aggregated = chunk if aggregated is None else aggregated + chunk
-                        if emit:
-                            await emit_llm_stream_deltas(emit, "supervisor_stream", chunk)
-
-                if aggregated is None:
-                    raise RuntimeError("LLM 未返回任何响应")
-
-                usage = getattr(aggregated, "usage_metadata", None)
-                if usage:
-                    ctx = get_context()
-                    ctx["last_llm_usage"] = usage
-
-                diagnostic = _tool_call_diagnostic_payload(aggregated)
-                has_unparsed_tool_call = (
-                    diagnostic["finish_reason"] == "tool_calls"
-                    and diagnostic["tool_calls_count"] == 0
-                    and (
-                        diagnostic["invalid_tool_calls_count"] > 0
-                        or diagnostic["tool_call_chunks_count"] > 0
-                    )
-                )
-
-                response = chunk_to_ai_message(aggregated)
-                if not response.tool_calls:
-                    extracted = extract_tool_calls(response)
-                    if extracted:
-                        response = AIMessage(
-                            content=response.content,
-                            tool_calls=[
-                                {
-                                    "name": tc["name"],
-                                    "args": tc.get("args") or {},
-                                    "id": tc.get("id") or f"call_auto_{uuid.uuid4().hex[:12]}",
-                                }
-                                for tc in extracted
-                            ],
-                            additional_kwargs=getattr(response, "additional_kwargs", None) or {},
-                        )
-
-                if not has_meaningful_ai_output(response):
-                    raise RuntimeError("主模型和备用模型均返回空响应")
-
-                if has_unparsed_tool_call and not response.tool_calls:
-                    logger.warning(
-                        "supervisor streaming tool call was not parsed session_id=%s work_id=%s attempt=%s diagnostic=%s",
-                        session_id,
-                        work_id,
-                        parse_attempt + 1,
-                        diagnostic,
-                    )
-                    if parse_attempt < MAX_TOOL_CALL_PARSE_RETRIES:
-                        parse_attempt += 1
-                        feedback = _build_tool_call_parse_feedback(aggregated)
-                        messages.append(HumanMessage(content=feedback))
-                        continue
-
-                action, response = prepare_supervisor_ai_message(response)
-                logger.info(
-                    "supervisor turn action=%s response.text=%s tool_calls=%s finish_reason=%s retry_count=%s",
-                    action,
-                    extract_text_content(response.content),
-                    [tc.get("name") for tc in (response.tool_calls or [])],
-                    diagnostic.get("finish_reason"),
-                    turn_retry,
-                )
-                if action == "retry":
-                    if turn_retry >= MAX_SUPERVISOR_TURN_RETRIES:
-                        raise RuntimeError("Agent stopped repeatedly without acting")
-                    turn_retry += 1
-                    messages.append(response)
-                    messages.append(HumanMessage(content=SUPERVISOR_TURN_RETRY_INSTRUCTION))
-                    continue
-                break
-
-            if response is None:
-                raise RuntimeError("LLM 未返回任何响应")
-
-            if emit and response.tool_calls:
-                tool_calls = [
-                    {"id": tc.get("id", ""), "name": tc.get("name", "")}
-                    for tc in response.tool_calls
-                    if tc.get("name")
-                ]
-                if tool_calls:
-                    await emit("tool_calls", {"tools": tool_calls})
-                    await emit(
-                        "stage_start",
-                        {"stage": "tool_calling", "label": f"调用工具: {tool_calls[0]['name']}"},
-                    )
-
-            return {"messages": [response]}
-
-        async def atomic_tools_node(state: SupervisorState):
-            from services.tool_execution_unit import run_atomic_tool_calls
-            return await run_atomic_tool_calls(
-                tool_node=tool_node,
-                state=state,
-                work_id=work_id,
-                session_id=session_id,
-            )
-
-        graph = StateGraph(SupervisorState)
-        graph.add_node("agent", agent_node)
-        graph.add_node("tools", atomic_tools_node)
-
-        graph.set_entry_point("agent")
-        graph.add_conditional_edges(
-            "agent",
-            should_continue,
-            {
-                "tools": "tools",
-                "end": END,
-            }
+        model = get_deep_agent_model(
+            temperature=0.5,
+            primary=primary,
+            fallback=fallback,
         )
-        graph.add_edge("tools", "agent")
-
-        return graph.compile()
+        return build_deep_agent(
+            model=model,
+            tools=self._get_tools(),
+            system_prompt="",
+            work_id=work_id,
+            session_id=session_id,
+            completion_tool_name="respond_to_user",
+        )
 
     @traceable(
         name="canvas_supervisor.run",
@@ -655,37 +541,84 @@ class SupervisorAgent:
                 "messages": self._assemble_initial_messages(
                     chat_history,
                     current_turn,
+                    note_context=self._load_work_note_context(work_id),
                     context_node_ids=context_node_ids,
                     chapter_review_intensity=chapter_review_intensity,
                     session_id=session_id,
                     before_message_id=current_turn_msgs[0]["id"] if current_turn_msgs else None,
                 ),
             }
+            if session_id:
+                from services.agents.deep_agent_runtime import load_summarization_state
+                summary_state = load_summarization_state("session", session_id)
+                event = summary_state.get("_summarization_event")
+                if event and event["cutoff_index"] > len(initial_state["messages"]):
+                    raise RuntimeError("持久化的上下文压缩点超出当前会话历史")
+                initial_state.update(summary_state)
 
-            # 与 main 分支一致：graph.astream 执行，流式输出在 agent_node 内完成
+            # Deep Agents 同时输出消息流和节点更新：消息流供 SSE，节点更新供落库。
             graph_config = {"recursion_limit": graph_recursion_limit}
             run_messages: list = []
 
             try:
-                async for event in graph.astream(initial_state, config=graph_config):
+                if run_emit:
+                    await run_emit("stage_start", {"stage": "thinking", "label": "AI 思考中"})
+                async for stream_mode, event in graph.astream(
+                    initial_state,
+                    config=graph_config,
+                    stream_mode=["updates", "messages"],
+                ):
+                    if stream_mode == "messages":
+                        chunk, metadata = event
+                        if metadata.get("langgraph_node") != "model":
+                            continue
+                        if metadata.get("lc_source") == "summarization":
+                            continue
+                        if metadata.get("novel_agent_role") or "novel:subagent" in metadata.get("tags", []):
+                            continue
+                        usage = getattr(chunk, "usage_metadata", None)
+                        if usage:
+                            get_context()["last_llm_usage"] = usage
+                        if run_emit:
+                            await emit_llm_stream_deltas(run_emit, "supervisor_stream", chunk)
+                        continue
                     for node_name, node_output in event.items():
                         run_messages = _collect_messages_from_graph_event(
                             run_messages, node_name, node_output
                         )
+                        if node_name == "model" and run_emit:
+                            for msg in node_output.get("messages", []):
+                                tool_calls = [
+                                    {"id": call.get("id", ""), "name": call.get("name", "")}
+                                    for call in (getattr(msg, "tool_calls", None) or [])
+                                    if call.get("name")
+                                ]
+                                if tool_calls:
+                                    await run_emit("tool_calls", {"tools": tool_calls})
+                                    await run_emit("stage_start", {
+                                        "stage": "tool_calling",
+                                        "label": f"调用工具: {tool_calls[0]['name']}",
+                                    })
                         if node_name == "tools" and run_emit:
+                            executed_work_tool = False
                             for msg in node_output.get("messages", []):
                                 if isinstance(msg, ToolMessage):
+                                    tool_name = getattr(msg, "name", "unknown")
                                     content = msg.content if hasattr(msg, "content") else str(msg)
                                     await run_emit(
                                         "tool_executed",
                                         {
-                                            "tool": getattr(msg, "name", "unknown"),
+                                            "tool": tool_name,
                                             "tool_call_id": getattr(msg, "tool_call_id", ""),
                                             "success": tool_message_success(str(content)),
                                         },
                                     )
+                                    if tool_name != "respond_to_user":
+                                        executed_work_tool = True
+                            if executed_work_tool:
+                                await run_emit("stage_start", {"stage": "thinking", "label": "继续执行"})
 
-                        if session_id and node_name == "agent":
+                        if session_id and node_name in ("agent", "model"):
                             for msg in node_output.get("messages", []):
                                 if isinstance(msg, AIMessage):
                                     self._save_intermediate_messages(session_id, [msg], work_id)
@@ -716,6 +649,12 @@ class SupervisorAgent:
                 run_messages = [*wrap_source, wrap_ai]
                 if session_id:
                     self._save_intermediate_messages(session_id, [wrap_ai], work_id)
+
+            terminal_ai = terminal_respond_to_user_message(run_messages)
+            if terminal_ai is not None:
+                run_messages.append(terminal_ai)
+                if session_id:
+                    self._save_intermediate_messages(session_id, [terminal_ai], work_id)
 
             last_message = run_messages[-1] if run_messages else None
 
@@ -793,10 +732,14 @@ class SupervisorAgent:
                         if isinstance(tc, dict)
                     ]
                 is_final = len(messages) == 1 and idx == len(messages) - 1 and not tool_calls
+                is_terminal_call = (
+                    len(tool_calls) == 1
+                    and tool_calls[0].get("name") == "respond_to_user"
+                )
                 rc = getattr(msg, "additional_kwargs", {}).get("reasoning_content")
                 tool_results = lookup_tool_results_after(messages, idx + 1)
 
-                if text or rc:
+                if (text or rc) and not is_terminal_call:
                     save_meta = {"phase": "final" if is_final else "intermediate", "presentation_only": True}
                     if rc:
                         save_meta["reasoning_content"] = rc

@@ -3,6 +3,7 @@ import { createRef } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AgentChat, { latestStreamLine, scrollTopAfterPrepend } from "./AgentChat";
 import { getChapterReviewIntensity, putChapterReviewIntensity } from "../lib/canvasApi";
+import { sessionApi } from "../lib/api";
 
 const mocks = vi.hoisted(() => ({
   handleSend: vi.fn(),
@@ -49,6 +50,17 @@ vi.mock("../lib/keyboardInset", () => ({
 }));
 
 describe("AgentChat context quote", () => {
+  it("shows persisted context usage in the desktop session list", async () => {
+    sessionApi.listSupervisor.mockResolvedValueOnce([
+      { id: "s1", title: "第一章", context_input_tokens: 12345 },
+      { id: "s2", title: "第二章", context_input_tokens: 0 },
+    ]);
+    render(<AgentChat workId="work-1" />);
+    await waitFor(() => expect(sessionApi.listSupervisor).toHaveBeenCalledWith("work-1"));
+    fireEvent.click(screen.getByRole("button", { name: /新对话/ }));
+    expect(await screen.findByText("【12,345】 tokens")).toBeDefined();
+    expect(screen.getAllByText("【0】 tokens").length).toBeGreaterThan(0);
+  });
   it("does not send on Enter", () => {
     render(<AgentChat workId="work-1" appMode />);
     fireEvent.keyDown(screen.getByRole("textbox", { name: "创作指令" }), { key: "Enter" });

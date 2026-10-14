@@ -4,7 +4,6 @@ import { API_BASE } from "../lib/runtime-config";
 import { sessionApi } from "../lib/api";
 import { normalizeTodoItem } from "../lib/sseEventHandlers";
 import { suppressSupersededChapterEditCards } from "../lib/chapterEditDiffCards";
-import { buildContentDiffFromContents } from "../lib/inlineContentDiff";
 
 /**
  * Custom hook encapsulating Supervisor chat logic for Canvas AgentChat.
@@ -21,6 +20,8 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     onNodesUpdate,
     onNodeContentDiff,
     onNodeContentDiffsReset,
+    onNodeNotesDiff,
+    onNodeNotesDiffsReset,
   } = callbacks;
 
   // ── State ──
@@ -35,8 +36,8 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   const assistantDraftRef = useRef("");
   const [assistantReasoningDraft, setAssistantReasoningDraft] = useState("");
   const assistantReasoningDraftRef = useRef("");
-  const contentPreviewRef = useRef(new Map());
   const timelineIdRef = useRef(0);
+  const lastStreamSeqRef = useRef(0);
   const sseRef = useRef(null);
   const sseCompletedRef = useRef(false);
   const disconnectRecoveryRef = useRef(null);
@@ -45,6 +46,16 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   const hasMoreHistoryRef = useRef(false);
   const historyGenRef = useRef(0);
   const [hasMoreHistory, setHasMoreHistory] = useState(false);
+
+  // 离开作品时解除前端订阅，后台任务继续运行，返回作品后可重新连接。
+  useEffect(() => () => {
+    historyGenRef.current += 1;
+    disconnectRecoveryRef.current = null;
+    activeSessionIdRef.current = null;
+    sseCompletedRef.current = true;
+    sseRef.current?.close();
+    sseRef.current = null;
+  }, []);
 
   const syncSessionId = useCallback((id) => {
     activeSessionIdRef.current = id;
@@ -168,7 +179,8 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       onNodeContentDiffsReset,
       onNodeContentDiff,
     );
-  }, [onNodeContentDiff, onNodeContentDiffsReset, rememberHistoryPage]);
+    onNodeNotesDiffsReset?.();
+  }, [onNodeContentDiff, onNodeContentDiffsReset, onNodeNotesDiffsReset, rememberHistoryPage]);
 
   const reloadTimelineFromSession = useCallback(async (sid) => {
     const sessionKey = sid || activeSessionIdRef.current;
@@ -252,6 +264,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   // ── SSE event handler ──
 
   const onSSE = useCallback((ev, d) => {
+    const streamSeq = Number.isInteger(d?._stream_seq) ? d._stream_seq : null;
     switch (ev) {
       case "queue_updated":
         setPendingMessages(d.pending_messages || []);
@@ -423,39 +436,41 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         break;
 
       case "node_content_diff_preview": {
-        const nodeId = d.node_id;
-        if (!nodeId) break;
-        if (d.phase === "start") {
-          contentPreviewRef.current.set(nodeId, {
+        // 流式正文尚无已提交的工具分组；最终 diff 事件提供完整分组。
+        break;
+      }
+
+      case "chapter_notes_diff": {
+        const nodeId = d.node_id || d.chapter_node_id;
+        finalizeAllRunningSteps();
+        addMessage("assistant", "", {
+          type: "chapter_notes_diff_card",
+          chapterNotesDiffCard: {
             node_id: nodeId,
-            node_type: d.node_type || "chapter",
-            title: d.title || "",
-            original_content: d.original_content || "",
-            current_content: "",
-          });
-          break;
-        }
-        const preview = contentPreviewRef.current.get(nodeId);
-        if (!preview) break;
-        if (d.phase === "delta") preview.current_content += d.chunk || "";
-        if (d.phase === "complete") preview.current_content = d.current_content || preview.current_content;
-        const hunks = buildContentDiffFromContents(
-          preview.original_content,
-          preview.current_content,
-        );
-        const charsAdded = hunks.reduce((sum, hunk) => sum + (hunk.new_text || "").length, 0);
-        const charsRemoved = hunks.reduce((sum, hunk) => sum + (hunk.old_text || "").length, 0);
-        onNodeContentDiff?.(nodeId, {
-          ...preview,
-          preview: true,
-          preview_phase: d.phase,
-          hunks,
-          summary: {
-            paragraphs_changed: hunks.length,
-            chars_added: charsAdded,
-            chars_removed: charsRemoved,
+            chapter_node_id: d.chapter_node_id || nodeId,
+            node_type: "chapter",
+            title: d.title,
+            hunks: d.diff?.hunks ?? [],
+            summary: d.diff?.summary ?? {},
+            baseline_notes: d.baseline_notes,
+            original_notes: d.original_notes,
+            current_notes: d.current_notes,
+            notes_count: d.notes_count,
+            notes_count_delta: d.notes_count_delta,
           },
         });
+        if (nodeId && onNodeNotesDiff) {
+          onNodeNotesDiff(nodeId, {
+            node_id: nodeId,
+            title: d.title,
+            hunks: d.diff?.hunks ?? [],
+            summary: d.diff?.summary ?? {},
+            baseline_content: d.baseline_notes,
+            original_content: d.original_notes,
+            current_content: d.current_notes,
+          });
+        }
+        if (onChapterUpdated) onChapterUpdated(nodeId);
         break;
       }
 
@@ -463,7 +478,6 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       case "node_content_diff": {
         const nodeId = d.node_id || d.chapter_node_id;
         const nodeType = d.node_type || (ev === "chapter_edit_diff" ? "chapter" : undefined);
-        contentPreviewRef.current.delete(nodeId);
         finalizeAllRunningSteps();
         addMessage("assistant", "", {
           type: "chapter_content_diff_card",
@@ -490,15 +504,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
             node_id: nodeId,
             node_type: nodeType,
             title: d.title,
-            hunks: d.diff?.hunks ?? [],
-            summary: d.diff?.summary ?? {},
-            baseline_content: d.baseline_content,
-            original_content: d.original_content,
-            current_content: d.current_content,
-            text_count: d.text_count,
-            text_count_delta: d.text_count_delta,
-            word_count: d.word_count,
-            word_count_delta: d.word_count_delta,
+            ...d.node_diff,
           });
         }
         break;
@@ -632,10 +638,13 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       default:
         break;
     }
+    if (streamSeq != null) {
+      lastStreamSeqRef.current = Math.max(lastStreamSeqRef.current, streamSeq);
+    }
   }, [
     syncSessionId, freezeDraft, pushExecStep,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
-    onChapterUpdated, onNodesUpdate, onNodeContentDiff, reloadTimelineFromSession,
+    onChapterUpdated, onNodesUpdate, onNodeContentDiff, onNodeNotesDiff, reloadTimelineFromSession,
   ]);
 
   // ── SSE connection ──
@@ -651,16 +660,22 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       setAssistantReasoningDraft("");
       assistantReasoningDraftRef.current = "";
       timelineIdRef.current = 0;
+      lastStreamSeqRef.current = 0;
     }
+
+    const requestBody = resume
+      ? { ...body, after_seq: lastStreamSeqRef.current }
+      : body;
 
     const ctl = new AbortController();
     authFetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify(requestBody),
       signal: ctl.signal,
     })
       .then(async (res) => {
+        if (ctl.signal.aborted) return;
         if (!res.ok) {
           let msg = `HTTP ${res.status}`;
           try {
@@ -776,6 +791,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         setInput("");
         // 保留正在读取的 SSE；空闲或已结束时订阅后端任务流。
         if (state.started_new_stream || !running || sseCompletedRef.current) {
+          if (state.started_new_stream) lastStreamSeqRef.current = 0;
           connectSSE(`${API_BASE}/supervisor/stream`, { session_id: sid }, { resume: true });
         }
       } catch (error) {
@@ -814,6 +830,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
+    lastStreamSeqRef.current = 0;
     historyCursorRef.current = null;
     hasMoreHistoryRef.current = false;
     setHasMoreHistory(false);
@@ -826,6 +843,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       if (gen !== historyGenRef.current) return;
       replaceTimelineFromPage(page);
     } catch (error) {
+      if (gen !== historyGenRef.current) return;
       addMessage("system", `加载对话失败: ${error?.message || "未知错误"}`, {
         type: "error",
       });
@@ -871,7 +889,8 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     let alreadyLoaded = false;
     setTimeline((prev) => {
       const item = prev.find((entry) => entry.dbMessageId === messageId);
-      alreadyLoaded = Array.isArray(item?.chapterContentDiffCard?.hunks);
+      const cardKey = item?.chapterNotesDiffCard ? "chapterNotesDiffCard" : "chapterContentDiffCard";
+      alreadyLoaded = Array.isArray(item?.[cardKey]?.hunks);
       if (!alreadyLoaded) return prev;
       return prev.map((entry) => (
         entry.dbMessageId === messageId ? { ...entry, diffDetailOpen: true } : entry
@@ -881,11 +900,12 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     const detail = await sessionApi.getSupervisorDiffDetail(sid, messageId);
     setTimeline((prev) => prev.map((entry) => {
       if (entry.dbMessageId !== messageId) return entry;
+      const cardKey = entry.chapterNotesDiffCard ? "chapterNotesDiffCard" : "chapterContentDiffCard";
       return {
         ...entry,
         diffDetailOpen: true,
-        chapterContentDiffCard: {
-          ...entry.chapterContentDiffCard,
+        [cardKey]: {
+          ...entry[cardKey],
           hunks: detail.hunks,
         },
       };
@@ -910,16 +930,18 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     setAssistantReasoningDraft("");
     assistantReasoningDraftRef.current = "";
     timelineIdRef.current = 0;
+    lastStreamSeqRef.current = 0;
     historyCursorRef.current = null;
     hasMoreHistoryRef.current = false;
     setHasMoreHistory(false);
     historyGenRef.current += 1;
     onNodeContentDiffsReset?.();
+    onNodeNotesDiffsReset?.();
     if (sseRef.current) {
       sseRef.current.close();
       sseRef.current = null;
     }
-  }, [syncSessionId, onNodeContentDiffsReset]);
+  }, [syncSessionId, onNodeContentDiffsReset, onNodeNotesDiffsReset]);
 
   // ── Return ──
 
@@ -984,6 +1006,7 @@ function shouldSkipAssistantEllipsisMessage(m) {
   const meta = m.meta || {};
   if (meta.type === "requirements_todolist" && meta.todoCard) return false;
   if (meta.type === "chapter_content_diff_card" && meta.chapterContentDiffCard) return false;
+  if (meta.type === "chapter_notes_diff_card" && meta.chapterNotesDiffCard) return false;
   if (meta.type === "process_note") return false;
   if (meta.type === "agent_phase" && meta.event === "stage_start") return false;
   if (String(meta.reasoning_content || "").trim()) return false;
@@ -1035,6 +1058,7 @@ function mapStoredMessageToTimelineItem(m, idRef) {
     type: meta.type,
     title: meta.title,
     chapterContentDiffCard: meta.chapterContentDiffCard,
+    chapterNotesDiffCard: meta.chapterNotesDiffCard,
     dbMessageId: m.id,
     meta,
     timestamp: ts,

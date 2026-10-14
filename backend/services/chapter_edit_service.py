@@ -154,6 +154,43 @@ def build_chapter_edit_diff(old_content: str, new_content: str, edits: list[dict
     }
 
 
+def build_replacement_diff(old_content: str, replacements) -> dict:
+    """每个工具替换项就是一个分组；位置基于依次执行替换时的正文。"""
+    current = old_content
+    hunks = []
+    for item in replacements:
+        old = item.old if hasattr(item, "old") else item["old"]
+        new = item.new if hasattr(item, "new") else item["new"]
+        if not old or current.count(old) != 1:
+            raise ValueError("old 需要在当前正文中唯一匹配")
+        start = current.index(old)
+        hunks.append({
+            "type": "replace" if new else "delete",
+            "paragraph_index": current[:start].count("\n\n") + 1,
+            "start_offset": start, "old_text": old, "new_text": new,
+        })
+        current = current[:start] + new + current[start + len(old):]
+    return {"grouping": "agent_replacements", "hunks": hunks, "summary": {
+        "paragraphs_changed": len(hunks),
+        "chars_added": sum(len(h["new_text"]) for h in hunks),
+        "chars_removed": sum(len(h["old_text"]) for h in hunks),
+        "content_changed": old_content != current,
+    }}
+
+
+def build_whole_content_group(old_content: str, new_content: str) -> dict:
+    """整份正文写入作为一个完整分组。"""
+    hunks = [] if old_content == new_content else [{
+        "type": "replace" if old_content and new_content else "delete" if old_content else "insert_after",
+        "paragraph_index": 1 if old_content else 0,
+        "start_offset": 0, "old_text": old_content, "new_text": new_content,
+    }]
+    return {"grouping": "agent_replacements", "hunks": hunks, "summary": {
+        "paragraphs_changed": len(hunks), "chars_added": len(new_content),
+        "chars_removed": len(old_content), "content_changed": old_content != new_content,
+    }}
+
+
 def edits_from_contents(old_content: str, new_content: str) -> list[dict]:
     """把两份完整正文转成相对原文的段落级 edits。"""
     from difflib import SequenceMatcher

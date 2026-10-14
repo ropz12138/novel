@@ -56,6 +56,8 @@ def init_db() -> None:
     import models.canvas_checkpoint
     import models.user_canvas_action
     import models.node_content_diff_state
+    import models.node_agent_diff
+    import models.chapter_notes_diff_state
     import models.research
     import models.workflow
     import models.llm_token_usage

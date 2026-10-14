@@ -3,9 +3,9 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import NodeDetailDrawer from "./NodeDetailDrawer";
 
 describe("NodeDetailDrawer", () => {
-  it("highlights a referenced markdown paragraph in reading mode", () => {
+  it("highlights a referenced plain-text paragraph without parsing Markdown syntax", () => {
     const { container } = render(<NodeDetailDrawer node={{ id: "ref", type: "chapter", label: "章节", content: "前文\n\n这里有**重要**线索。", sourceReference: "这里有**重要**线索。" }} onClose={vi.fn()} />);
-    expect(container.querySelector("[data-node-reference-hit]")?.textContent).toBe("这里有重要线索。");
+    expect(container.querySelector("[data-node-reference-hit]")?.textContent).toBe("这里有**重要**线索。");
   });
   it("navigates non-chapter nodes across levels on web", () => {
     const navigationNodes = [
@@ -45,6 +45,65 @@ describe("NodeDetailDrawer", () => {
     expect(typeof NodeDetailDrawer).toBe("function");
   });
 
+  it("reports when node editing starts and ends", async () => {
+    const onEditingChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={{ id: "edit-state", type: "plot", label: "情节点", content: "" }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        onEditingChange={onEditingChange}
+      />,
+    );
+
+    await waitFor(() => expect(onEditingChange).toHaveBeenLastCalledWith(false));
+    fireEvent.click(screen.getByTitle("编辑全文"));
+    await waitFor(() => expect(onEditingChange).toHaveBeenLastCalledWith(true));
+    fireEvent.click(screen.getByText("取消"));
+    await waitFor(() => expect(onEditingChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it("reports inline paragraph editing so App mode can hide its composer", async () => {
+    const onEditingChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        appMode
+        node={{ id: "inline-edit-state", type: "chapter", label: "第一章", content: "正文。", extra_data: {} }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        onEditingChange={onEditingChange}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑段落" }));
+    await waitFor(() => expect(onEditingChange).toHaveBeenLastCalledWith(true));
+    fireEvent.click(screen.getByText("取消"));
+    await waitFor(() => expect(onEditingChange).toHaveBeenLastCalledWith(false));
+  });
+
+  it.each([false, true])("keeps one inline editor and closes it outside, appMode=%s", (appMode) => {
+    render(
+      <NodeDetailDrawer
+        appMode={appMode}
+        node={{ id: "single-inline-editor", type: "chapter", label: "第一章", content: "第一段。\n\n第二段。", extra_data: {} }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const paragraphs = screen.getAllByRole("button", { name: "编辑段落" });
+    fireEvent.click(paragraphs[0]);
+    expect(screen.getAllByRole("textbox", { name: "编辑段落内容" })).toHaveLength(1);
+
+    fireEvent.pointerDown(paragraphs[1]);
+    fireEvent.click(paragraphs[1]);
+    expect(screen.getAllByRole("textbox", { name: "编辑段落内容" })).toHaveLength(1);
+    expect(screen.getByRole("textbox", { name: "编辑段落内容" }).value).toBe("第二段。");
+
+    fireEvent.pointerDown(screen.getByTestId("chapter-detail-header"));
+    expect(screen.queryByRole("textbox", { name: "编辑段落内容" })).toBeNull();
+  });
+
   it("renders chapter content and latest sync result from node data", () => {
     const node = {
       id: "node-1",
@@ -75,6 +134,26 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("自动修订 0 次")).toBeDefined();
   });
 
+  it("copies the complete original chapter content", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const content = "第一段。\n\n[[PLOT]]完整情节标记[[/PLOT]]\n\n第三段。";
+    render(
+      <NodeDetailDrawer
+        node={{ id: "copy-chapter", type: "chapter", label: "第一章", content, extra_data: {} }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "复制正文" }));
+
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith(content));
+    expect(screen.getByRole("button", { name: "正文已复制" })).toBeDefined();
+  });
+
   it("renders dedicated plot highlights in chapter node content", () => {
     const node = {
       id: "node-1",
@@ -93,7 +172,7 @@ describe("NodeDetailDrawer", () => {
     expect(document.querySelector("strong")).toBeNull();
   });
 
-  it("renders HTML br tags as line breaks in markdown content", () => {
+  it("renders chapter body as plain text without interpreting HTML tags", () => {
     const { container } = render(
       <NodeDetailDrawer
         node={{
@@ -107,11 +186,11 @@ describe("NodeDetailDrawer", () => {
       />,
     );
 
-    expect(container.querySelectorAll("br")).toHaveLength(2);
-    expect(container.textContent.replace(/\n/g, "")).toContain("第一行第二行第三行");
+    expect(container.querySelectorAll("br")).toHaveLength(0);
+    expect(container.textContent).toContain("第一行<br>第二行<br />第三行");
   });
 
-  it("keeps a markdown table intact when cells contain br tags", () => {
+  it("does not parse Markdown tables in chapter body", () => {
     const { container } = render(
       <NodeDetailDrawer
         node={{
@@ -125,10 +204,30 @@ describe("NodeDetailDrawer", () => {
       />,
     );
 
-    expect(container.querySelectorAll("table")).toHaveLength(1);
-    expect(container.querySelectorAll("tbody tr")).toHaveLength(1);
-    expect(container.querySelectorAll("tbody br")).toHaveLength(2);
-    expect(container.querySelectorAll("tbody td")).toHaveLength(2);
+    expect(container.querySelector("table")).toBeNull();
+    expect(container.textContent).toContain("| 阶层 | 人物 |");
+    expect(container.textContent).toContain("顶层<br>暴力集团");
+  });
+
+  it("keeps Markdown syntax literal in chapter body", () => {
+    const { container } = render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-plain-text",
+          type: "chapter",
+          label: "纯文本章节",
+          content: "**不是粗体**\n\n# 不是标题",
+          extra_data: {},
+        }}
+        onClose={vi.fn()}
+      />,
+    );
+
+    const body = screen.getByTestId("chapter-body");
+    expect(body.textContent).toContain("**不是粗体**");
+    expect(body.textContent).toContain("# 不是标题");
+    expect(container.querySelector("strong")).toBeNull();
+    expect(body.querySelector("h1")).toBeNull();
   });
 
   it("renders chapter elements at the top of chapter detail", () => {
@@ -455,8 +554,10 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByRole("button", { name: "全部撤回" })).toBeDefined();
     expect(screen.getByText("开场。")).toBeDefined();
     expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
-    expect(screen.getByText("林川在废墟中遇见苏婉。")).toBeDefined();
-    expect(screen.getByText("林川在雨中遇见苏婉。")).toBeDefined();
+    expect(screen.queryByTestId("inline-diff-old")).toBeNull();
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("林川在雨中遇见苏婉。");
+    fireEvent.click(screen.getByRole("button", { name: "对照" }));
+    expect(screen.getByTestId("inline-diff-old").textContent).toContain("废墟");
 
     fireEvent.click(screen.getByRole("button", { name: "保留修改" }));
     await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("plot-1", expect.objectContaining({
@@ -465,6 +566,291 @@ describe("NodeDetailDrawer", () => {
     })));
     expect(onUpdate).not.toHaveBeenCalled();
     expect(onContentDiffChange).toHaveBeenCalledWith(null);
+  });
+
+  it("undoes and redoes one applied diff operation with Ctrl+Z and Ctrl+Y", async () => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NodeDetailDrawer
+        node={{ id: "diff-history", type: "chapter", label: "第一章", content: "新文。", extra_data: {} }}
+        contentDiff={{
+          original_content: "旧文。",
+          current_content: "新文。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧文。", new_text: "新文。" }],
+        }}
+        onClose={vi.fn()}
+        onContentDiffDecision={onContentDiffDecision}
+        onContentDiffChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "保留修改" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(document, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(2, "diff-history", {
+      expected_content: "新文。",
+      expected_baseline: "新文。",
+      baseline_content: "旧文。",
+      current_content: "新文。",
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireEvent.keyDown(document, { key: "y", ctrlKey: true });
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(3, "diff-history", {
+      expected_content: "新文。",
+      expected_baseline: "旧文。",
+      baseline_content: "新文。",
+      current_content: "新文。",
+    }));
+  });
+
+  it("treats cancelling a diff as one undoable operation", async () => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NodeDetailDrawer
+        node={{ id: "reject-history", type: "chapter", label: "第一章", content: "新文。", extra_data: {} }}
+        contentDiff={{
+          original_content: "旧文。",
+          current_content: "新文。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧文。", new_text: "新文。" }],
+        }}
+        onClose={vi.fn()}
+        onContentDiffDecision={onContentDiffDecision}
+        onContentDiffChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledTimes(1));
+    fireEvent.keyDown(document, { key: "z", ctrlKey: true });
+
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(2, "reject-history", {
+      expected_content: "旧文。",
+      expected_baseline: "旧文。",
+      baseline_content: "旧文。",
+      current_content: "新文。",
+    }));
+  });
+
+  it("edits an ordinary paragraph in place without leaving reading mode", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NodeDetailDrawer
+        node={{ id: "chapter-inline", type: "chapter", label: "第一章", content: "第一段。\n\n第二段。", extra_data: {} }}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    fireEvent.click(screen.getAllByRole("button", { name: "编辑段落" })[1]);
+    const editor = screen.getByRole("textbox", { name: "编辑段落内容" });
+    fireEvent.change(editor, { target: { value: "第二段改。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存段落" }));
+
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith("chapter-inline", {
+      content: "第一段。\n\n第二段改。",
+      expected_content: "第一段。\n\n第二段。",
+    }));
+    expect(screen.queryByText("编辑节点")).toBeNull();
+  });
+
+  it("undoes and redoes one saved paragraph operation with Ctrl+Z and Ctrl+Y", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NodeDetailDrawer
+        node={{ id: "chapter-history", type: "chapter", label: "第一章", content: "原段落。", extra_data: {} }}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑段落" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑段落内容" }), { target: { value: "新段落。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存段落" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledTimes(1));
+
+    fireEvent.keyDown(document, { key: "z", ctrlKey: true });
+    await waitFor(() => expect(onUpdate).toHaveBeenNthCalledWith(2, "chapter-history", {
+      content: "原段落。",
+      expected_content: "新段落。",
+    }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    fireEvent.keyDown(document, { key: "y", ctrlKey: true });
+    await waitFor(() => expect(onUpdate).toHaveBeenNthCalledWith(3, "chapter-history", {
+      content: "新段落。",
+      expected_content: "原段落。",
+    }));
+  });
+
+  it("commits a user edit without adding it to an existing agent diff", async () => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    render(
+      <NodeDetailDrawer
+        node={{ id: "user-edit-with-diff", type: "chapter", label: "第一章", content: "Agent新段。\n\n用户原文。", extra_data: {} }}
+        contentDiff={{
+          original_content: "Agent旧段。\n\n用户原文。",
+          current_content: "Agent新段。\n\n用户原文。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "Agent旧段。", new_text: "Agent新段。" }],
+        }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        onContentDiffDecision={onContentDiffDecision}
+        onContentDiffChange={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "编辑段落" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑段落内容" }), { target: { value: "用户手改。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存段落" }));
+
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("user-edit-with-diff", expect.objectContaining({
+      baseline_content: "Agent旧段。\n\n用户手改。",
+      current_content: "Agent新段。\n\n用户手改。",
+    })));
+  });
+
+  it("edits only the new side of a pending diff in place", async () => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={{ id: "plot-inline", type: "plot", label: "相遇", content: "林川在雨中。", extra_data: {} }}
+        contentDiff={{
+          original_content: "林川在废墟中。",
+          current_content: "林川在雨中。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "林川在废墟中。", new_text: "林川在雨中。" }],
+        }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+        onContentDiffDecision={onContentDiffDecision}
+        onContentDiffChange={onContentDiffChange}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "编辑原文" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "编辑新文" })).toBeNull();
+    fireEvent.click(screen.getByTestId("inline-diff-new"));
+    const editor = screen.getByRole("textbox", { name: "编辑新文内容" });
+    expect(screen.queryByRole("button", { name: "查看替换前文本" })).toBeNull();
+    expect(screen.queryByText("已删除一段 · 点击查看")).toBeNull();
+    fireEvent.change(editor, { target: { value: "林川在细雨中。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存新文" }));
+
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("plot-inline", {
+      expected_content: "林川在雨中。",
+      expected_baseline: "林川在废墟中。",
+      baseline_content: "林川在细废墟中。",
+      current_content: "林川在细雨中。",
+    }));
+    expect(onContentDiffChange).toHaveBeenCalledWith(expect.objectContaining({
+      original_content: "林川在细废墟中。",
+      current_content: "林川在细雨中。",
+    }));
+  });
+
+  it("keeps one submitted replacement indivisible in the frontend", () => {
+    render(
+      <NodeDetailDrawer
+        node={{ id: "partial-inline", type: "chapter", label: "第一章", content: "甲新乙改丙", extra_data: {} }}
+        contentDiff={{
+          original_content: "甲旧乙旧丙",
+          current_content: "甲新乙改丙",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲旧乙旧丙", new_text: "甲新乙改丙" }],
+        }}
+        onClose={vi.fn()}
+        onContentDiffDecision={vi.fn()}
+        onContentDiffChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新乙改丙");
+    expect(screen.getByTestId("inline-diff-new").querySelectorAll("[data-diff-kind]")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "查看替换前文本" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "删除新增文本" })).toBeNull();
+  });
+
+  it("keeps inserted text inside a replacement in the same submitted group", () => {
+    render(
+      <NodeDetailDrawer
+        node={{ id: "remove-inline-insert", type: "chapter", label: "第一章", content: "甲新增乙新丙", extra_data: {} }}
+        contentDiff={{
+          original_content: "甲乙旧丙",
+          current_content: "甲新增乙新丙",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲乙旧丙", new_text: "甲新增乙新丙" }],
+        }}
+        onClose={vi.fn()}
+        onContentDiffDecision={vi.fn()}
+        onContentDiffChange={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新增乙新丙");
+    expect(screen.queryByRole("button", { name: "删除新增文本" })).toBeNull();
+  });
+
+  it("keeps deleted diff text read-only", () => {
+    render(
+      <NodeDetailDrawer
+        node={{ id: "plot-delete", type: "plot", label: "相遇", content: "", extra_data: {} }}
+        contentDiff={{
+          original_content: "“啪！”",
+          current_content: "",
+          hunks: [{ type: "delete", paragraph_index: 1, old_text: "“啪！”", new_text: "" }],
+        }}
+        onClose={vi.fn()}
+        onContentDiffDecision={vi.fn()}
+      />,
+    );
+
+    expect(screen.queryByRole("button", { name: "编辑新文" })).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "编辑新文内容" })).toBeNull();
+  });
+
+  it("shows chapter notes diffs inline and can revert a hunk", async () => {
+    const onNotesDiffDecision = vi.fn().mockResolvedValue(undefined);
+    const onNotesDiffChange = vi.fn();
+    render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-notes",
+          type: "chapter",
+          label: "第一章",
+          content: "正文。",
+          notes: "事实：新晶核。",
+          extra_data: {},
+        }}
+        notesDiff={{
+          original_content: "事实：旧晶核。",
+          current_content: "事实：新晶核。",
+          hunks: [{
+            type: "replace",
+            paragraph_index: 1,
+            old_text: "事实：旧晶核。",
+            new_text: "事实：新晶核。",
+          }],
+        }}
+        onClose={vi.fn()}
+        onNotesDiffDecision={onNotesDiffDecision}
+        onNotesDiffChange={onNotesDiffChange}
+      />,
+    );
+
+    const notes = screen.getByText("章节笔记").closest("details");
+    expect(notes.open).toBe(false);
+    fireEvent.click(screen.getByText("章节笔记"));
+    expect(notes.open).toBe(true);
+    expect(screen.getByTestId("chapter-notes").textContent).toContain("事实：新晶核。");
+    fireEvent.click(screen.getByRole("button", { name: "对照" }));
+    expect(screen.getByTestId("inline-diff-old").textContent).toBe("事实：旧晶核。");
+    fireEvent.click(screen.getAllByRole("button", { name: "撤回修改" })[0]);
+    await waitFor(() => expect(onNotesDiffDecision).toHaveBeenCalledWith("chapter-notes", expect.objectContaining({
+      expected_notes: "事实：新晶核。",
+      current_notes: "事实：旧晶核。",
+      baseline_notes: "事实：旧晶核。",
+    })));
+    expect(onNotesDiffChange).toHaveBeenCalledWith(null);
   });
 
   it("shows streaming preview diffs without apply or revert actions", () => {
@@ -726,8 +1112,42 @@ describe("NodeDetailDrawer", () => {
     );
 
     expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
-    expect(screen.getByText("开场。")).toBeDefined();
-    expect(screen.getByText("开场改。")).toBeDefined();
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("开场改。");
+  });
+
+  it("keeps a multiline agent replacement as one group after a leading insertion", async () => {
+    const old = "A\n\nB\n\nC";
+    const next = "X\n\nA′\n\nB′\n\nC′";
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    render(<NodeDetailDrawer
+      node={{ id: "grouped", type: "plot", label: "工具分组", content: next, extra_data: {} }}
+      contentDiff={{ grouping: "agent_replacements", original_content: old, current_content: next,
+        hunks: [{ type: "replace", paragraph_index: 1, start_offset: 0, old_text: old, new_text: next }] }}
+      onContentDiffDecision={onDecision} onContentDiffChange={vi.fn()} onClose={vi.fn()}
+    />);
+    expect(screen.getAllByTestId("inline-diff-hunk")).toHaveLength(1);
+    expect(screen.getByTestId("inline-diff-new").textContent.replaceAll("×", "")).toBe(next);
+    fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+    await waitFor(() => expect(onDecision).toHaveBeenCalledWith("grouped", expect.objectContaining({
+      baseline_content: old, current_content: old, groups: [],
+    })));
+  });
+
+  it("can edit an unchanged paragraph while an agent group is pending", async () => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    render(<NodeDetailDrawer
+      node={{ id: "group-edit", type: "plot", label: "分组", content: "甲新。\n\n乙原文。", extra_data: {} }}
+      contentDiff={{ grouping: "agent_replacements", original_content: "甲旧。\n\n乙原文。",
+        current_content: "甲新。\n\n乙原文。",
+        hunks: [{ type: "replace", start_offset: 0, old_text: "甲旧。", new_text: "甲新。" }] }}
+      onUpdate={onUpdate} onClose={vi.fn()}
+    />);
+    fireEvent.click(screen.getByText("乙原文。"));
+    fireEvent.change(screen.getByRole("textbox", { name: "编辑段落内容" }), { target: { value: "乙手改。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存段落" }));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalledWith("group-edit", {
+      content: "甲新。\n\n乙手改。", expected_content: "甲新。\n\n乙原文。",
+    }));
   });
 
   it("shows only the net diff from the original baseline to current content", () => {
@@ -754,10 +1174,10 @@ describe("NodeDetailDrawer", () => {
     );
 
     expect(screen.getAllByTestId("inline-diff-hunk")).toHaveLength(2);
-    expect(screen.getByText("开场。")).toBeDefined();
-    expect(screen.getByText("开场改。")).toBeDefined();
-    expect(screen.getByText("林川在废墟中遇见苏婉。")).toBeDefined();
-    expect(screen.getByText("林川在雨中遇见苏婉。")).toBeDefined();
+    expect(screen.getAllByTestId("inline-diff-new").map((row) => row.textContent)).toEqual([
+      "开场改。",
+      "林川在雨中遇见苏婉。",
+    ]);
   });
 
   it("renders character storylines as named tracks with step list", () => {
@@ -802,7 +1222,7 @@ describe("NodeDetailDrawer", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
     fireEvent.change(screen.getByDisplayValue("力量线"), { target: { value: "力量线（改）" } });
     fireEvent.click(screen.getByText("保存"));
 
@@ -1079,7 +1499,7 @@ describe("NodeDetailDrawer", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     const titleInput = screen.getByDisplayValue("原标题");
     const contentArea = screen.getByDisplayValue("原内容");
@@ -1089,7 +1509,11 @@ describe("NodeDetailDrawer", () => {
     fireEvent.click(screen.getByText("保存"));
 
     await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith("n1", { title: "新标题", content: "新内容" });
+      expect(onUpdate).toHaveBeenCalledWith("n1", {
+        title: "新标题",
+        content: "新内容",
+        expected_content: "原内容",
+      });
     });
   });
 
@@ -1110,12 +1534,50 @@ describe("NodeDetailDrawer", () => {
 
     const scrollHeight = vi.spyOn(HTMLTextAreaElement.prototype, "scrollHeight", "get").mockReturnValue(1200);
     const clientHeight = vi.spyOn(HTMLTextAreaElement.prototype, "clientHeight", "get").mockReturnValue(400);
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     const editor = screen.getByDisplayValue(content, { normalizer: (value) => value });
     scrollHeight.mockRestore();
     clientHeight.mockRestore();
     expect(editor.scrollTop).toBe(400);
+  });
+
+  it("returns to the previous reading position after saving an edit", async () => {
+    const scheduledFrames = [];
+    const requestFrame = vi.spyOn(window, "requestAnimationFrame").mockImplementation((callback) => {
+      scheduledFrames.push(callback);
+      return scheduledFrames.length;
+    });
+    const cancelFrame = vi.spyOn(window, "cancelAnimationFrame").mockImplementation(() => {});
+    const content = Array.from({ length: 100 }, (_, index) => `第${index + 1}段正文`).join("\n");
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+
+    render(
+      <NodeDetailDrawer
+        node={{ id: "chapter-return-scroll", type: "chapter", label: "长章节", content, extra_data: {} }}
+        onClose={vi.fn()}
+        onUpdate={onUpdate}
+      />,
+    );
+
+    scheduledFrames.shift()?.();
+    const reader = screen.getByTestId("node-detail-scroll");
+    Object.defineProperty(reader, "scrollHeight", { configurable: true, value: 2000 });
+    Object.defineProperty(reader, "clientHeight", { configurable: true, value: 500 });
+    reader.scrollTop = 750;
+
+    fireEvent.click(screen.getByTitle("编辑全文"));
+    fireEvent.click(screen.getByText("保存"));
+    await waitFor(() => expect(onUpdate).toHaveBeenCalled());
+
+    const restoredReader = await screen.findByTestId("node-detail-scroll");
+    Object.defineProperty(restoredReader, "scrollHeight", { configurable: true, value: 3000 });
+    Object.defineProperty(restoredReader, "clientHeight", { configurable: true, value: 500 });
+    scheduledFrames.splice(0).forEach((callback) => callback());
+
+    expect(restoredReader.scrollTop).toBe(1250);
+    requestFrame.mockRestore();
+    cancelFrame.mockRestore();
   });
 
   it("edits existing chapter_elements in edit mode and includes them in onUpdate payload", async () => {
@@ -1133,7 +1595,7 @@ describe("NodeDetailDrawer", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     const titleInput = screen.getByDisplayValue("主角觉醒");
     fireEvent.change(titleInput, { target: { value: "主角觉醒（改）" } });
@@ -1160,7 +1622,7 @@ describe("NodeDetailDrawer", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     fireEvent.click(screen.getByText("添加元素"));
     const titleInputs = screen.getAllByPlaceholderText("元素标题");
@@ -1193,7 +1655,7 @@ describe("NodeDetailDrawer", () => {
     const onUpdate = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     const removeButtons = screen.getAllByTitle("删除元素");
     fireEvent.click(removeButtons[1]);
@@ -1211,7 +1673,7 @@ describe("NodeDetailDrawer", () => {
     const node = { id: "p1", type: "plot", label: "情节", content: "" };
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={vi.fn()} />);
 
-    fireEvent.click(screen.getByTitle("编辑节点"));
+    fireEvent.click(screen.getByTitle("编辑全文"));
 
     expect(screen.queryByText("添加元素")).toBeNull();
     expect(screen.queryByPlaceholderText("元素标题")).toBeNull();

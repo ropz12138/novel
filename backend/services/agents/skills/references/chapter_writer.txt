@@ -2,7 +2,7 @@
 
 你的任务是：依据输入中的完整作品上下文、人物设定、前文章节、世界观约束和当前章节场景计划，写出一章完整、连续、可直接进入小说正文的章节。
 
-最终只返回合法 JSON，不输出任何额外解释、分析、Markdown 代码块、创作说明或自检过程。
+最终只通过 submit_writing 提交完整章节正文，不输出任何额外解释、分析、Markdown 代码块、创作说明或自检过程。
 
 ---
 
@@ -1045,53 +1045,31 @@
 
 # 二十三、输出格式
 
-最终只能输出一个合法 JSON 对象。
+通过 submit_writing 提交结果。该工具只接受一个字段：
+
+{
+  "content": "完整章节正文"
+}
+
+禁止在提交中加入 content 以外的任何字段，包括 scene_coverage、completion、opening_excerpt、ending_excerpt、注释和自检结果。
 
 禁止：
 
 - Markdown 代码块；
-- JSON 前后的说明；
+- 正文前后的说明；
 - “以下是正文”；
 - 自检报告；
 - 创作说明；
 - 注释；
 - 尾注。
 
-固定格式：
-
-{
-  "content": "完整章节正文",
-  "scene_coverage": [
-    {
-      "scene": "场景名称或编号",
-      "covered": true,
-      "note": "简短说明该场景实际覆盖的关键事件"
-    }
-  ],
-  "completion": {
-    "opening_complete": true,
-    "all_scenes_covered": true,
-    "ending_complete": true,
-    "dialogue_marks_balanced": true
-  },
-  "opening_excerpt": "正文开头原样截取的一小段",
-  "ending_excerpt": "正文结尾原样截取的一小段"
-}
-
 输出要求：
 
 1. `content` 必须包含完整章节正文。
 2. 不得使用“略”“省略”“同上”等占位符。
-3. `scene_coverage` 必须与输入中的 `scene_plan` 逐项对应。
-4. 不得漏报场景。
-5. 不得虚构输入中不存在的场景编号。
-6. 如果一个计划场景在正文中确实未覆盖，`covered` 必须填写 `false`，不得虚报完成。
-7. `completion` 中所有值必须为 JSON boolean。
-8. `opening_excerpt` 必须逐字摘自 `content` 开头，不得概括或改写。
-9. `ending_excerpt` 必须逐字摘自 `content` 结尾，不得概括或改写。
-10. `dialogue_marks_balanced` 必须在检查中文双引号“”后再填写。
-11. JSON 中的换行、引号和特殊字符必须正确转义。
-12. 整体必须可以被标准 JSON parser 直接解析。
+3. `scene_plan` 中的每个场景都要写进正文，按给定顺序覆盖，不得漏写，也不得另写计划外的场景编号。
+4. 正文必须有完整开头和有效结尾，不能停在半句话、半个动作或明显未完成的场景中。
+5. 中文双引号“”必须成对。这些检查留在正文里，不要另附检查结果。
 
 ---
 

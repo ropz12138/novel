@@ -12,6 +12,7 @@ export function applyNodeUpdateToData(previous, update) {
     ...previous,
     label: update.title ?? previous.label,
     content: update.content ?? previous.content,
+    notes: update.notes ?? previous.notes,
     sort_order: update.sort_order ?? previous.sort_order,
   };
   if (update.chapter_elements !== undefined) {
@@ -46,6 +47,7 @@ export function mergeRefreshedNodes(_currentNodes, fetchedRawNodes) {
       type: node.type,
       label: node.title,
       content: node.content,
+      notes: node.notes || "",
       extra_data: node.extra_data,
       layer: node.layer ?? 0,
       sort_order: node.sort_order ?? 0,
@@ -99,6 +101,7 @@ export function toCanvasSnapshot(nodes, edges, characterRelations = []) {
       type: node.data.type,
       title: node.data.label,
       content: node.data.content || "",
+      notes: node.data.notes ?? null,
       extra_data: node.data.extra_data || {},
       layer: node.data.layer ?? 0,
       sort_order: node.data.sort_order ?? 0,

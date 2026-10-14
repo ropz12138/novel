@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from langchain_core.messages import HumanMessage, SystemMessage
+from sqlalchemy.orm import selectinload
 
 from models.chapter import Chapter
 from models.node import Node
@@ -37,7 +38,7 @@ _EVALUATE_LATEST_CHAPTER_INSTRUCTION = """你是一位资深网文读者。请�
 
 
 def list_ordered_chapters(db, work_id: str) -> list[Node]:
-    chapters = db.query(Node).filter(
+    chapters = db.query(Node).options(selectinload(Node.chapter_record)).filter(
         Node.work_id == work_id,
         Node.type == "chapter",
     ).all()
@@ -50,15 +51,6 @@ def get_chapter_summary(db, node: Node) -> str:
     if chapter and chapter.summary:
         return chapter.summary.strip()
     return ""
-
-
-def clear_chapter_summary_on_content_change(db, node: Node) -> None:
-    """章节正文变更后清空旧评估摘要，避免与新正文不一致。"""
-    if node.type != "chapter":
-        return
-    chapter = db.query(Chapter).filter(Chapter.node_id == node.id).first()
-    if chapter is not None:
-        chapter.summary = ""
 
 
 def format_characters_system_message(db, work_id: str) -> str:
@@ -98,7 +90,7 @@ def build_history_user_message(
     sections: list[str] = []
 
     if older:
-        sections.append("======= 更早章节概览 =======")
+        sections.append("======= 更早章节笔记 =======")
         for chapter in older:
             summary = get_chapter_summary(db, chapter) or "（暂无概览）"
             sections.append(f"【{chapter.title}】\n{summary}")

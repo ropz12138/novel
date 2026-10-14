@@ -86,6 +86,7 @@ class SupervisorEditResendRequest(BaseModel):
 
 class SupervisorStreamResumeRequest(BaseModel):
     session_id: str
+    after_seq: int = 0
 
 
 class SupervisorStopRequest(BaseModel):
@@ -318,7 +319,7 @@ async def resume_supervisor_stream(
     async def event_generator():
         yield _sse_format("queue_updated", _queue_state(payload.session_id))
         async for event, data in supervisor_stream_broker.subscribe(
-            payload.session_id,
+            payload.session_id, after_seq=payload.after_seq,
         ):
             yield _sse_format(event, data)
 

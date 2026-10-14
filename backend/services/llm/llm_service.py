@@ -131,6 +131,23 @@ def _finalize_openai_pending(pending: dict[int, dict[str, Any]]) -> list[ToolStr
     return events
 
 
+def _openai_usage_metadata(usage: dict[str, Any] | None) -> dict[str, int] | None:
+    if not isinstance(usage, dict):
+        return None
+    prompt = usage.get("prompt_tokens")
+    completion = usage.get("completion_tokens")
+    if not isinstance(prompt, int) or not isinstance(completion, int):
+        return None
+    total = usage.get("total_tokens")
+    if not isinstance(total, int):
+        total = prompt + completion
+    return {
+        "input_tokens": prompt,
+        "output_tokens": completion,
+        "total_tokens": total,
+    }
+
+
 class OpenAILLMClient(LLMProtocolClient):
     def _openai_complete_payload(self, messages, *, temperature: float, response_format_json: bool) -> dict[str, Any]:
         payload: dict[str, Any] = {
@@ -232,6 +249,7 @@ class OpenAILLMClient(LLMProtocolClient):
         active_client = client or httpx.AsyncClient(timeout=httpx.Timeout(120.0, connect=10.0))
         pending: dict[int, dict[str, Any]] = {}
         last_usage: dict[str, Any] | None = None
+        usage_emitted = False
         request_started_at = _monotonic()
         first_output_at: float | None = None
         raw_log = LLMRawLog(provider=self.config.provider, model=self.config.model, mode="stream")
@@ -247,6 +265,10 @@ class OpenAILLMClient(LLMProtocolClient):
                     if data == "[DONE]":
                         for event in _finalize_openai_pending(pending):
                             yield event
+                        usage_metadata = _openai_usage_metadata(last_usage)
+                        if usage_metadata:
+                            yield ToolStreamEvent(kind="usage", usage=usage_metadata)
+                            usage_emitted = True
                         break
                     try:
                         chunk = json.loads(data)
@@ -286,6 +308,10 @@ class OpenAILLMClient(LLMProtocolClient):
                     if finish_reason == "tool_calls":
                         for event in _finalize_openai_pending(pending):
                             yield event
+            if not usage_emitted:
+                usage_metadata = _openai_usage_metadata(last_usage)
+                if usage_metadata:
+                    yield ToolStreamEvent(kind="usage", usage=usage_metadata)
             raw_log.finish()
             request_finished_at = _monotonic()
             from services.token_usage import record_openai_usage
@@ -431,6 +457,7 @@ class AnthropicLLMClient(LLMProtocolClient):
     def _anthropic_complete_payload(self, messages, *, temperature: float) -> dict[str, Any]:
         system, converted = self.convert_messages(self._normalize_messages(messages))
         payload = {"model": self.config.model, "temperature": temperature, "messages": converted}
+        payload.update(copy.deepcopy(self.config.extra_body))
         if system:
             payload["system"] = system
         return payload
@@ -466,6 +493,7 @@ class AnthropicLLMClient(LLMProtocolClient):
         normalized = self._normalize_messages(messages)
         system, chat_messages = self.convert_messages(normalized)
         payload: dict[str, Any] = {"model": self.config.model, "messages": chat_messages, "stream": True}
+        payload.update(copy.deepcopy(self.config.extra_body))
         if system:
             payload["system"] = system
         if tools:

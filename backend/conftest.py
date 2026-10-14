@@ -26,6 +26,8 @@ import models.character_relation  # noqa: E402, F401
 import models.todo_item  # noqa: E402, F401
 import models.canvas_checkpoint  # noqa: E402, F401
 import models.user_canvas_action  # noqa: E402, F401
+import models.node_content_diff_state  # noqa: E402, F401
+import models.node_agent_diff  # noqa: E402, F401
 import models.research  # noqa: E402, F401
 import models.workflow  # noqa: E402, F401
 import models.llm_token_usage  # noqa: E402, F401

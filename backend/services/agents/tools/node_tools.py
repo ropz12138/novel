@@ -1,5 +1,6 @@
 """节点操作工具"""
 import json
+import hashlib
 import uuid
 import asyncio
 import logging
@@ -72,6 +73,7 @@ def _content_diff_event(node: dict, content_diff: dict) -> tuple[str, dict]:
         "diff": content_diff.get("diff") or {},
         "original_content": old_content,
         "current_content": new_content,
+        "node_diff": content_diff.get("node_diff"),
     }
     if node_type == "chapter":
         payload["chapter_node_id"] = node["id"]
@@ -115,6 +117,7 @@ class CreateNodeInput(BaseModel):
     content: str = Field(default="", description="节点内容")
     chapter_elements: Optional[list[dict]] = Field(
         default=None,
+        max_length=50,
         description=(
             "chapter 专用：本章情节元素，对象数组，每项含 title 和 content。"
             "创建章节时把本章元素放在这里。"
@@ -122,6 +125,7 @@ class CreateNodeInput(BaseModel):
     )
     characters: Optional[list[dict]] = Field(
         default=None,
+        max_length=50,
         description=(
             "chapter 专用：本章出场角色，对象数组，每项含 id（已有 character 节点 ID）与 name。"
             "写入 extra_data.characters。"
@@ -130,6 +134,7 @@ class CreateNodeInput(BaseModel):
     )
     storylines: Optional[list[dict]] = Field(
         default=None,
+        max_length=20,
         description=(
             "character 专用：角色发展线，对象数组。"
             "每项含 name、description，以及 body（按时间顺序的字符串数组）。"
@@ -150,8 +155,8 @@ class CreateNodeInput(BaseModel):
 class ContentReplacement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    old: str = Field(description="必须与当前正文中的连续原文完全一致，且只出现一次。")
-    new: str = Field(description="替换后的文本，必须和 old 不同；删除该片段时传空字符串。")
+    old: str = Field(description="作者独立审阅的一组原文。通常取单个完整段落，逐字保留空白及换行，在当前正文中唯一匹配。跨段落连贯重构按完整组提交。")
+    new: str = Field(description="该组的目标文本。插入时保留 old 锚点并加入新段落；删除时传空字符串。每组独立保留或撤回。")
 
 
 class UpdateNodeInput(BaseModel):
@@ -176,6 +181,7 @@ class UpdateNodeInput(BaseModel):
     )
     replacements: list[ContentReplacement] = Field(
         default_factory=list,
+        max_length=50,
         description="mode=replace 时填写。数组。元素是对象。对象字段是 old 和 new。",
     )
     sort_order: Optional[int] = Field(
@@ -184,6 +190,7 @@ class UpdateNodeInput(BaseModel):
     )
     chapter_elements: Optional[list[dict]] = Field(
         default=None,
+        max_length=50,
         description=(
             "chapter 专用：更新本章情节元素，对象数组，每项含 title 和 content。"
             "只更新 extra_data.chapter_elements。"
@@ -191,6 +198,7 @@ class UpdateNodeInput(BaseModel):
     )
     characters: Optional[list[dict]] = Field(
         default=None,
+        max_length=50,
         description=(
             "chapter 专用：更新本章出场角色，对象数组，每项含 id 与 name。"
             "只更新 extra_data.characters。"
@@ -198,6 +206,7 @@ class UpdateNodeInput(BaseModel):
     )
     storylines: Optional[list[dict]] = Field(
         default=None,
+        max_length=20,
         description=(
             "character 专用：更新角色发展线，对象数组。"
             "每项含 name、description，以及 body（字符串数组）。"
@@ -271,6 +280,8 @@ class BatchCreateNodesInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     nodes_data: list[CreateNodeInput] = Field(
+        min_length=1,
+        max_length=20,
         description=(
             "节点数据列表，每项必须含 node_type、title、sort_order。"
             f"{CREATE_NODE_NO_PARENT_ID_TEXT}"
@@ -283,6 +294,8 @@ class BatchCreateNodesInput(BaseModel):
 
 class BatchCreateEdgesInput(BaseModel):
     edges_data: list[dict] = Field(
+        min_length=1,
+        max_length=20,
         description=f"连线数据列表，每项含 source_id、target_id、edge_type。{EDGE_ENDPOINT_RULES_TEXT}",
     )
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -641,6 +654,8 @@ def _update_node_sync(
     sort_order=None,
     mode="overwrite",
     replacements=None,
+    expected_content_sha256=None,
+    expected_work_id=None,
 ):
     if node_type is not None:
         try:
@@ -659,10 +674,17 @@ def _update_node_sync(
             return json.dumps({"error": err}, ensure_ascii=False)
     db = _get_db()
     try:
-        node = db.query(Node).filter(Node.id == node_id).first()
+        query = db.query(Node).filter(Node.id == node_id)
+        if expected_work_id is not None:
+            query = query.filter(Node.work_id == expected_work_id, Node.type == "chapter")
+        if expected_content_sha256 is not None:
+            query = query.with_for_update()
+        node = query.first()
         if not node:
             return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
         old_content = node.content or ""
+        if expected_content_sha256 is not None and hashlib.sha256(old_content.encode()).hexdigest() != expected_content_sha256:
+            return json.dumps({"success": False, "error_code": "content_changed", "error": "正文已变化，请重新读取后交接写作任务"}, ensure_ascii=False)
         final_type_for_elements = node_type or node.type
         if chapter_elements is not None and final_type_for_elements != "chapter":
             return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
@@ -724,6 +746,14 @@ def _update_node_sync(
         except ValueError as e:
             db.rollback()
             return json.dumps({"error": str(e)}, ensure_ascii=False)
+        grouped_diff = None
+        if content is not None and content != old_content:
+            from services.chapter_edit_service import build_replacement_diff, build_whole_content_group
+            from services.node_agent_diff import record_change
+            diff = (build_replacement_diff(old_content, replacements) if mode == "replace"
+                    else build_whole_content_group(old_content, content))
+            grouped_diff = {"diff": diff, "node_diff": record_change(db, node, old_content, diff),
+                            "old_content": old_content, "new_content": content}
         db.commit()
         db.refresh(node)
         neighbors = _neighbor_items(db, node.id, node.work_id)
@@ -733,12 +763,7 @@ def _update_node_sync(
             "neighbors": neighbors,
         }
         if content is not None and content != old_content:
-            from services.chapter_edit_service import build_content_diff
-            payload["content_diff"] = {
-                "diff": build_content_diff(old_content, content),
-                "old_content": old_content,
-                "new_content": content,
-            }
+            payload["content_diff"] = grouped_diff
         return json.dumps(payload, ensure_ascii=False)
     except Exception as e:
         db.rollback()
@@ -1108,8 +1133,11 @@ async def _update_node_async(
     sort_order=None,
     mode="overwrite",
     replacements=None,
+    expected_content_sha256=None,
+    expected_work_id=None,
 ):
-    result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements))
+    result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements,
+                                           expected_content_sha256=expected_content_sha256, expected_work_id=expected_work_id))
     try:
         data = json.loads(result)
         if data.get("success"):

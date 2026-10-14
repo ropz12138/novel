@@ -29,6 +29,7 @@ function shouldHideAssistantEllipsisBubble(item) {
   if (item?.kind !== "message" || item.role !== "assistant") return false;
   if (item.type === "requirements_todolist" && item.todoCard) return false;
   if (item.type === "chapter_content_diff_card" && item.chapterContentDiffCard) return false;
+  if (item.type === "chapter_notes_diff_card" && item.chapterNotesDiffCard) return false;
   if (item.type === "error") return false;
   if (String(item.reasoningContent || item.meta?.reasoning_content || "").trim()) return false;
   return isPlaceholderEllipsisContent(item.content);
@@ -444,8 +445,9 @@ export function ChatTimeline({
 
         // ── Message ──
         const msg = item;
-        const diffNodeId = msg.type === "chapter_content_diff_card"
-          ? (msg.chapterContentDiffCard?.node_id || msg.chapterContentDiffCard?.chapter_node_id)
+        const diffCard = msg.chapterNotesDiffCard || msg.chapterContentDiffCard;
+        const diffNodeId = (msg.type === "chapter_content_diff_card" || msg.type === "chapter_notes_diff_card")
+          ? (diffCard?.node_id || diffCard?.chapter_node_id)
           : null;
         const canOpenDiffNode = Boolean(diffNodeId && onOpenDiffNode);
         const openDiffNode = () => {
@@ -470,7 +472,7 @@ export function ChatTimeline({
                   role={canOpenDiffNode ? "button" : undefined}
                   tabIndex={canOpenDiffNode ? 0 : undefined}
                   aria-label={canOpenDiffNode
-                    ? `打开节点详情：${msg.chapterContentDiffCard?.title || "未命名节点"}`
+                    ? `打开节点详情：${diffCard?.title || "未命名节点"}`
                     : undefined}
                   onClick={canOpenDiffNode ? openDiffNode : undefined}
                   onKeyDown={canOpenDiffNode ? (event) => {
@@ -537,8 +539,8 @@ function DiffSummary({ card }) {
   );
 }
 
-function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff }) {
-  const card = msg.chapterContentDiffCard || {};
+function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff, cardKey = "chapterContentDiffCard", label = "" }) {
+  const card = msg[cardKey] || {};
   const [open, setOpen] = useState(false);
 
   useEffect(() => {
@@ -561,7 +563,7 @@ function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff }) {
 
   return (
     <div className="space-y-2">
-      {!open && <DiffSummary card={card} />}
+      {!open && <DiffSummary card={{ ...card, node_type: label || card.node_type }} />}
       <button
         type="button"
         onClick={toggle}
@@ -592,6 +594,17 @@ function renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNod
       return (
         <HistoryDiffCard
           msg={msg}
+          onExpandDiff={onExpandDiff}
+          onCollapseDiff={onCollapseDiff}
+        />
+      );
+
+    case "chapter_notes_diff_card":
+      return (
+        <HistoryDiffCard
+          msg={msg}
+          cardKey="chapterNotesDiffCard"
+          label="章节笔记"
           onExpandDiff={onExpandDiff}
           onCollapseDiff={onCollapseDiff}
         />

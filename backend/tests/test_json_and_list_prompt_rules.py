@@ -6,7 +6,6 @@ from pathlib import Path
 from langchain_core.messages import AIMessage, AIMessageChunk
 
 from services.agents.supervisor import SupervisorAgent
-from services.agents.tools import specialist_agent_tools as sat
 from services.agents import llm as llm_mod
 
 
@@ -79,29 +78,8 @@ def test_json_output_rules_forbid_the_logged_invalid_body_shape():
         assert field in JSON_OUTPUT_RULES
 
 
-def test_invoke_json_agent_appends_full_json_output_rules(monkeypatch):
-    context = sat._create_artifact(
-        work_id=None,
-        chapter_node_id=None,
-        artifact_type="chapter_context",
-        content="完整上下文",
-    )
-    fake = _CapturingLLM()
-    monkeypatch.setattr(llm_mod, "get_llm", lambda **kwargs: fake)
-
-    result = json.loads(asyncio.run(sat.plan_chapter_scenes.ainvoke({
-        "context_artifact_id": context.id,
-    })))
-
-    assert result["success"] is True
-    scene_plan_prompt = (sat.PROMPT_ROOT / "scene_plan.txt").read_text(encoding="utf-8")
-    assert "scenes、beats 必须是对象数组" in scene_plan_prompt
-    assert fake.system_content == f"{scene_plan_prompt}\n\n{JSON_OUTPUT_RULES}"
-    assert ILLEGAL_BODY in fake.system_content
-
-
 def test_preparation_prompts_keep_planning_separate_from_prose_realization():
-    specialists = AGENT_PROMPTS / "specialists"
+    specialists = AGENT_PROMPTS.parent / "skills" / "references"
     scene_plan = (specialists / "scene_plan.txt").read_text(encoding="utf-8")
     summary = (specialists / "summary.txt").read_text(encoding="utf-8")
     story_memory = (specialists / "story_memory.txt").read_text(encoding="utf-8")

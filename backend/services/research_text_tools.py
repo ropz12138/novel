@@ -141,8 +141,8 @@ def create_job_files(user_id: str, filename: str, data: bytes) -> dict:
             id=job_id,
             user_id=user_id,
             original_filename=safe_name,
-            status="queued",
-            stage="等待研究 Agent",
+            status="ready",
+            stage="已上传",
             progress_detail=(
                 f"文件大小 {len(data)} 字节；检测编码 {encoding}；"
                 f"置信度 {confidence:.2f}"

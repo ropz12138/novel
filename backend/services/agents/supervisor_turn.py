@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
 from services.message_content_utils import extract_text_content, extract_tool_calls
 
@@ -190,7 +190,33 @@ def prepare_supervisor_ai_message(message: AIMessage) -> tuple[str, AIMessage]:
         if not reply or is_short_action_announcement(reply):
             return "retry", message
         return "end", _clone_ai_message(message, content=reply, tool_calls=[])
-    text = extract_text_content(message.content).strip()
-    if text and not is_short_action_announcement(text):
-        return "end", _clone_ai_message(message, content=text, tool_calls=[])
     return "retry", message
+
+
+def terminal_respond_to_user_message(messages: list[BaseMessage]) -> AIMessage | None:
+    """把成功执行的终止工具参数转换成最终用户消息。"""
+    if not messages or not isinstance(messages[-1], ToolMessage):
+        return None
+    result = messages[-1]
+    if result.name != RESPOND_TO_USER_TOOL:
+        return None
+    try:
+        payload = json.loads(str(result.content))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict) or payload.get("success") is not True:
+        return None
+
+    for message in reversed(messages[:-1]):
+        if not isinstance(message, AIMessage):
+            continue
+        for call in _normalize_tool_calls(message):
+            if call.get("name") != RESPOND_TO_USER_TOOL:
+                continue
+            if result.tool_call_id and call.get("id") != result.tool_call_id:
+                continue
+            reply = str(_tool_args(call).get("message") or "").strip()
+            if reply:
+                return AIMessage(content=reply)
+        return None
+    return None

@@ -45,8 +45,9 @@ def test_get_llm_user_fallback_overrides_default():
     assert llm._fallback.model_name == fallback
 
 
-def test_get_llm_null_fallback_falls_back_to_config():
+def test_get_llm_null_fallback_falls_back_to_config(monkeypatch):
     primary = settings.available_models[0]
+    monkeypatch.setattr(settings, "fallback_model", settings.available_models[1])
     # fallback=None（未设置）→ 用 config 默认备模型
     llm = llm_mod.get_llm(temperature=0.1, streaming=False, primary=primary, fallback=None)
     assert llm._fallback.model_name == settings.fallback_model
@@ -90,20 +91,23 @@ def test_supervisor_load_model_pref_none_when_unset():
 def test_supervisor_build_graph_passes_pref_to_get_llm(monkeypatch):
     captured = {}
 
-    def fake_get_llm(temperature=0.5, streaming=True, model_name=None, primary=None, fallback=None):
+    def fake_get_llm(temperature=0.5, primary=None, fallback=None):
         captured["primary"] = primary
         captured["fallback"] = fallback
-        # 返回真实 get_llm 保证后续构建不报错
-        return llm_mod.get_llm(temperature=temperature, streaming=streaming,
-                               model_name=model_name, primary=primary, fallback=fallback)
+        return object()
 
-    monkeypatch.setattr(supervisor_mod, "get_llm", fake_get_llm)
+    monkeypatch.setattr(llm_mod, "get_deep_agent_model", fake_get_llm)
+    monkeypatch.setattr(
+        "services.agents.deep_agent_runtime.build_deep_agent",
+        lambda **kwargs: kwargs,
+    )
 
     agent = supervisor_mod.SupervisorAgent()
-    agent._build_graph(model_pref={"primary": "deepseek-v4-pro", "fallback": "deepseek-v4-flash"})
+    primary, fallback = settings.available_models[:2]
+    agent._build_graph(model_pref={"primary": primary, "fallback": fallback})
 
-    assert captured["primary"] == "deepseek-v4-pro"
-    assert captured["fallback"] == "deepseek-v4-flash"
+    assert captured["primary"] == primary
+    assert captured["fallback"] == fallback
 
 
 def test_context_model_pref_kwargs_reads_supervisor_context():
@@ -128,12 +132,16 @@ def test_context_model_pref_kwargs_empty_when_unset():
 def test_supervisor_build_graph_no_pref_passes_none(monkeypatch):
     captured = {}
 
-    def fake_get_llm(temperature=0.5, streaming=True, model_name=None, primary=None, fallback=None):
+    def fake_get_llm(temperature=0.5, primary=None, fallback=None):
         captured["primary"] = primary
         captured["fallback"] = fallback
-        return llm_mod.get_llm(temperature=temperature, streaming=streaming)
+        return object()
 
-    monkeypatch.setattr(supervisor_mod, "get_llm", fake_get_llm)
+    monkeypatch.setattr(llm_mod, "get_deep_agent_model", fake_get_llm)
+    monkeypatch.setattr(
+        "services.agents.deep_agent_runtime.build_deep_agent",
+        lambda **kwargs: kwargs,
+    )
 
     agent = supervisor_mod.SupervisorAgent()
     agent._build_graph(model_pref=None)

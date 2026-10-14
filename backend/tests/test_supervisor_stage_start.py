@@ -1,29 +1,17 @@
 """Supervisor stage_start 事件测试 — TDD。"""
 import asyncio
-from unittest.mock import AsyncMock, MagicMock
-
-from langchain_core.messages import AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk
 
 from services.agents.supervisor import SupervisorAgent
 
 
-class _FakeLLM:
-    def bind_tools(self, tools, **kwargs):
-        return self
-
-    def astream(self, messages):
-        async def _gen():
-            yield AIMessageChunk(content="", additional_kwargs={"reasoning_content": "思考"})
-            yield AIMessageChunk(
-                content="完成",
-                tool_calls=[{
-                    "name": "respond_to_user",
-                    "args": {"message": "完成"},
-                    "id": "call_end",
-                    "type": "tool_call",
-                }],
-            )
-        return _gen()
+class _FakeGraph:
+    async def astream(self, state, config=None, stream_mode=None):
+        yield "messages", (
+            AIMessageChunk(content="", additional_kwargs={"reasoning_content": "思考"}),
+            {"langgraph_node": "model"},
+        )
+        yield "updates", {"model": {"messages": [AIMessage(content="完成")]}}
 
 
 def test_agent_node_emits_stage_start_before_stream(monkeypatch):
@@ -32,31 +20,10 @@ def test_agent_node_emits_stage_start_before_stream(monkeypatch):
     async def capture(event, data):
         emitted.append((event, data))
 
-    monkeypatch.setattr(
-        "services.agents.supervisor.get_llm",
-        lambda **kw: _FakeLLM(),
-    )
-    monkeypatch.setattr(
-        "services.agents.supervisor.bind_tools_to_llm",
-        lambda llm, tools, **kwargs: llm,
-    )
-
     agent = SupervisorAgent(emit=capture)
-    graph = agent._build_graph()
-    state = {
-        "messages": [],
-        "user_message": "你好",
-        "canvas_overview": "",
-    }
-
-    async def _run():
-        result = None
-        async for event in graph.astream(state):
-            if "agent" in event:
-                result = event["agent"]
-        return result
-
-    asyncio.run(_run())
+    monkeypatch.setattr(agent, "_build_graph", lambda **kwargs: _FakeGraph())
+    result = asyncio.run(agent.run("你好", context={}))
+    assert result["message"] == "完成"
 
     stage_events = [e for e in emitted if e[0] == "stage_start"]
     assert len(stage_events) >= 1

@@ -7,7 +7,7 @@ from pathlib import Path
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-PROMPT_PATH = Path(__file__).resolve().parents[1] / "prompts" / "fiction_humanizer.txt"
+PROMPT_PATH = Path(__file__).resolve().parents[1] / "skills" / "references" / "fiction_humanizer.txt"
 
 
 class HumanizeNodeContentInput(BaseModel):
@@ -33,8 +33,8 @@ async def _humanize_node_content_async(node_id: str, reason: str | None = None) 
         "skill_content": skill_content,
         "message": (
             "小说自然化规则已加载，章节编辑待 agent 执行。"
-            "请读取目标章节最新正文及相关设定，按规则自行改写，"
-            "通过 update_node 的 content 保存完整修改稿，再读取正文核对结果。"
+            "请读取目标章节最新正文及相关设定，整理当前版本的事实、人物认知与自然化目标，"
+            "通过 run_writing_agent(operation=humanize) 委派 Writer 修改并保存，再读取正文核对结果。"
         ),
     }, ensure_ascii=False)
 
@@ -43,10 +43,10 @@ humanize_node_content = StructuredTool.from_function(
     coroutine=_humanize_node_content_async,
     name="humanize_node_content",
     description=(
-        "读取并完整返回小说去 AI 味编辑规则（skill_content），供 agent 本体执行章节自然化。"
+        "读取并完整返回小说去 AI 味编辑规则（skill_content），供 Supervisor 规划章节自然化任务。"
         "此工具仅加载规则；skill_loaded 表示规则读取成功，章节编辑尚待执行。"
         "读取规则后，agent 用 read_node_content 获取最新正文和相关设定，"
-        "自行完成改写，再用 update_node.content 保存完整章节，最后重新读取核对。"
+        "整理写作任务后用 run_writing_agent 委派独立 Writer 修改并保存，最后重新读取核对。"
         "适用于用户明确要求去 AI 味、自然化、减少机器感或改得更像真人的章节。"
     ),
     args_schema=HumanizeNodeContentInput,

@@ -46,6 +46,7 @@ const IsolatedNodePanel = memo(({
   collapsed: controlledCollapsed,
   onCollapsedChange,
   showCollapsedTrigger = true,
+  appMode = false,
 }) => {
   const [internalCollapsed, setInternalCollapsed] = useState(initialCollapsed);
   const collapsed = controlledCollapsed ?? internalCollapsed;
@@ -84,7 +85,9 @@ const IsolatedNodePanel = memo(({
   return (
     <aside
       data-testid="isolated-node-panel"
-      className="relative z-[55] w-52 shrink-0 border-l border-slate-200 bg-slate-50/80 overflow-y-auto"
+      className={`relative z-[55] w-52 shrink-0 overflow-y-auto border-l border-slate-200 bg-slate-50/80 ${
+        appMode ? "pb-[calc(7rem+env(safe-area-inset-bottom))]" : ""
+      }`}
     >
       <div className="flex items-center justify-between border-b border-slate-200 px-3 py-2 text-xs font-medium text-slate-400">
         <span>角色与设定</span>
