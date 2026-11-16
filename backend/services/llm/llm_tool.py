@@ -11,7 +11,9 @@ class ToolCallFinished:
 
 @dataclass
 class ToolStreamEvent:
-    kind: Literal["text", "thinking", "tool_call", "usage"]
+    kind: Literal["text", "thinking", "tool_call", "tool_call_delta", "usage", "audio"]
     text: str = ""
     tool_call: ToolCallFinished | None = None
     usage: dict[str, int] | None = None
+    audio: bytes = b""
+    index: int | None = None

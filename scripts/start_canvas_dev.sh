@@ -5,6 +5,7 @@ ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 BACKEND_DIR="$ROOT_DIR/backend"
 LOG_DIR="$ROOT_DIR/logs"
+export NOVEL_ENV=development
 
 mkdir -p "$LOG_DIR"
 
@@ -96,26 +97,17 @@ find_port_pids() {
 
 # --- 读取端口配置 ---
 read_config() {
-  local cfg="$ROOT_DIR/config.json"
-  if [ ! -f "$cfg" ]; then
-    echo "缺少配置文件: $cfg"
-    return 1
-  fi
-  mapfile -t _cfg_lines < <(python3 -c '
-import json
-from pathlib import Path
-cfg = json.loads(Path("'"$cfg"'").read_text(encoding="utf-8"))
-print(cfg["app"]["dev_port"])
-print(cfg["frontend"]["dev_port"])
-')
+  local config_output
+  config_output="$(python3 "$ROOT_DIR/scripts/prepare_canvas_dev.py")"
+  mapfile -t _cfg_lines <<< "$config_output"
   BACKEND_PORT="${_cfg_lines[0]}"
   FRONTEND_PORT="${_cfg_lines[1]}"
 }
 
+read_config
+
 cleanup_old "$LOG_DIR/canvas-backend-dev.pid" "canvas-backend"
 cleanup_old "$LOG_DIR/canvas-frontend-dev.pid" "canvas-frontend"
-
-read_config
 
 # 清理残留端口占用
 for port in "$FRONTEND_PORT" "$BACKEND_PORT"; do
@@ -132,14 +124,11 @@ done
 # --- 启动后端 ---
 echo "启动 Canvas 后端 (端口: $BACKEND_PORT)..."
 cd "$BACKEND_DIR"
-VENV_PY="$BACKEND_DIR/.venv/bin/python"
-VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
-if [ ! -x "$VENV_PY" ] || grep -q 'backend/canvas/.venv' "$BACKEND_DIR/.venv/pyvenv.cfg" 2>/dev/null; then
-  echo "重建 Python 虚拟环境..."
-  rm -rf "$BACKEND_DIR/.venv"
-  python3 -m venv "$BACKEND_DIR/.venv"
-  VENV_PY="$BACKEND_DIR/.venv/bin/python"
-  VENV_UVICORN="$BACKEND_DIR/.venv/bin/uvicorn"
+VENV_PY="$BACKEND_DIR/.venv-dev/bin/python"
+VENV_UVICORN="$BACKEND_DIR/.venv-dev/bin/uvicorn"
+if [ ! -x "$VENV_PY" ]; then
+  echo "创建开发专用 Python 虚拟环境..."
+  python3 -m venv "$BACKEND_DIR/.venv-dev"
 fi
 "$VENV_PY" -m pip install -r requirements.txt 2>&1 | tail -3
 

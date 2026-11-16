@@ -1,4 +1,5 @@
 """独立小说研究对话服务。"""
+import database
 import json
 from pathlib import Path
 import uuid
@@ -33,9 +34,6 @@ CHAT_TOOL_NAMES = {
 LEGACY_SESSION_NAMESPACE = uuid.UUID("85d62f8a-092e-4b39-825b-b4ea69079461")
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 class ChatSaveArtifactInput(BaseModel):
@@ -65,7 +63,7 @@ def build_research_chat_tools(user_id: str, referenced_work_id: str | None) -> l
         ) -> str:
             if work_id != referenced_work_id:
                 raise ValueError("产出物作品ID必须与当前消息引用的作品一致")
-            db = _get_db()
+            db = database.open_db()
             try:
                 owned = db.query(ResearchJob.id).filter(
                     ResearchJob.id == work_id,
@@ -91,7 +89,7 @@ def build_research_chat_tools(user_id: str, referenced_work_id: str | None) -> l
 
 def migrate_legacy_research_conversations() -> int:
     """把旧任务中的对话事件迁移为独立 session；确定性 ID 保证幂等。"""
-    db = _get_db()
+    db = database.open_db()
     created_sessions = 0
     try:
         job_ids = [
@@ -156,7 +154,7 @@ def migrate_legacy_research_conversations() -> int:
 
 class ResearchChatService:
     async def reply(self, session_id: str) -> str:
-        db = _get_db()
+        db = database.open_db()
         try:
             rows = (db.query(ResearchMessage)
                     .filter(ResearchMessage.session_id == session_id)

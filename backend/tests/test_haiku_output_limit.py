@@ -17,7 +17,7 @@ def test_haiku_complete_payload_has_32k_output_limit():
 
 
 def test_haiku_stream_payload_has_32k_output_limit():
-    from test_llm_base import _FakeAsyncClient
+    from tests.test_llm_base import _FakeAsyncClient
 
     seen = []
 

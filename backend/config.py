@@ -1,16 +1,19 @@
-import json
+import os
 from pathlib import Path
+
+from runtime_environment import load_runtime_config, runtime_config_path
 
 # config.py 位于 backend/config.py
 # parents[0] = backend, parents[1] = Novel
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-CONFIG_PATH = PROJECT_ROOT / "config.json"
+ENVIRONMENT = os.environ.get("NOVEL_ENV", "production")
+CONFIG_PATH = runtime_config_path(PROJECT_ROOT, ENVIRONMENT)
 
 
 class Settings:
     def __init__(self) -> None:
-        with CONFIG_PATH.open("r", encoding="utf-8") as fp:
-            config = json.load(fp)
+        _, config = load_runtime_config(PROJECT_ROOT, ENVIRONMENT)
+        self.environment = ENVIRONMENT
 
         self.app_name = config["app"]["name"]
         self.host = config["app"]["host"]
@@ -59,13 +62,39 @@ class Settings:
         self.langsmith_endpoint = observability.get("langsmith_endpoint", "https://api.smith.langchain.com")
         self.langsmith_tracing_v2 = bool(observability.get("langsmith_tracing_v2", False))
 
-        image = config.get("image", {})
-        self.image_provider = image.get("provider", "ark")
-        self.image_api_base_url = image.get("api_base_url", "https://ark.cn-beijing.volces.com/api/v3")
-        self.image_api_key = image.get("api_key", "")
-        self.image_text2image_model = image.get("text2image_model", "")
-        self.chapter_illustration_size = image.get("chapter_illustration_size", "2K")
-        self.image_watermark = bool(image.get("watermark", True))
+        self._parse_tts_config(config["tts"])
+
+    def _parse_tts_config(self, tts: dict) -> None:
+        self.tts_provider = tts["provider"]
+        if self.tts_provider not in ("iflytek_xtts", "mimo_tts", "mimo_voicedesign"):
+            raise ValueError("tts.provider must be iflytek_xtts, mimo_tts or mimo_voicedesign")
+        profile = tts[self.tts_provider]
+        if profile["audio_format"] != "pcm":
+            raise ValueError(f"tts.{self.tts_provider}.audio_format must be pcm")
+        if self.tts_provider in ("mimo_tts", "mimo_voicedesign"):
+            if int(profile["sample_rate"]) != 24000:
+                raise ValueError(f"tts.{self.tts_provider}.sample_rate must be 24000")
+            self.tts_mimo_base_url = profile["base_url"]
+            self.tts_mimo_api_key = profile["api_key"]
+            self.tts_mimo_model = profile["model"]
+            if self.tts_provider == "mimo_voicedesign":
+                self.tts_voice_description = profile["voice_description"]
+            else:
+                self.tts_mimo_voice = profile["voice"]
+                self.tts_style = profile["style"]
+            self.tts_timeout_seconds = int(profile["timeout_seconds"])
+            self.tts_sample_rate = 24000
+            return
+        if int(profile["sample_rate"]) != 16000:
+            raise ValueError("tts.iflytek_xtts.sample_rate must be 16000")
+        self.tts_sdk_dir = str((PROJECT_ROOT / profile["sdk_dir"]).resolve())
+        self.tts_app_id = profile["app_id"]
+        self.tts_api_key = profile["api_key"]
+        self.tts_api_secret = profile["api_secret"]
+        self.tts_vcn = profile["vcn"]
+        self.tts_language = int(profile["language"])
+        self.tts_sample_rate = 16000
+        self.tts_worker_path = str(PROJECT_ROOT / "backend" / "native" / "xtts_worker")
 
     def _parse_llm_config(self, config: dict) -> None:
         """解析多模型配置列表"""
@@ -79,6 +108,7 @@ class Settings:
                     "max_completed_token": model_conf.get("max_completed_token"),
                     "context_window": model_conf.get("context_window") or model_conf.get("max_context_tokens") or model_conf.get("max_completed_token"),
                     "extra_body": model_conf.get("extra_body"),
+                    "extra_headers": model_conf.get("extra_headers"),
                     "provider": model_conf.get("provider", "openai"),
                     "model": model_conf.get("model", model_name),
                     "model_type": model_conf.get("model_type", "llm"),

@@ -71,15 +71,6 @@ export function saveViewState(workId, { expandedNodeIds, viewport }, storage) {
   }
 }
 
-export function clearViewState(workId, storage) {
-  if (!workId || !storage) return;
-  try {
-    storage.removeItem(viewStateStorageKey(workId));
-  } catch {
-    // 同上
-  }
-}
-
 /** 剔除已被删除的节点，避免记录随编辑无限增长。 */
 export function pruneExpandedIds(expandedNodeIds, existingNodeIds) {
   const pruned = new Set();

@@ -126,6 +126,35 @@ def langchain_messages_to_dicts(messages: Sequence[Any] | str) -> list[dict[str,
     return out
 
 
+def _tool_chunk(call: ToolCallFinished, args: str, index: int) -> dict[str, Any]:
+    payload: dict[str, Any] = {"args": args, "index": index, "type": "tool_call_chunk"}
+    if call.tool_name:
+        payload["name"] = call.tool_name
+    if call.call_id:
+        payload["id"] = call.call_id
+    return payload
+
+
+def tool_chunk_for_event(event: ToolStreamEvent, streamed_indexes: set[int], fallback_index: int) -> tuple[dict[str, Any] | None, int]:
+    """参数增量进入 tool_call_chunks。已经有增量时，最终 tool_call 不再累计。"""
+    if event.kind == "tool_call_delta" and event.tool_call is not None:
+        index = event.index if event.index is not None else fallback_index
+        first = index not in streamed_indexes
+        streamed_indexes.add(index)
+        payload: dict[str, Any] = {"args": event.text, "index": index, "type": "tool_call_chunk"}
+        if first and event.tool_call.tool_name:
+            payload["name"] = event.tool_call.tool_name
+        if first and event.tool_call.call_id:
+            payload["id"] = event.tool_call.call_id
+        return payload, fallback_index
+    if event.kind == "tool_call" and event.tool_call is not None:
+        index = event.index if event.index is not None else fallback_index
+        if index in streamed_indexes:
+            return None, index + 1
+        return _tool_chunk(event.tool_call, json.dumps(event.tool_call.arguments, ensure_ascii=False), index), index + 1
+    return None, fallback_index
+
+
 def _convert_tools(tools: list[Any] | None) -> list[dict[str, Any]] | None:
     if not tools:
         return None
@@ -211,6 +240,7 @@ class NovelLLM:
     async def astream(self, input, config=None, **kwargs):
         messages = langchain_messages_to_dicts(input)
         tool_index = 0
+        streamed_indexes: set[int] = set()
         async for event in normalize_provider_events(self.provider.stream_chat(
             messages,
             tools=self._tools,
@@ -223,20 +253,15 @@ class NovelLLM:
                 )
             elif event.kind == "text":
                 yield AIMessageChunk(content=event.text)
-            elif event.kind == "tool_call" and event.tool_call is not None:
-                call = event.tool_call
+            elif event.kind in {"tool_call", "tool_call_delta"} and event.tool_call is not None:
+                chunk, tool_index = tool_chunk_for_event(event, streamed_indexes, tool_index)
+                if chunk is None:
+                    continue
                 yield AIMessageChunk(
                     content="",
-                    tool_call_chunks=[{
-                        "name": call.tool_name,
-                        "args": json.dumps(call.arguments, ensure_ascii=False),
-                        "id": call.call_id,
-                        "index": tool_index,
-                        "type": "tool_call_chunk",
-                    }],
-                    response_metadata={"finish_reason": "tool_calls"},
+                    tool_call_chunks=[chunk],
+                    response_metadata={"finish_reason": "tool_calls"} if event.kind == "tool_call" else {},
                 )
-                tool_index += 1
             elif event.kind == "usage" and event.usage is not None:
                 yield AIMessageChunk(content="", usage_metadata=event.usage)
 
@@ -293,6 +318,7 @@ class DeepAgentChatModel(BaseChatModel):
 
     async def _astream(self, messages, stop=None, run_manager=None, **kwargs):
         tool_index = 0
+        streamed_indexes: set[int] = set()
         async for event in normalize_provider_events(self.provider.stream_chat(
             langchain_messages_to_dicts(messages),
             tools=self.bound_tools,
@@ -305,20 +331,15 @@ class DeepAgentChatModel(BaseChatModel):
                 )
             elif event.kind == "text":
                 message = self._chunk(content=event.text)
-            elif event.kind == "tool_call" and event.tool_call is not None:
-                call = event.tool_call
+            elif event.kind in {"tool_call", "tool_call_delta"} and event.tool_call is not None:
+                chunk, tool_index = tool_chunk_for_event(event, streamed_indexes, tool_index)
+                if chunk is None:
+                    continue
                 message = self._chunk(
                     content="",
-                    tool_call_chunks=[{
-                        "name": call.tool_name,
-                        "args": json.dumps(call.arguments, ensure_ascii=False),
-                        "id": call.call_id,
-                        "index": tool_index,
-                        "type": "tool_call_chunk",
-                    }],
-                    response_metadata={"finish_reason": "tool_calls"},
+                    tool_call_chunks=[chunk],
+                    response_metadata={"finish_reason": "tool_calls"} if event.kind == "tool_call" else {},
                 )
-                tool_index += 1
             elif event.kind == "usage" and event.usage is not None:
                 message = self._chunk(content="", usage_metadata=event.usage)
             else:

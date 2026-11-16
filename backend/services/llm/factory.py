@@ -40,4 +40,5 @@ def build_model_config(model_name: str, *, temperature: float | None = None) -> 
         model_type=model_type,
         enable_thinking=raw.get("enable_thinking"),
         extra_body=extra,
+        extra_headers=dict(raw.get("extra_headers") or {}),
     )

@@ -1,5 +1,6 @@
 """update_node 由 agent 提供完整正文，工具直接保存。"""
 import asyncio
+import hashlib
 import inspect
 import json
 
@@ -47,9 +48,11 @@ def test_update_node_saves_agent_content_without_llm(monkeypatch, node_type):
         db.add(node)
         db.commit()
         content = '原段开头。他说："新对白。"\n\n原段结尾。'
-        result = json.loads(asyncio.run(nt.update_node.ainvoke({
-            "node_id": node.id, "content": content, "title": "新标题", "sort_order": 2,
-        })))
+        original = "原段开头。旧对白。\n\n原段结尾。"
+        payload = {"node_id": node.id, "content": content, "title": "新标题", "sort_order": 2}
+        if node_type == "chapter":
+            payload["expected_content_sha256"] = hashlib.sha256(original.encode()).hexdigest()
+        result = json.loads(asyncio.run(nt.update_node.ainvoke(payload)))
         assert result["success"] is True
         db.refresh(node)
         assert node.content == content
@@ -110,7 +113,8 @@ def test_update_node_replace_mode_rejects_content():
             "node_id": "n1",
             "mode": "replace",
             "content": "整章",
-            "replacements": [{"old": "理性", "new": "能耐"}],
+            "replacements": [{"start_paragraph": 1, "end_paragraph": 1, "new": "能耐"}],
+            "expected_content_sha256": "hash",
         })
 
 
@@ -120,7 +124,8 @@ def test_update_node_overwrite_mode_rejects_replacements():
             "node_id": "n1",
             "mode": "overwrite",
             "content": "整章",
-            "replacements": [{"old": "理性", "new": "能耐"}],
+            "replacements": [{"start_paragraph": 1, "end_paragraph": 1, "new": "能耐"}],
+            "expected_content_sha256": "hash",
         })
 
 
@@ -136,7 +141,8 @@ def test_update_node_replacements_schema_is_plain_array():
     replacements = schema["function"]["parameters"]["properties"]["replacements"]
     assert replacements["type"] == "array"
     assert "anyOf" not in replacements
-    assert "数组。元素是对象。对象字段是 old 和 new。" in replacements["description"]
+    assert "数组。元素是对象。对象字段是 start_paragraph、end_paragraph 和 new。" in replacements["description"]
+    assert "old" not in schema["function"]["parameters"]["properties"]["replacements"].get("items", {}).get("properties", {})
 
 
 def _seed_chapter(db, suffix):
@@ -169,12 +175,14 @@ def test_update_node_replace_mode_applies_unique_snippets(monkeypatch):
     db = database.SessionLocal()
     try:
         node, original = _seed_chapter(db, "ok")
+        first = original.split("\n\n")[0]
         result = json.loads(asyncio.run(nt.update_node.ainvoke({
             "node_id": node.id,
             "mode": "replace",
+            "expected_content_sha256": hashlib.sha256(original.encode()).hexdigest(),
             "replacements": [
-                {"old": "就你理性", "new": "就你能耐"},
-                {"old": "食堂里人声鼎沸，混合着饭菜的香气和碗筷碰撞的声音。", "new": ""},
+                {"start_paragraph": 1, "end_paragraph": 1, "new": first.replace("就你理性", "就你能耐")},
+                {"start_paragraph": 2, "end_paragraph": 2, "new": "两人找了个角落坐下。"},
             ],
         })))
         assert result["success"] is True
@@ -196,14 +204,15 @@ def test_update_node_replace_mode_feedback_when_old_equals_new():
         result = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
+            expected_content_sha256=hashlib.sha256(original.encode()).hexdigest(),
             replacements=[
-                {"old": "就你理性", "new": "就你能耐"},
-                {"old": "两人找了个角落坐下。", "new": "两人找了个角落坐下。"},
+                {"start_paragraph": 1, "end_paragraph": 1, "new": original.split("\n\n")[0].replace("就你理性", "就你能耐")},
+                {"start_paragraph": 2, "end_paragraph": 2, "new": original.split("\n\n")[1]},
             ],
         ))
         assert result.get("success") is not True
         message = result.get("error") or ""
-        assert "old 和 new 完全相同" in message
+        assert "正文不会发生任何变化" in message
         assert "new" in message
         assert "replacements[1]" in message
         db.refresh(node)
@@ -219,21 +228,86 @@ def test_update_node_replace_mode_rejects_missing_or_ambiguous_old(monkeypatch):
         missing = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
-            replacements=[{"old": "这段原文不存在", "new": "x"}],
+            expected_content_sha256=hashlib.sha256(original.encode()).hexdigest(),
+            replacements=[{"start_paragraph": 9, "end_paragraph": 9, "new": "x"}],
         ))
         assert missing.get("success") is not True
-        assert "未找到" in (missing.get("error") or "")
+        assert "超出有效段落" in (missing.get("error") or "")
         db.refresh(node)
         assert node.content == original
 
-        ambiguous = json.loads(nt._update_node_sync(
+        overlap = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
-            replacements=[{"old": "。", "new": "!"}],
+            expected_content_sha256=hashlib.sha256(original.encode()).hexdigest(),
+            replacements=[
+                {"start_paragraph": 1, "end_paragraph": 2, "new": "甲"},
+                {"start_paragraph": 2, "end_paragraph": 2, "new": "乙"},
+            ],
         ))
-        assert ambiguous.get("success") is not True
-        assert "多次" in (ambiguous.get("error") or "")
+        assert overlap.get("success") is not True
+        assert "重叠" in (overlap.get("error") or "")
         db.refresh(node)
         assert node.content == original
+    finally:
+        db.close()
+
+
+def test_stale_paragraph_version_does_not_save_title_or_body():
+    db = database.SessionLocal()
+    try:
+        node, original = _seed_chapter(db, "stale")
+        result = json.loads(nt._update_node_sync(
+            node.id, title="未保存标题", mode="replace", expected_content_sha256="outdated",
+            replacements=[{"start_paragraph": 1, "end_paragraph": 1, "new": "新段落。"}],
+        ))
+        assert result["error_code"] == "content_changed"
+        db.refresh(node)
+        assert node.title == "第一章：末日前的平静"
+        assert node.content == original
+    finally:
+        db.close()
+
+
+def test_metadata_update_and_structured_arrays_keep_their_fields():
+    from services.agents.tools import query_tools
+
+    db = database.SessionLocal()
+    try:
+        node, original = _seed_chapter(db, "meta")
+        hero = Node(work_id=node.work_id, type="character", title="林舟", sort_order=1, content="赶路", scope="major")
+        db.add(hero)
+        db.commit()
+        node.extra_data = {"chapter_elements": [{"id": "e1", "title": "出发", "content": "清晨"}], "characters": []}
+        node.scope = "local"
+        db.commit()
+        added = json.loads(nt._update_node_sync(
+            node.id, scope="local", sort_order=3, layer=2, position_x=4, position_y=5,
+            characters=[{"id": hero.id, "name": "林舟"}],
+        ))
+        assert added["success"] is True
+        db.refresh(node)
+        assert node.content == original
+        assert node.extra_data["chapter_elements"][0]["title"] == "出发"
+        assert node.extra_data["characters"] == [{"id": hero.id, "name": "林舟"}]
+        cleared = json.loads(nt._update_node_sync(node.id, characters=[]))
+        assert cleared["success"] is True
+        db.refresh(node)
+        assert node.extra_data["characters"] == []
+        assert node.extra_data["chapter_elements"][0]["title"] == "出发"
+        kept = json.loads(nt._update_node_sync(node.id, title="只改标题"))
+        assert kept["success"] is True
+        db.refresh(node)
+        assert node.extra_data["characters"] == []
+        viewed = json.loads(query_tools._read_node_content_sync([node.id]))["nodes"][0]
+        assert viewed["scope"] == "local"
+        assert viewed["sort_order"] == 3
+        assert viewed["layer"] == 2
+        assert viewed["position_x"] == 4
+        assert viewed["position_y"] == 5
+        assert viewed["locked"] is False
+        assert viewed["extra_data"]["chapter_elements"][0]["content"] == "清晨"
+        assert "content" not in viewed
+        assert viewed["content_paragraphs"][0]["text"].startswith("苏瑶")
     finally:
         db.close()

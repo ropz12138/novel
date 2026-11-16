@@ -17,6 +17,9 @@ const ResearchPage = lazy(() => import("./pages/ResearchPage").then((module) => 
 const TokenUsagePage = lazy(() => import("./pages/TokenUsagePage").then((module) => ({
   default: module.TokenUsagePage,
 })));
+const ShortDramaPage = lazy(() => import("./pages/ShortDramaPage").then((module) => ({
+  default: module.ShortDramaPage,
+})));
 
 function PageFallback() {
   return (
@@ -39,6 +42,10 @@ export default function App() {
             <CanvasPage />
           </AuthGuard>
         }
+      />
+      <Route
+        path="/short-drama/:workId/:chapterId"
+        element={<AuthGuard><ShortDramaPage /></AuthGuard>}
       />
       <Route
         path="/research"

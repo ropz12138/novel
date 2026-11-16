@@ -83,8 +83,8 @@ def test_context_reads_all_preceding_full_text_and_notes_in_new_session(chapters
     note_result = invoke('read_chapter_notes', chapter_numbers=[1, 2], catalog_revision=catalog['catalog_revision'])
     assert result['success'], result
     assert [n['chapter_node_id'] for n in result['chapters']] == [n.id for n in chapters[:3]]
-    assert note_result['chapters'][0]['notes'] == notes
-    assert result['chapters'][1]['content'] == chapters[1].content
+    assert note_result['chapters'][0]['notes_paragraphs'][0]['text'] == notes
+    assert result['chapters'][1]['content_paragraphs'][0]['text'] == chapters[1].content
     set_context({'work_id': 'other'})
     assert not invoke('read_chapter_context', chapter_numbers=[3], catalog_revision=catalog['catalog_revision'])['success']
 

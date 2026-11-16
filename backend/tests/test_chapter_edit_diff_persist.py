@@ -274,3 +274,16 @@ def test_diff_event_exposes_the_authoritative_pending_baseline(db_session, sampl
     }
     persist_supervisor_event(db_session, sample_session.id, "chapter_edit_diff", second)
     assert second["baseline_content"] == "第一稿"
+
+
+def test_writer_task_updates_one_review_card(db_session, sample_session):
+    for current in ('中间版本', '最终版本'):
+        assert persist_supervisor_event(db_session, sample_session.id, 'chapter_edit_diff', {
+            'task_id': 'writer-task', 'chapter_node_id': 'chapter',
+            'original_content': '任务初始版本', 'current_content': current,
+            'diff': {'hunks': [], 'summary': {}},
+        })
+    messages = db_session.query(SupervisorMessage).filter_by(session_id=sample_session.id).all()
+    assert len(messages) == 1
+    assert messages[0].meta['chapterContentDiffCard']['current_content'] == '最终版本'
+    assert messages[0].meta['chapterContentDiffCard']['original_content'] == '任务初始版本'

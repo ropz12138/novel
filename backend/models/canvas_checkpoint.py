@@ -34,7 +34,6 @@ class CanvasCheckpoint(Base):
     sort_order = Column(Integer, nullable=False, default=0)
     node_count = Column(Integer, nullable=False, default=0)
     edge_count = Column(Integer, nullable=False, default=0)
-    relation_count = Column(Integer, nullable=False, default=0)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     nodes = relationship(
@@ -44,11 +43,6 @@ class CanvasCheckpoint(Base):
     )
     edges = relationship(
         "CanvasCheckpointEdge",
-        back_populates="checkpoint",
-        cascade="all, delete-orphan",
-    )
-    character_relations = relationship(
-        "CanvasCheckpointRelation",
         back_populates="checkpoint",
         cascade="all, delete-orphan",
     )
@@ -102,25 +96,6 @@ class CanvasCheckpointEdge(Base):
     extra_data = Column(JSON, default=dict)
 
     checkpoint = relationship("CanvasCheckpoint", back_populates="edges")
-
-
-class CanvasCheckpointRelation(Base):
-    __tablename__ = "canvas_checkpoint_relations"
-
-    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
-    checkpoint_id = Column(
-        String(36),
-        ForeignKey("canvas_checkpoints.id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    )
-    relation_id = Column(String(36), nullable=False)
-    source_id = Column(String(36), nullable=False)
-    target_id = Column(String(36), nullable=False)
-    relation_type = Column(String(100), nullable=False)
-    label = Column(String(100), default="")
-
-    checkpoint = relationship("CanvasCheckpoint", back_populates="character_relations")
 
 
 class CanvasCheckpointTodoItem(Base):

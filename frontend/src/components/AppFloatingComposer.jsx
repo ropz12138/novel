@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Bot, Minus, Send, Square } from "lucide-react";
+import { Bot, History, Send, Square } from "lucide-react";
 import { useKeyboardInset } from "../lib/keyboardInset";
 import ModifiedNodeCapsules from "./ModifiedNodeCapsules";
 import SessionContextUsage from "./SessionContextUsage";
@@ -8,7 +8,7 @@ const COMPOSER_BOTTOM_GAP_PX = 12;
 
 const REVIEW_INTENSITIES = [
   { value: "low", shortLabel: "低", label: "低 · 不评审，不去 AI 味" },
-  { value: "medium", shortLabel: "中", label: "中 · 各评审一次，并去 AI 味" },
+  { value: "medium", shortLabel: "中", label: "中 · 常规评审，并去 AI 味" },
   { value: "high", shortLabel: "高", label: "高 · 按需复评，并去 AI 味" },
 ];
 
@@ -63,7 +63,7 @@ function IntensitySlider({ value, disabled, onChange }) {
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
       onPointerCancel={onPointerUp}
-      className={`pointer-events-auto relative grid h-7 w-24 grid-cols-3 rounded-full bg-white/95 p-0.5 text-[11px] shadow-[0_8px_20px_rgba(15,23,42,0.12)] select-none ${
+            className={`pointer-events-auto relative grid h-7 w-24 grid-cols-3 rounded-full bg-transparent p-0.5 text-[11px] select-none ${
         disabled ? "cursor-not-allowed opacity-50" : "cursor-ew-resize"
       }`}
     >
@@ -199,9 +199,9 @@ export default function AppFloatingComposer({
       <div ref={rootRef} className="relative w-full max-w-3xl">
         <ModifiedNodeCapsules nodes={modifiedNodes} onRemove={onRemoveModifiedNode} />
         {pendingMessages.length > 0 && (
-          <div aria-label="待发送消息" className="pointer-events-auto mb-2 max-h-20 space-y-1 overflow-y-auto rounded-xl border border-blue-100 bg-blue-50/95 px-3 py-2 shadow">
+          <div aria-label="待插入消息" className="pointer-events-auto mb-2 max-h-20 space-y-1 overflow-y-auto rounded-xl border border-blue-100 bg-blue-50/95 px-3 py-2 shadow">
             {pendingMessages.map((item) => (
-              <div key={item.id} className="truncate text-xs text-blue-700">等待发送：{item.content}</div>
+              <div key={item.id} className="truncate text-xs text-blue-700">等待插入：{item.content}</div>
             ))}
           </div>
         )}
@@ -247,16 +247,20 @@ export default function AppFloatingComposer({
           </div>
         )}
         <div className="flex items-end gap-2">
-        <div className="flex min-w-0 flex-1 flex-col items-end gap-1">
-        <IntensitySlider
-          value={intensity}
-          disabled={running}
-          onChange={onIntensityChange}
-        />
+        <div className="flex min-w-0 flex-1 flex-col items-end gap-1.5">
+        <div className="pointer-events-auto flex items-center rounded-full bg-white/95 p-0.5 shadow-[0_8px_20px_rgba(15,23,42,0.14)]">
+          <span className="px-2 text-xs text-slate-500">评审</span>
+          <IntensitySlider
+            value={intensity}
+            disabled={running}
+            onChange={onIntensityChange}
+          />
+        </div>
         <div
           data-testid="app-floating-composer-bar"
-          className="pointer-events-auto flex w-full min-w-0 items-center gap-2 rounded-full border border-slate-200/90 bg-white/95 px-2 py-1.5 shadow-[0_10px_35px_rgba(15,23,42,0.2)] backdrop-blur"
+          className="pointer-events-auto flex h-[54px] max-h-[54px] w-full min-w-0 items-center overflow-hidden rounded-full border border-slate-200/90 bg-white/95 px-1.5 shadow-[0_12px_34px_rgba(15,23,42,0.22)] backdrop-blur"
         >
+          <div className="flex w-full items-center gap-1">
           <button
             type="button"
             aria-label="会话列表"
@@ -265,7 +269,7 @@ export default function AppFloatingComposer({
             onClick={() => setSessionListOpen((open) => !open)}
             className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-slate-500 hover:bg-blue-50 hover:text-blue-600 disabled:opacity-40"
           >
-            <Minus className="h-5 w-5" />
+            <History className="h-5 w-5" />
           </button>
           <div className="relative min-w-0 flex-1">
           <textarea
@@ -277,7 +281,7 @@ export default function AppFloatingComposer({
             onBlur={() => setInputFocused(false)}
             rows={1}
             placeholder={showStream ? "" : (ready ? (running ? "输入下一条指令…" : "输入创作指令…") : "正在载入最新会话…")}
-            className="block w-full max-h-28 min-h-10 min-w-0 resize-none overflow-y-auto bg-transparent px-1 py-2.5 text-sm text-slate-700 outline-none placeholder:text-slate-400 disabled:cursor-wait"
+            className="block h-10 w-full min-w-0 resize-none overflow-hidden bg-transparent px-1 py-0 text-[15px] leading-10 text-slate-700 outline-none placeholder:text-slate-400 disabled:cursor-wait"
           />
           {showStream && (
             <div className="pointer-events-none absolute inset-0 flex items-center" aria-hidden="true">
@@ -290,7 +294,7 @@ export default function AppFloatingComposer({
           <button
             type="button"
             aria-label={running && !message.trim() ? "中止" : "发送快捷指令"}
-            title={running && !message.trim() ? "中止" : (running ? "加入待发送队列" : "发送")}
+            title={running && !message.trim() ? "中止" : (running ? "插入新要求" : "发送")}
             disabled={!running && (!ready || !message.trim())}
             onClick={running && !message.trim() ? () => onStop?.() : send}
             className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-white ${
@@ -301,6 +305,7 @@ export default function AppFloatingComposer({
           >
             {running && !message.trim() ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </button>
+          </div>
         </div>
         </div>
         {agentCollapsed && (
@@ -309,7 +314,7 @@ export default function AppFloatingComposer({
             aria-label="展开Agent侧边栏"
             title="展开Agent"
             onClick={onExpandAgent}
-            className="pointer-events-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-slate-500 shadow-[0_10px_35px_rgba(15,23,42,0.2)] backdrop-blur hover:bg-blue-50 hover:text-blue-600"
+            className="pointer-events-auto flex h-[54px] w-[54px] shrink-0 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-slate-500 shadow-[0_12px_34px_rgba(15,23,42,0.22)] backdrop-blur hover:bg-blue-50 hover:text-blue-600"
           >
             <Bot className="h-4 w-4" />
           </button>

@@ -1,8 +1,172 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { render, screen, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { decideAgentGroup } from "../../lib/agentContentDiff";
 import NodeDetailDrawer from "./NodeDetailDrawer";
 
+vi.mock("../../lib/agentContentDiff", async () => {
+  const actual = await vi.importActual("../../lib/agentContentDiff");
+  return {
+    ...actual,
+    decideAgentGroup: vi.fn((...args) => actual.decideAgentGroup(...args)),
+  };
+});
+
 describe("NodeDetailDrawer", () => {
+  it("opens chapter notes and scrolls to the expanded change rather than the identical body text", async () => {
+    const scroll = vi.fn();
+    const previous = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      render(<NodeDetailDrawer node={{ id: "diff-location", type: "chapter", label: "章节",
+        content: "相同的新内容", notes: "开头笔记\n\n相同的新内容",
+        diffTarget: { field: "notes", hunk: { paragraph_index: 2, new_text: "相同的新内容", old_text: "旧笔记" } },
+      }} onClose={vi.fn()} />);
+      await waitFor(() => expect(scroll).toHaveBeenCalled());
+      expect(screen.getByText("章节笔记").closest("details").open).toBe(true);
+      expect(screen.getByTestId("chapter-notes").querySelector("[data-diff-navigation-hit]")?.textContent).toBe("相同的新内容");
+      expect(screen.getByTestId("chapter-body").querySelector("[data-diff-navigation-hit]")).toBeNull();
+      const hit = screen.getByTestId("chapter-notes").querySelector("[data-diff-navigation-hit]");
+      expect(scroll.mock.instances).toContain(hit);
+      expect(hit.className).not.toMatch(/bg-amber-100|ring-amber-300|ring-1/);
+    } finally { Element.prototype.scrollIntoView = previous; }
+  });
+
+  it("locates a deleted paragraph at its remaining position and relocates when another change is opened", async () => {
+    const previous = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = vi.fn();
+    const base = { id: "deleted-location", type: "chapter", label: "章节", content: "开头\n\n后续段落\n\n结尾" };
+    try {
+      const { container, rerender } = render(<NodeDetailDrawer node={{ ...base, diffTarget: {
+        field: "content", hunk: { type: "delete", paragraph_index: 2, old_text: "已删除的段落", new_text: "" },
+      } }} onClose={vi.fn()} />);
+      await waitFor(() => expect(container.querySelector("[data-diff-navigation-hit]")?.textContent).toBe("后续段落"));
+      rerender(<NodeDetailDrawer node={{ ...base, diffTarget: {
+        field: "content", hunk: { type: "replace", paragraph_index: 3, new_text: "结尾" },
+      } }} onClose={vi.fn()} />);
+      await waitFor(() => expect(container.querySelector("[data-diff-navigation-hit]")?.textContent).toBe("结尾"));
+      expect(container.querySelectorAll("[data-diff-navigation-hit]")).toHaveLength(1);
+      expect(container.querySelector("[data-diff-navigation-hit]").className).not.toMatch(/bg-amber-100|ring-amber-300|ring-1/);
+    } finally { Element.prototype.scrollIntoView = previous; }
+  });
+
+  it.each([false, true])("edits ordinary chapter text after opening a source reference, pending diff=%s", async (pending) => {
+    const onUpdate = vi.fn().mockResolvedValue(undefined);
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    const current = "首段新文。\n\n这里有普通正文。";
+    render(<NodeDetailDrawer node={{ id: "reference-edit", type: "chapter", label: "章节", content: current,
+      sourceReference: "这里有普通正文。" }}
+      contentDiff={pending ? { original_content: "首段旧文。\n\n这里有普通正文。", current_content: current,
+        hunks: [{ type: "replace", paragraph_index: 1, old_text: "首段旧文。", new_text: "首段新文。" }] } : undefined}
+      onUpdate={onUpdate} onContentDiffDecision={onDecision} onClose={vi.fn()} />);
+    expect(screen.getByText("这里有普通正文。").closest("[data-node-reference-hit]")).toBeTruthy();
+    fireEvent.click(screen.getByText("这里有普通正文。"));
+    const editor = screen.getByRole("textbox", { name: "编辑段落内容" });
+    expect(editor.value).toBe("这里有普通正文。");
+    fireEvent.change(editor, { target: { value: "这里是手动修改后的正文。" } });
+    fireEvent.click(screen.getByRole("button", { name: "保存段落" }));
+    await waitFor(() => expect(pending ? onDecision : onUpdate).toHaveBeenCalled());
+    if (pending) {
+      expect(onDecision).toHaveBeenCalledWith("reference-edit", expect.objectContaining({
+        current_content: "首段新文。\n\n这里是手动修改后的正文。",
+      }));
+    } else {
+      expect(onUpdate).toHaveBeenCalledWith("reference-edit", {
+        content: "首段新文。\n\n这里是手动修改后的正文。", expected_content: current,
+      });
+    }
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "编辑段落内容" })).toBeNull());
+  });
+
+  it("highlights a paragraph-range reference while the chapter still has a pending diff", () => {
+    const current = "甲新。\n\n乙原文。";
+    const unchangedStart = current.indexOf("乙原文。");
+    const changedStart = current.indexOf("甲新。");
+    const { container, rerender } = render(<NodeDetailDrawer node={{
+      id: "diff-range-ref", type: "chapter", label: "章节", content: current,
+      sourceReference: { start: unchangedStart, end: unchangedStart + "乙原文。".length, part: "content" },
+    }} contentDiff={{
+      original_content: "甲旧。\n\n乙原文。", current_content: current,
+      hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲旧。", new_text: "甲新。" }],
+    }} onContentDiffDecision={vi.fn()} onClose={vi.fn()} />);
+    const unchanged = container.querySelector("[data-testid=chapter-body] [data-node-reference-hit]");
+    expect(unchanged?.textContent).toContain("乙原文。");
+    expect(unchanged?.textContent).not.toContain("甲新。");
+
+    rerender(<NodeDetailDrawer node={{
+      id: "diff-range-ref", type: "chapter", label: "章节", content: current,
+      sourceReference: { start: changedStart, end: changedStart + "甲新。".length, part: "content" },
+    }} contentDiff={{
+      original_content: "甲旧。\n\n乙原文。", current_content: current,
+      hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲旧。", new_text: "甲新。" }],
+    }} onContentDiffDecision={vi.fn()} onClose={vi.fn()} />);
+    const changed = container.querySelector("[data-testid=chapter-body] [data-node-reference-hit]");
+    expect(changed?.textContent).toContain("甲新。");
+    expect(changed?.textContent).not.toContain("乙原文。");
+  });
+
+  it("highlights a body reference in the chapter text and leaves the notes alone", () => {
+    const notes = "xxxxxx装备清单";
+    const content = "yyyyyy借着悬空";
+    const { container } = render(<NodeDetailDrawer node={{
+      id: "split-ref", type: "chapter", label: "章节", content, notes,
+      sourceReference: { start: 6, end: 10, part: "content" },
+    }} onClose={vi.fn()} />);
+    expect(container.querySelector("[data-testid=chapter-notes] [data-node-reference-hit]")).toBeNull();
+    expect(container.querySelector("[data-testid=chapter-body] [data-node-reference-hit]")?.textContent).toContain("借着悬空");
+  });
+
+  it("highlights a notes reference in the notes and leaves the body alone", () => {
+    const notes = "xxxxxx装备清单";
+    const content = "yyyyyy借着悬空";
+    const { container } = render(<NodeDetailDrawer node={{
+      id: "notes-ref", type: "chapter", label: "章节", content, notes,
+      sourceReference: { start: 6, end: 10, part: "notes" },
+    }} onClose={vi.fn()} />);
+    expect(container.querySelector("[data-testid=chapter-body] [data-node-reference-hit]")).toBeNull();
+    expect(container.querySelector("[data-testid=chapter-notes] [data-node-reference-hit]")?.textContent).toContain("装备清单");
+  });
+
+  it("highlights the numbered paragraph even when the same text appears twice", () => {
+    const content = "甲。\n\n甲。";
+    const { container } = render(<NodeDetailDrawer node={{ id: "ref-span", type: "chapter", label: "章节", content, sourceReference: { start: 4, end: 6 } }} onClose={vi.fn()} />);
+    const hits = container.querySelectorAll("[data-node-reference-hit]");
+    expect(hits).toHaveLength(1);
+    expect(hits[0].textContent).toContain("甲。");
+    expect(container.textContent.indexOf("甲。")).toBeLessThan(container.textContent.lastIndexOf("甲。"));
+  });
+
+  it("highlights one markdown list item from the source range", () => {
+    const content = "# 情节一\n\n- 甲\n- 乙";
+    const start = content.lastIndexOf("- 乙");
+    const { container } = render(<NodeDetailDrawer node={{
+      id: "plot-ref", type: "plot", label: "情节", content,
+      sourceReference: { start, end: start + "- 乙".length, part: "content" },
+    }} onUpdate={vi.fn()} onClose={vi.fn()} />);
+    const hit = container.querySelector("[data-node-reference-hit]");
+    expect(hit?.textContent).toContain("乙");
+    expect(hit?.textContent).not.toContain("甲");
+  });
+
+  it("locates a repeated list change by source offset and can reject only that item", async () => {
+    const old = "- 同样\n- 同样";
+    const current = "- 同样\n- 改后";
+    const start = old.indexOf("\n") + 1;
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    const { container } = render(<NodeDetailDrawer node={{
+      id: "plot-dup", type: "plot", label: "情节", content: current,
+      diffTarget: { field: "content", hunk: { type: "replace", start_offset: start, paragraph_index: 2, old_text: "- 同样", new_text: "- 改后" } },
+    }} contentDiff={{
+      grouping: "agent_replacements", original_content: old, current_content: current,
+      hunks: [{ type: "replace", start_offset: start, paragraph_index: 2, old_text: "- 同样", new_text: "- 改后" }],
+    }} onContentDiffDecision={onDecision} onContentDiffChange={vi.fn()} onClose={vi.fn()} />);
+    await waitFor(() => expect(container.querySelector("[data-diff-navigation-hit]")?.textContent).toContain("改后"));
+    fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+    await waitFor(() => expect(onDecision).toHaveBeenCalledWith("plot-dup", expect.objectContaining({
+      current_content: old,
+      groups: [],
+    })));
+  });
+
   it("highlights a referenced plain-text paragraph without parsing Markdown syntax", () => {
     const { container } = render(<NodeDetailDrawer node={{ id: "ref", type: "chapter", label: "章节", content: "前文\n\n这里有**重要**线索。", sourceReference: "这里有**重要**线索。" }} onClose={vi.fn()} />);
     expect(container.querySelector("[data-node-reference-hit]")?.textContent).toBe("这里有**重要**线索。");
@@ -275,17 +439,18 @@ describe("NodeDetailDrawer", () => {
     expect(screen.queryByText("char-uuid-1")).toBeNull();
   });
 
-  it("cycles through each occurrence of a character name in chapter content", () => {
-    const addRange = vi.fn();
-    const removeAllRanges = vi.fn();
-    vi.spyOn(window, "getSelection").mockReturnValue({ addRange, removeAllRanges });
-    render(
+  it("keeps a visible character highlight while cycling only through chapter prose", () => {
+    const highlights = new Map();
+    vi.stubGlobal("CSS", { highlights });
+    vi.stubGlobal("Highlight", class extends Set { constructor(...ranges) { super(ranges); } });
+    const { unmount, container } = render(
       <NodeDetailDrawer
         node={{
           id: "chapter-character-navigation",
           type: "chapter",
           label: "第一章",
           content: "林川看见林川。",
+          notes: "林川的章节笔记",
           extra_data: { characters: [{ id: "char-1", name: "林川" }] },
         }}
         onClose={vi.fn()}
@@ -293,11 +458,37 @@ describe("NodeDetailDrawer", () => {
     );
 
     const characterButton = screen.getByRole("button", { name: "定位角色：林川" });
-    fireEvent.click(characterButton);
-    fireEvent.click(characterButton);
-    fireEvent.click(characterButton);
+    const offsets = [];
+    for (let index = 0; index < 3; index += 1) {
+      fireEvent.click(characterButton);
+      expect(highlights.size).toBe(1);
+      const [range] = [...highlights.values()][0];
+      expect(screen.getByTestId("chapter-prose").contains(range.startContainer)).toBe(true);
+      expect(range.toString()).toBe("林川");
+      offsets.push(range.startOffset);
+      window.getSelection().removeAllRanges();
+      expect(highlights.size).toBe(1);
+    }
+    expect(offsets).toEqual([0, 4, 0]);
+    expect(container.querySelector("style").textContent).toContain("::highlight(");
+    unmount();
+    expect(highlights.size).toBe(0);
+    vi.unstubAllGlobals();
+  });
 
-    expect(addRange.mock.calls.map(([range]) => range.startOffset)).toEqual([0, 4, 0]);
+  it("clears character navigation highlights when the chapter changes", () => {
+    const highlights = new Map();
+    vi.stubGlobal("CSS", { highlights });
+    vi.stubGlobal("Highlight", class extends Set { constructor(...ranges) { super(ranges); } });
+    const node = { id: "one", type: "chapter", label: "第一章", content: "林川。", extra_data: { characters: [{ name: "林川" }] } };
+    const { rerender, unmount } = render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+    const characterButton = screen.getByRole("button", { name: "定位角色：林川" });
+    fireEvent.click(characterButton);
+    expect(highlights.size).toBe(1);
+    rerender(<NodeDetailDrawer node={{ ...node, id: "two", content: "第二章的林川。" }} onClose={vi.fn()} />);
+    expect(highlights.size).toBe(0);
+    unmount();
+    vi.unstubAllGlobals();
   });
 
   it("keeps chapter metadata in a left-aligned header outside the body scroller", () => {
@@ -340,6 +531,22 @@ describe("NodeDetailDrawer", () => {
     expect(boldText.className).not.toContain("bg-amber-100");
   });
 
+  it("quotes diff prose without toolbar labels and deletion markers", () => {
+    const node = { id: "quote-diff", type: "chapter", label: "章节", content: "雨夜来客。", extra_data: {} };
+    const onAddContext = vi.fn();
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} onAddContext={onAddContext}
+      contentDiff={{ hunks: [{ type: "replace", paragraph_index: 1, old_text: "雨夜旧门来客。", new_text: "雨夜来客。" }] }} />);
+    const hunk = screen.getByTestId("inline-diff-hunk");
+    const range = document.createRange();
+    range.selectNodeContents(hunk);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.mouseUp(screen.getByTestId("node-detail-scroll"));
+    fireEvent.click(screen.getByRole("button", { name: "引用此段" }));
+    expect(onAddContext).toHaveBeenCalledWith(node, "雨夜来客。");
+  });
+
   it("shows 引用此段 after selecting text and adds that quote to conversation context", () => {
     const node = {
       id: "plot-1",
@@ -360,7 +567,11 @@ describe("NodeDetailDrawer", () => {
     const selectedNode = screen.getByText("林川在废墟中遇见苏婉。").firstChild;
     vi.spyOn(window, "getSelection").mockReturnValue({
       rangeCount: 1,
-      getRangeAt: () => ({ commonAncestorContainer: selectedNode }),
+      getRangeAt: () => ({ commonAncestorContainer: selectedNode, cloneContents: () => {
+        const fragment = document.createDocumentFragment();
+        fragment.append(document.createTextNode("废墟中遇见苏婉"));
+        return fragment;
+      } }),
       toString: () => "废墟中遇见苏婉",
     });
 
@@ -394,6 +605,11 @@ describe("NodeDetailDrawer", () => {
       rangeCount: 1,
       getRangeAt: () => ({
         commonAncestorContainer: selectedNode,
+        cloneContents: () => {
+          const fragment = document.createDocumentFragment();
+          fragment.append(document.createTextNode("雨夜来客"));
+          return fragment;
+        },
         getBoundingClientRect: () => ({ left: 40, right: 180, top: 120, bottom: 148, width: 140, height: 28 }),
       }),
       toString: () => "雨夜来客",
@@ -425,7 +641,11 @@ describe("NodeDetailDrawer", () => {
     const selectedNode = contentBeforeSelection.firstChild;
     vi.spyOn(window, "getSelection").mockReturnValue({
       rangeCount: 1,
-      getRangeAt: () => ({ commonAncestorContainer: selectedNode }),
+      getRangeAt: () => ({ commonAncestorContainer: selectedNode, cloneContents: () => {
+        const fragment = document.createDocumentFragment();
+        fragment.append(document.createTextNode("废墟中遇见苏婉"));
+        return fragment;
+      } }),
       toString: () => "废墟中遇见苏婉",
     });
 
@@ -572,11 +792,11 @@ describe("NodeDetailDrawer", () => {
     const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
     render(
       <NodeDetailDrawer
-        node={{ id: "diff-history", type: "chapter", label: "第一章", content: "新文。", extra_data: {} }}
+        node={{ id: "diff-history", type: "chapter", label: "第一章", content: "这一段新正文。", extra_data: {} }}
         contentDiff={{
-          original_content: "旧文。",
-          current_content: "新文。",
-          hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧文。", new_text: "新文。" }],
+          original_content: "这一段旧正文。",
+          current_content: "这一段新正文。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "这一段旧正文。", new_text: "这一段新正文。" }],
         }}
         onClose={vi.fn()}
         onContentDiffDecision={onContentDiffDecision}
@@ -589,19 +809,19 @@ describe("NodeDetailDrawer", () => {
 
     fireEvent.keyDown(document, { key: "z", ctrlKey: true });
     await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(2, "diff-history", {
-      expected_content: "新文。",
-      expected_baseline: "新文。",
-      baseline_content: "旧文。",
-      current_content: "新文。",
+      expected_content: "这一段新正文。",
+      expected_baseline: "这一段新正文。",
+      baseline_content: "这一段旧正文。",
+      current_content: "这一段新正文。",
     }));
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     fireEvent.keyDown(document, { key: "y", ctrlKey: true });
     await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(3, "diff-history", {
-      expected_content: "新文。",
-      expected_baseline: "旧文。",
-      baseline_content: "新文。",
-      current_content: "新文。",
+      expected_content: "这一段新正文。",
+      expected_baseline: "这一段旧正文。",
+      baseline_content: "这一段新正文。",
+      current_content: "这一段新正文。",
     }));
   });
 
@@ -609,11 +829,11 @@ describe("NodeDetailDrawer", () => {
     const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
     render(
       <NodeDetailDrawer
-        node={{ id: "reject-history", type: "chapter", label: "第一章", content: "新文。", extra_data: {} }}
+        node={{ id: "reject-history", type: "chapter", label: "第一章", content: "这一段新正文。", extra_data: {} }}
         contentDiff={{
-          original_content: "旧文。",
-          current_content: "新文。",
-          hunks: [{ type: "replace", paragraph_index: 1, old_text: "旧文。", new_text: "新文。" }],
+          original_content: "这一段旧正文。",
+          current_content: "这一段新正文。",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "这一段旧正文。", new_text: "这一段新正文。" }],
         }}
         onClose={vi.fn()}
         onContentDiffDecision={onContentDiffDecision}
@@ -626,10 +846,10 @@ describe("NodeDetailDrawer", () => {
     fireEvent.keyDown(document, { key: "z", ctrlKey: true });
 
     await waitFor(() => expect(onContentDiffDecision).toHaveBeenNthCalledWith(2, "reject-history", {
-      expected_content: "旧文。",
-      expected_baseline: "旧文。",
-      baseline_content: "旧文。",
-      current_content: "新文。",
+      expected_content: "这一段旧正文。",
+      expected_baseline: "这一段旧正文。",
+      baseline_content: "这一段旧正文。",
+      current_content: "这一段新正文。",
     }));
   });
 
@@ -750,14 +970,14 @@ describe("NodeDetailDrawer", () => {
     }));
   });
 
-  it("keeps one submitted replacement indivisible in the frontend", () => {
+  it("merges nearby changed fragments within a submitted replacement", () => {
     render(
       <NodeDetailDrawer
-        node={{ id: "partial-inline", type: "chapter", label: "第一章", content: "甲新乙改丙", extra_data: {} }}
+        node={{ id: "partial-inline", type: "chapter", label: "第一章", content: "甲新乙改丙丁戊己", extra_data: {} }}
         contentDiff={{
-          original_content: "甲旧乙旧丙",
-          current_content: "甲新乙改丙",
-          hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲旧乙旧丙", new_text: "甲新乙改丙" }],
+          original_content: "甲旧乙旧丙丁戊己",
+          current_content: "甲新乙改丙丁戊己",
+          hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲旧乙旧丙丁戊己", new_text: "甲新乙改丙丁戊己" }],
         }}
         onClose={vi.fn()}
         onContentDiffDecision={vi.fn()}
@@ -765,29 +985,43 @@ describe("NodeDetailDrawer", () => {
       />,
     );
 
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新乙改丙");
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新乙改丙丁戊己");
     expect(screen.getByTestId("inline-diff-new").querySelectorAll("[data-diff-kind]")).toHaveLength(1);
+    expect(screen.getAllByRole("button", { name: "查看修改原文" })).toHaveLength(1);
     expect(screen.queryByRole("button", { name: "查看替换前文本" })).toBeNull();
     expect(screen.queryByRole("button", { name: "删除新增文本" })).toBeNull();
   });
 
-  it("keeps inserted text inside a replacement in the same submitted group", () => {
+  it.each([false, true])("deletes a green insertion while preserving the other pending replacement (grouped=%s)", async (grouped) => {
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
     render(
       <NodeDetailDrawer
-        node={{ id: "remove-inline-insert", type: "chapter", label: "第一章", content: "甲新增乙新丙", extra_data: {} }}
+        node={{ id: "remove-inline-insert", type: "chapter", label: "第一章", content: "甲新增乙新丙丁戊己", extra_data: {} }}
         contentDiff={{
-          original_content: "甲乙旧丙",
-          current_content: "甲新增乙新丙",
-          hunks: [{ type: "replace", paragraph_index: 1, old_text: "甲乙旧丙", new_text: "甲新增乙新丙" }],
+          ...(grouped ? { grouping: "agent_replacements" } : {}),
+          original_content: "甲乙旧丙丁戊己",
+          current_content: "甲新增乙新丙丁戊己",
+          hunks: [{ type: "replace", paragraph_index: 1, ...(grouped ? { start_offset: 0 } : {}), old_text: "甲乙旧丙丁戊己", new_text: "甲新增乙新丙丁戊己" }],
         }}
         onClose={vi.fn()}
-        onContentDiffDecision={vi.fn()}
-        onContentDiffChange={vi.fn()}
+        onContentDiffDecision={onContentDiffDecision}
+        onContentDiffChange={onContentDiffChange}
       />,
     );
 
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新增乙新丙");
+    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲新增乙新丙丁戊己");
+    fireEvent.click(screen.getByText("新增"));
+    expect(screen.queryByRole("tooltip")).toBeNull();
+    expect(screen.queryByRole("textbox", { name: "编辑新文内容" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "删除新增文本" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("remove-inline-insert", expect.objectContaining({
+      expected_content: "甲新增乙新丙丁戊己", expected_baseline: "甲乙旧丙丁戊己",
+      baseline_content: "甲乙旧丙丁戊己", current_content: "甲乙新丙丁戊己",
+    })));
+    await waitFor(() => expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲乙新丙丁戊己"));
     expect(screen.queryByRole("button", { name: "删除新增文本" })).toBeNull();
+    expect(screen.getByRole("button", { name: "查看修改原文" }).textContent).toBe("新");
   });
 
   it("keeps deleted diff text read-only", () => {
@@ -881,7 +1115,7 @@ describe("NodeDetailDrawer", () => {
     );
 
     expect(screen.getByText("生成预览")).toBeDefined();
-    expect(screen.getByTestId("inline-diff-hunk")).toBeDefined();
+    expect(screen.getAllByTestId("inline-diff-hunk")).toHaveLength(2);
     expect(screen.queryByRole("button", { name: "保留修改" })).toBeNull();
     expect(screen.queryByRole("button", { name: "撤回修改" })).toBeNull();
     expect(screen.queryByRole("button", { name: "全部保留" })).toBeNull();
@@ -1049,7 +1283,7 @@ describe("NodeDetailDrawer", () => {
       onClose={vi.fn()}
     />);
 
-    fireEvent.click(screen.getByRole("button", { name: "保留修改" }));
+    fireEvent.click(screen.getByRole("button", { name: "全部保留" }));
 
     await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith(
       "chapter-refreshed",
@@ -1115,22 +1349,56 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByTestId("inline-diff-new").textContent).toBe("开场改。");
   });
 
-  it("keeps a multiline agent replacement as one group after a leading insertion", async () => {
+  it("gives every paragraph its own toolbar and rejects only that paragraph", async () => {
     const old = "A\n\nB\n\nC";
     const next = "X\n\nA′\n\nB′\n\nC′";
     const onDecision = vi.fn().mockResolvedValue(undefined);
     render(<NodeDetailDrawer
-      node={{ id: "grouped", type: "plot", label: "工具分组", content: next, extra_data: {} }}
+      node={{ id: "grouped", type: "chapter", label: "章节", content: next, extra_data: {} }}
       contentDiff={{ grouping: "agent_replacements", original_content: old, current_content: next,
-        hunks: [{ type: "replace", paragraph_index: 1, start_offset: 0, old_text: old, new_text: next }] }}
+        hunks: [{ type: "replace", start_offset: 0, old_text: old, new_text: next }] }}
       onContentDiffDecision={onDecision} onContentDiffChange={vi.fn()} onClose={vi.fn()}
     />);
-    expect(screen.getAllByTestId("inline-diff-hunk")).toHaveLength(1);
-    expect(screen.getByTestId("inline-diff-new").textContent.replaceAll("×", "")).toBe(next);
-    fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+    expect(screen.getAllByRole("button", { name: "保留修改" })).toHaveLength(4);
+    expect(screen.getAllByRole("button", { name: "撤回修改" })).toHaveLength(4);
+    fireEvent.click(screen.getAllByRole("button", { name: "撤回修改" })[1]);
     await waitFor(() => expect(onDecision).toHaveBeenCalledWith("grouped", expect.objectContaining({
-      baseline_content: old, current_content: old, groups: [],
+      expected_content: next, expected_baseline: old,
+      baseline_content: old, current_content: "X\n\nA\n\nB′\n\nC′",
+      groups: expect.any(Array),
     })));
+    expect(screen.getAllByRole("button", { name: "撤回修改" })).toHaveLength(3);
+  });
+
+  it("keeps every agent group with one decision when accepting all", async () => {
+    const old = "甲旧。\n\n乙旧。";
+    const next = "甲新。\n\n乙新。";
+    const onDecision = vi.fn().mockResolvedValue(undefined);
+    decideAgentGroup.mockClear();
+    render(<NodeDetailDrawer
+      node={{ id: "chapter-keep-all", type: "chapter", label: "第一章", content: next, extra_data: {} }}
+      contentDiff={{
+        grouping: "agent_replacements",
+        original_content: old,
+        current_content: next,
+        hunks: [
+          { type: "replace", start_offset: 0, old_text: "甲旧。", new_text: "甲新。" },
+          { type: "replace", start_offset: Array.from("甲旧。\n\n").length, old_text: "乙旧。", new_text: "乙新。" },
+        ],
+      }}
+      onContentDiffDecision={onDecision}
+      onContentDiffChange={vi.fn()}
+      onClose={vi.fn()}
+    />);
+
+    fireEvent.click(screen.getByRole("button", { name: "全部保留" }));
+
+    await waitFor(() => expect(onDecision).toHaveBeenCalledWith("chapter-keep-all", expect.objectContaining({
+      baseline_content: next,
+      current_content: next,
+      groups: [],
+    })));
+    expect(onDecision).toHaveBeenCalledTimes(1);
   });
 
   it("can edit an unchanged paragraph while an agent group is pending", async () => {
@@ -1448,13 +1716,39 @@ describe("NodeDetailDrawer", () => {
 
   it("enlarges chapter typography in fullscreen mode", () => {
     const node = { id: "large-chapter", type: "chapter", label: "第一章", content: "正文" };
-    const { container } = render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
+    render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
 
-    expect(container.querySelector(".text-lg.leading-relaxed")).not.toBeNull();
+    expect(screen.getByTestId("chapter-prose").className).toContain("text-lg");
+    expect(screen.getByTestId("chapter-prose").className).toContain("leading-[2.4]");
     fireEvent.click(screen.getByTitle("全屏查看"));
 
-    expect(container.querySelector(".text-xl.leading-loose")).not.toBeNull();
-    expect(container.querySelector(".text-2xl")).not.toBeNull();
+    expect(screen.getByTestId("chapter-prose").className).toContain("text-xl");
+    expect(screen.getByTestId("chapter-prose").className).toContain("leading-[2.4]");
+    expect(screen.getByRole("heading", { name: "第一章" }).className).toContain("text-2xl");
+  });
+
+  it("uses a wider gap between chapter paragraphs than within a paragraph", () => {
+    render(
+      <NodeDetailDrawer
+        node={{
+          id: "chapter-spacing",
+          type: "chapter",
+          label: "第一章",
+          content: "第一段第一行\n还在段内。\n\n第二段。",
+          extra_data: {},
+        }}
+        onClose={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
+    );
+
+    const stack = screen.getByTestId("chapter-paragraphs");
+    expect(stack.className).toContain("gap-8");
+    const paragraphs = stack.querySelectorAll("p");
+    expect(paragraphs).toHaveLength(2);
+    expect(paragraphs[0].className).toContain("leading-[2.4]");
+    expect(paragraphs[0].textContent).toBe("第一段第一行\n还在段内。");
+    expect(paragraphs[1].textContent).toBe("第二段。");
   });
 
   it("restores the last scroll position when reopening the same node", async () => {
@@ -1678,4 +1972,146 @@ describe("NodeDetailDrawer", () => {
     expect(screen.queryByText("添加元素")).toBeNull();
     expect(screen.queryByPlaceholderText("元素标题")).toBeNull();
   });
+});
+
+
+describe("local original-text decisions", () => {
+  it.each([false, true])("persists restore/delete independently and retains the other pending change (grouped=%s)", async (grouped) => {
+    const original = "始祖血脉在体内涌动，旧光照亮石室。";
+    const current = "霸道血气在体内涌动，新光照亮石室。";
+    const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+    const onContentDiffChange = vi.fn();
+    render(<NodeDetailDrawer
+      node={{ id: "local-decisions", type: "chapter", label: "第一章", content: current, extra_data: {} }}
+      contentDiff={{ ...(grouped ? { grouping: "agent_replacements" } : {}), original_content: original, current_content: current,
+        hunks: [{ type: "replace", paragraph_index: 1, ...(grouped ? { start_offset: 0 } : {}), old_text: original, new_text: current }] }}
+      onClose={vi.fn()} onContentDiffDecision={onContentDiffDecision} onContentDiffChange={onContentDiffChange}
+    />);
+    fireEvent.click(screen.getByText("霸道血气"));
+    fireEvent.click(screen.getByRole("button", { name: "恢复" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("local-decisions", expect.objectContaining({
+      expected_content: current, expected_baseline: original, baseline_content: original,
+      current_content: "始祖血脉在体内涌动，新光照亮石室。",
+    })));
+    await waitFor(() => expect(screen.queryByText("霸道血气")).toBeNull());
+    fireEvent.click(screen.getByText("新"));
+    fireEvent.click(screen.getByRole("button", { name: "删除" }));
+    await waitFor(() => expect(onContentDiffDecision).toHaveBeenLastCalledWith("local-decisions", expect.objectContaining({
+      expected_content: "始祖血脉在体内涌动，新光照亮石室。", expected_baseline: original,
+      baseline_content: "始祖血脉在体内涌动，新光照亮石室。",
+      current_content: "始祖血脉在体内涌动，新光照亮石室。",
+    })));
+    await waitFor(() => expect(onContentDiffChange).toHaveBeenLastCalledWith(null));
+  });
+});
+
+
+it.each([false, true])("removes an inserted chapter paragraph and saves the remaining text (grouped=%s)", async (grouped) => {
+  const original = "首段。";
+  const current = "首段。\n\n新增段。";
+  const onContentDiffDecision = vi.fn().mockResolvedValue(undefined);
+  const onContentDiffChange = vi.fn();
+  const { rerender } = render(<NodeDetailDrawer
+    node={{ id: "delete-inserted-paragraph", type: "chapter", label: "章节", content: current, extra_data: {} }}
+    contentDiff={{ ...(grouped ? { grouping: "agent_replacements" } : {}), original_content: original, current_content: current,
+      hunks: [{ type: "insert_after", paragraph_index: 1, ...(grouped ? { start_offset: original.length } : {}), old_text: "", new_text: grouped ? "\n\n新增段。" : "新增段。" }] }}
+    onClose={vi.fn()} onContentDiffDecision={onContentDiffDecision} onContentDiffChange={onContentDiffChange}
+  />);
+  fireEvent.click(screen.getByRole("button", { name: "删除新增文本" }));
+  await waitFor(() => expect(onContentDiffDecision).toHaveBeenCalledWith("delete-inserted-paragraph", expect.objectContaining({
+    expected_content: current, expected_baseline: original, baseline_content: original, current_content: original,
+  })));
+  await waitFor(() => expect(onContentDiffChange).toHaveBeenLastCalledWith(null));
+  expect(screen.queryByText("新增段。")).toBeNull();
+  rerender(<NodeDetailDrawer
+    node={{ id: "delete-inserted-paragraph", type: "chapter", label: "章节", content: "用户手动更新的正文。", extra_data: {} }}
+    contentDiff={null} onClose={vi.fn()} onContentDiffDecision={onContentDiffDecision} onContentDiffChange={onContentDiffChange}
+  />);
+  expect(screen.getByText("用户手动更新的正文。")).toBeTruthy();
+});
+
+it.each([
+  ["", "新增甲。\n\n新增乙。", 0, "撤回修改", "", "新增乙。"],
+  ["", "新增甲。\n\n新增乙。", 0, "保留修改", "新增甲。", "新增甲。\n\n新增乙。"],
+  ["删除甲。\n\n删除乙。", "", 0, "保留修改", "删除乙。", ""],
+  ["删除甲。\n\n删除乙。", "", 1, "撤回修改", "删除甲。\n\n删除乙。", "删除乙。"],
+  ["😀甲的旧正文。\n\n乙的旧正文。", "😀甲的新正文。\n\n乙的新正文。", 1, "撤回修改", "😀甲的旧正文。\n\n乙的旧正文。", "😀甲的新正文。\n\n乙的旧正文。"],
+])("persists one paragraph decision independently: %s -> %s (%s %s)", async (old, current, index, action, baseline, next) => {
+  const { applyAgentGroups } = await import("../../lib/agentContentDiff");
+  const onDecision = vi.fn().mockResolvedValue(undefined);
+  const onChange = vi.fn();
+  const props = { onClose: vi.fn(), onContentDiffDecision: onDecision, onContentDiffChange: onChange };
+  const { rerender } = render(<NodeDetailDrawer {...props}
+    node={{ id: "paragraph-decision", type: "chapter", label: "章节", content: current, extra_data: {} }}
+    contentDiff={{ grouping: "agent_replacements", original_content: old, current_content: current,
+      hunks: [{ start_offset: 0, old_text: old, new_text: current }] }}
+  />);
+  expect(screen.getAllByRole("button", { name: action })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("button", { name: action })[index]);
+  await waitFor(() => expect(onDecision).toHaveBeenCalledTimes(1));
+  const payload = onDecision.mock.calls[0][1];
+  expect(payload.baseline_content).toBe(baseline);
+  expect(payload.current_content).toBe(next);
+  expect(applyAgentGroups(baseline, payload.groups)).toBe(next);
+  await waitFor(() => expect(screen.getAllByRole("button", { name: action })).toHaveLength(1));
+  const savedDiff = onChange.mock.calls.at(-1)[0];
+  rerender(<NodeDetailDrawer {...props}
+    node={{ id: "paragraph-decision", type: "chapter", label: "章节", content: next, extra_data: {} }}
+    contentDiff={savedDiff}
+  />);
+  expect(screen.getAllByRole("button", { name: action })).toHaveLength(1);
+});
+
+it("switches comparison for just one paragraph", () => {
+  render(<NodeDetailDrawer node={{ id: "compare-paragraph", type: "chapter", label: "章节", content: "甲的新正文。\n\n乙的新正文。", extra_data: {} }}
+    contentDiff={{ grouping: "agent_replacements", original_content: "甲的旧正文。\n\n乙的旧正文。", hunks: [
+      { start_offset: 0, old_text: "甲的旧正文。\n\n乙的旧正文。", new_text: "甲的新正文。\n\n乙的新正文。" },
+    ] }} onClose={vi.fn()} />);
+  expect(screen.getAllByRole("button", { name: "对照" })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("button", { name: "对照" })[1]);
+  expect(screen.getAllByRole("button", { name: "结果" })).toHaveLength(1);
+  expect(screen.getAllByRole("button", { name: "对照" })).toHaveLength(1);
+  expect(screen.getByTestId("inline-diff-old").textContent).toBe("乙的旧正文。");
+});
+
+it("also separates consecutive inserted paragraphs in legacy diffs", async () => {
+  const onDecision = vi.fn().mockResolvedValue(undefined);
+  render(<NodeDetailDrawer node={{ id: "legacy-insert", type: "chapter", label: "章节", content: "甲。\n\n乙。", extra_data: {} }}
+    contentDiff={{ original_content: "", current_content: "甲。\n\n乙。", hunks: [
+      { type: "insert_after", paragraph_index: 0, old_text: "", new_text: "甲。\n\n乙。" },
+    ] }} onClose={vi.fn()} onContentDiffDecision={onDecision} onContentDiffChange={vi.fn()} />);
+  expect(screen.getAllByRole("button", { name: "撤回修改" })).toHaveLength(2);
+  fireEvent.click(screen.getAllByRole("button", { name: "撤回修改" })[1]);
+  await waitFor(() => expect(onDecision).toHaveBeenCalledWith("legacy-insert", expect.objectContaining({
+    baseline_content: "", current_content: "甲。",
+  })));
+});
+
+
+it("reviews unrelated paragraphs independently after a whole-chapter submission and reload", async () => {
+  const old = "梁超背着鼓鼓囊囊的战术包跑在最前头，两只脚倒腾得飞快。他一边跑一边揪住身旁一个学生的肩膀往后一推，自己借力窜出两步。被推倒的学生膝盖还没撑起来，一头四肢着地的丧尸已经扑上去，惨叫只响了半截。";
+  const next = "他没回头，肩膀一沉把包带顶回去，管钳从腰后抽出来，锯齿从下往上撩，砸在那东西后颈。头骨塌进去一块，黑血顺着脊梁淌下来。";
+  const baseline = `开头。\n\n${old}\n\n结尾。`;
+  const current = `开头。\n\n${next}\n\n结尾。`;
+  const onDecision = vi.fn().mockResolvedValue(undefined);
+  const onChange = vi.fn();
+  const props = { onClose: vi.fn(), onContentDiffDecision: onDecision, onContentDiffChange: onChange };
+  const node = { id: "unrelated-chapter", type: "chapter", label: "章节", content: current, extra_data: {} };
+  const { rerender } = render(<NodeDetailDrawer {...props} node={node}
+    contentDiff={{ grouping: "agent_replacements", original_content: baseline, current_content: current,
+      hunks: [{ start_offset: 0, old_text: baseline, new_text: current }] }} />);
+  expect(screen.getAllByRole("button", { name: "撤回修改" })).toHaveLength(2);
+  const insertion = screen.getByTestId("inline-diff-new").closest('[data-testid="inline-diff-hunk"]');
+  expect(within(insertion).queryByTestId("inline-diff-old")).toBeNull();
+  fireEvent.click(within(insertion).getByRole("button", { name: "撤回修改" }));
+  await waitFor(() => expect(onDecision).toHaveBeenCalledWith(node.id, expect.objectContaining({
+    expected_baseline: baseline, baseline_content: baseline, current_content: "开头。\n\n结尾。",
+  })));
+  await waitFor(() => expect(onChange).toHaveBeenCalled());
+  rerender(<NodeDetailDrawer {...props} node={{ ...node, content: "开头。\n\n结尾。" }} contentDiff={onChange.mock.calls.at(-1)[0]} />);
+  expect(screen.getAllByRole("button", { name: "撤回修改" })).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: "撤回修改" }));
+  await waitFor(() => expect(onDecision).toHaveBeenLastCalledWith(node.id, expect.objectContaining({
+    baseline_content: baseline, current_content: baseline,
+  })));
 });

@@ -5,7 +5,8 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-const projectConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, "config.json"), "utf8"));
+const configFilename = process.env.NOVEL_ENV === "development" ? "config.dev.json" : "config.json";
+const projectConfig = JSON.parse(fs.readFileSync(path.join(projectRoot, configFilename), "utf8"));
 const mobileConfig = projectConfig.app.mobile;
 
 export default defineConfig({
@@ -24,7 +25,7 @@ export default defineConfig({
     allowedHosts: ["liyicheng12138.cn", "www.liyicheng12138.cn"],
     proxy: {
       "/novel/api": {
-        target: "http://127.0.0.1:9001",
+        target: `http://127.0.0.1:${projectConfig.app.dev_port}`,
         changeOrigin: true,
         rewrite: (path) => path.replace(/^\/novel\/api/, "/api"),
       },

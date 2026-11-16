@@ -1,7 +1,16 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { ResearchPage } from "./ResearchPage";
+
+const backNavigationMocks = vi.hoisted(() => ({ listener: null }));
+
+vi.mock("../lib/appBackNavigation", () => ({
+  subscribeAppBack: vi.fn(async (listener) => {
+    backNavigationMocks.listener = listener;
+    return vi.fn();
+  }),
+}));
 
 const mocks = vi.hoisted(() => ({
   uploadWork: vi.fn(), listWorks: vi.fn(), listSessions: vi.fn(),
@@ -55,7 +64,7 @@ describe("ResearchPage conversations", () => {
     );
 
     await waitFor(() => expect(mocks.listWorks).toHaveBeenCalled());
-    const target = screen.getByText("作品库");
+    const target = screen.getByText("书架");
     const file = new File(["第一章\n正文"], "novel.txt", {
       type: "text/plain",
     });
@@ -82,8 +91,7 @@ describe("ResearchPage conversations", () => {
 
   it("sends the selected work as a message reference", async () => {
     render(<MemoryRouter><ResearchPage /></MemoryRouter>);
-    const workLabels = await screen.findAllByText("novel.txt");
-    fireEvent.click(workLabels[0]);
+    fireEvent.click(await screen.findByRole("button", { name: "引用 novel.txt" }));
     fireEvent.change(screen.getByPlaceholderText("输入研究问题……"), { target: { value: "分析开篇" } });
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledWith("session-1", "分析开篇", "work-1", null));
@@ -115,7 +123,30 @@ describe("ResearchPage conversations", () => {
     fireEvent.click(screen.getByRole("button", { name: "发送" }));
     await waitFor(() => expect(mocks.sendMessage).toHaveBeenCalledWith(
       "session-1", "分析本章", "work-1",
-      { versionId: "clean-v1", sectionIndex: 0 },
+      { versionId: "clean-v1", sectionIndex: 0, heading: "第一章 开始" },
     ));
+  });
+
+  it("closes an open chapter and then leaves on the system back button", async () => {
+    render(
+      <MemoryRouter initialEntries={["/research"]}>
+        <Routes>
+          <Route path="/research" element={<ResearchPage appMode />} />
+          <Route path="/" element={<div>小说画布</div>} />
+        </Routes>
+      </MemoryRouter>,
+    );
+    fireEvent.click(await screen.findByRole("button", { name: "章节阅读" }));
+    fireEvent.click(await screen.findByText("第一章 开始"));
+    expect(await screen.findByText(/章节正文/)).toBeTruthy();
+    expect(document.querySelector(".rs-app").getAttribute("data-reading")).toBe("1");
+    await act(async () => {});
+    const whileReading = backNavigationMocks.listener;
+    await act(async () => { whileReading(); });
+    await waitFor(() => expect(document.querySelector(".rs-app").getAttribute("data-reading")).toBe("0"));
+    expect(screen.queryByText("小说画布")).toBeNull();
+    await act(async () => {});
+    await act(async () => { backNavigationMocks.listener(); });
+    expect(await screen.findByText("小说画布")).toBeTruthy();
   });
 });

@@ -3,15 +3,13 @@ from sqlalchemy.orm import Session
 
 from models.node import Node
 from models.edge import Edge
-from models.character_relation import CharacterRelation
 from schemas.canvas_snapshot import CanvasSnapshot, CanvasRestoreResponse
 
 
 def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -> CanvasRestoreResponse:
-    """将画布恢复到 snapshot 状态（增删改节点/边/角色关系）。"""
+    """将画布恢复到 snapshot 状态（增删改节点和边）。"""
     snap_node_ids = {n.id for n in snapshot.nodes}
     snap_edge_ids = {e.id for e in snapshot.edges}
-    snap_relation_ids = {r.id for r in snapshot.character_relations}
 
     existing_nodes = {
         n.id: n for n in db.query(Node).filter(Node.work_id == work_id).all()
@@ -19,14 +17,6 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
     existing_edges = {
         e.id: e for e in db.query(Edge).filter(Edge.work_id == work_id).all()
     }
-    existing_relations = {
-        r.id: r
-        for r in db.query(CharacterRelation).filter(CharacterRelation.work_id == work_id).all()
-    }
-
-    for relation_id, relation in existing_relations.items():
-        if relation_id not in snap_relation_ids:
-            db.delete(relation)
 
     for edge_id, edge in existing_edges.items():
         if edge_id not in snap_edge_ids:
@@ -93,28 +83,10 @@ def apply_canvas_snapshot(db: Session, work_id: str, snapshot: CanvasSnapshot) -
                 extra_data=snap_edge.extra_data,
             ))
 
-    for snap_relation in snapshot.character_relations:
-        existing = existing_relations.get(snap_relation.id)
-        if existing:
-            existing.source_id = snap_relation.source_id
-            existing.target_id = snap_relation.target_id
-            existing.relation_type = snap_relation.relation_type
-            existing.label = snap_relation.label
-        else:
-            db.add(CharacterRelation(
-                id=snap_relation.id,
-                work_id=work_id,
-                source_id=snap_relation.source_id,
-                target_id=snap_relation.target_id,
-                relation_type=snap_relation.relation_type,
-                label=snap_relation.label,
-            ))
-
     db.commit()
 
     return CanvasRestoreResponse(
         success=True,
         node_count=len(snapshot.nodes),
         edge_count=len(snapshot.edges),
-        relation_count=len(snapshot.character_relations),
     )

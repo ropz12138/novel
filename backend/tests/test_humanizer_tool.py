@@ -1,53 +1,26 @@
-"""小说自然化规则读取工具：完整返回规则，由 supervisor 自行编辑。"""
+"""自然化规则从技能入口完整读取，正文由 Supervisor 直接保存。"""
 import asyncio
 import json
 
-from services.agents import llm as llm_mod
 from services.agents import supervisor as supervisor_mod
-from services.agents.tools import humanizer_tools as ht
+from services.agents.tools import workflow_skill_tools as workflow
 
 
-def test_humanizer_returns_full_skill_without_llm_or_database(monkeypatch, tmp_path):
-    import database
-
-    def unexpected(*args, **kwargs):
-        raise AssertionError("读取规则时不应调用 LLM 或数据库")
-
-    monkeypatch.setattr(llm_mod, "get_llm", unexpected)
-    monkeypatch.setattr(database, "SessionLocal", unexpected)
-    text = "规则开头\n" + "完整规则内容。\n" * 2000 + "规则结尾\n"
-    path = tmp_path / "fiction_humanizer.txt"
-    path.write_text(text, encoding="utf-8")
-    monkeypatch.setattr(ht, "PROMPT_PATH", path)
-
-    result = json.loads(asyncio.run(ht._humanize_node_content_async("chapter-id", "用户要求自然化")))
-
-    assert result["success"] is True
-    assert result["status"] == "skill_loaded"
-    assert result["changed"] is False
-    assert result["node_id"] == "chapter-id"
-    assert result["reason"] == "用户要求自然化"
-    assert result["skill_content"] == text
-    assert "diff" not in result
-    assert "issue_count" not in result
-    assert path.read_text(encoding="utf-8") == text
-
-
-def test_humanizer_missing_skill_reports_failure(monkeypatch, tmp_path):
-    monkeypatch.setattr(ht, "PROMPT_PATH", tmp_path / "missing.txt")
-    result = json.loads(asyncio.run(ht._humanize_node_content_async("chapter-id")))
-    assert result["success"] is False
-    assert "读取小说自然化规则失败" in result["error"]
-    assert "skill_content" not in result
-
-
-def test_humanizer_registered_tool_preserves_inputs():
-    tools = supervisor_mod.SupervisorAgent()._get_tools()
-    assert "humanize_node_content" in {tool.name for tool in tools}
-    assert set(ht.HumanizeNodeContentInput.model_fields) == {"node_id", "reason"}
-    result = json.loads(asyncio.run(ht.humanize_node_content.ainvoke({"node_id": "chapter-id"})))
-    assert result["status"] == "skill_loaded"
-    assert result["skill_content"] == ht.PROMPT_PATH.read_text(encoding="utf-8")
+def test_humanize_skill_returns_complete_rules_without_legacy_tool():
+    tools = {tool.name for tool in supervisor_mod.SupervisorAgent()._get_tools()}
+    assert "humanize_node_content" not in tools
+    assert "load_workflow_skill" in tools
+    assert "read_skill_reference" in tools
+    loaded = json.loads(asyncio.run(workflow.load_workflow_skill.ainvoke({"skill_name": "humanize-fiction"})))
+    assert loaded["success"]
+    assert loaded["references"] == ["chapter_writer.txt", "fiction_humanizer.txt", "humanizer_agent.txt"]
+    for name in loaded["references"]:
+        reference = json.loads(asyncio.run(workflow.read_skill_reference.ainvoke({
+            "skill_name": "humanize-fiction", "reference_name": name,
+        })))
+        source = (workflow.REFERENCE_ROOT / name).read_text(encoding="utf-8")
+        assert reference["success"]
+        assert reference["content"] == source
 
 
 def test_agent_authored_content_uses_direct_save_path(monkeypatch):

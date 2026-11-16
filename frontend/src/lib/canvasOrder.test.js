@@ -2,7 +2,6 @@ import { describe, it, expect } from "vitest";
 import {
   siblingOrderKey,
   compareSiblings,
-  sortSiblings,
   nextSortOrder,
 } from "./canvasOrder";
 
@@ -57,33 +56,6 @@ describe("compareSiblings", () => {
     const first = node("a", { data: { sort_order: 1, label: "第 9 章" } });
     const second = node("b", { data: { sort_order: 2, label: "第 1 章" } });
     expect(compareSiblings(first, second)).toBeLessThan(0);
-  });
-});
-
-describe("sortSiblings", () => {
-  it("按 sort_order 升序排列", () => {
-    const nodes = [
-      node("c3", { data: { sort_order: 3 } }),
-      node("c1", { data: { sort_order: 1 } }),
-      node("c2", { data: { sort_order: 2 } }),
-    ];
-    expect(sortSiblings(nodes).map((n) => n.id)).toEqual(["c1", "c2", "c3"]);
-  });
-
-  it("不修改入参数组", () => {
-    const nodes = [
-      node("c2", { data: { sort_order: 2 } }),
-      node("c1", { data: { sort_order: 1 } }),
-    ];
-    sortSiblings(nodes);
-    expect(nodes.map((n) => n.id)).toEqual(["c2", "c1"]);
-  });
-
-  it("sort_order 全部相同时多次调用结果一致", () => {
-    const nodes = [node("x"), node("y"), node("z")];
-    expect(sortSiblings(nodes).map((n) => n.id)).toEqual(
-      sortSiblings(nodes).map((n) => n.id),
-    );
   });
 });
 

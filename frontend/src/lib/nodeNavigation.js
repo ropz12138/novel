@@ -1,7 +1,7 @@
 import { compareSiblings } from "./canvasOrder";
 import { HIERARCHY_CHAIN } from "./canvasRelation";
 
-const NAVIGATION_GROUPS = [...HIERARCHY_CHAIN, "character", "worldbuilding", "note"];
+const NAVIGATION_GROUPS = [...HIERARCHY_CHAIN, "character", "worldbuilding", "note", "reviewer_note"];
 
 export function firstOutlineNode(nodes) {
   return orderedNavigationNodes(nodes).find((node) => node.type === "outline") ?? null;

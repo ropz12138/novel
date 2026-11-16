@@ -20,7 +20,7 @@ from deepagents.profiles import (
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, messages_from_dict, messages_to_dict
 from langchain.agents.middleware import AgentMiddleware
-from langchain.agents.middleware.types import ModelRequest, ModelResponse
+from langchain.agents.middleware.types import ModelRequest, ModelResponse, hook_config
 
 from services.message_content_utils import extract_tool_calls
 
@@ -55,6 +55,13 @@ def save_summarization_state(scope_kind: str, scope_id: str, update: dict) -> No
     temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
     temporary.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     os.replace(temporary, path)
+
+
+def discard_summarization_state_beyond_history(scope_kind: str, scope_id: str, message_count: int) -> None:
+    """编辑重发截短历史后，压缩点已经对不上时删除摘要状态。"""
+    event = load_summarization_state(scope_kind, scope_id).get("_summarization_event")
+    if event and int(event["cutoff_index"]) > message_count:
+        _summarization_state_path(scope_kind, scope_id).unlink()
 
 
 def load_summarization_state(scope_kind: str, scope_id: str) -> dict:
@@ -94,7 +101,8 @@ class AtomicToolMiddleware(AgentMiddleware):
         from services.agents.supervisor import get_context
         from services.tool_execution_unit import ToolExecutionUnit
 
-        async with self._lock:
+        control = get_context().get('run_control')
+        async with (control.mutation_lock if control else self._lock):
             call_id = str(request.tool_call.get("id") or "")
             unit = ToolExecutionUnit.begin(
                 work_id=self.work_id,
@@ -109,12 +117,73 @@ class AtomicToolMiddleware(AgentMiddleware):
             return result
 
 
+class RuntimeInputMiddleware(AgentMiddleware):
+    """在模型交互边界追加输入；子任务运行时保持当前 Supervisor 上下文。"""
+
+    async def _take(self):
+        from services.agents.supervisor import get_context
+        context = get_context()
+        control = context.get('run_control')
+        if control is None:
+            return []
+        messages = []
+        if control.take_user_messages:
+            messages.extend(await control.take_user_messages())
+        for completion in control.take_completions():
+            message = HumanMessage(content='子任务完成通知：\n' + json.dumps(completion, ensure_ascii=False),
+                                   additional_kwargs={'type': 'subagent_result'})
+            messages.append(message)
+            session_id = context.get('session_id')
+            if session_id:
+                from services.session_store import session_store
+                session_store.add_message(session_id, 'agent_event', message.content,
+                    meta={'type': 'subagent_result'}, work_id=context.get('work_id'))
+            emit = context.get('emit')
+            if emit:
+                await emit('subagent_completed', completion)
+        return messages
+
+    async def abefore_model(self, state, runtime):
+        messages = await self._take()
+        return {'messages': messages} if messages else None
+
+    @hook_config(can_jump_to=['model'])
+    async def aafter_agent(self, state, runtime):
+        from services.agents.supervisor import get_context
+        control = get_context().get('run_control')
+        if control is None:
+            return None
+        messages = await self._take()
+        if not messages and control.active():
+            emit = get_context().get('emit')
+            if emit:
+                await emit('stage_start', {'stage': 'waiting', 'label': '等待子任务，可继续补充要求'})
+            await control.wait()
+            messages = await self._take()
+        if messages:
+            return {'messages': messages, 'jump_to': 'model'}
+        return None
+
+
 class RequireToolCallMiddleware(AgentMiddleware):
     """拒绝纯文本模型响应，并在同一内部上下文要求 Agent 继续或调用结束工具。"""
 
     def __init__(self, *, completion_tool_name: str, max_corrections: int = 2) -> None:
         self.completion_tool_name = completion_tool_name
         self.max_corrections = max_corrections
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_agent(self, state, runtime):
+        from langchain_core.messages import ToolMessage
+        last = state["messages"][-1]
+        if isinstance(last, ToolMessage) and last.name in {self.completion_tool_name, "wait_for_subagents"}:
+            if last.status == "error":
+                return {"jump_to": "model"}
+            if self.completion_tool_name in {"respond_to_user", "submit_retrieved_chapters", "wait_for_subagents"}:
+                payload = json.loads(str(last.content))
+                if payload.get("success") is False:
+                    return {"jump_to": "model"}
+        return None
 
     def _has_tool_call(self, response: ModelResponse) -> bool:
         return any(
@@ -153,6 +222,7 @@ class RequireToolCallMiddleware(AgentMiddleware):
 
 
 DEEP_AGENT_FORBIDDEN_TOOLS = frozenset({
+    "write_todos",
     "task",
     "ls",
     "write_file",
@@ -192,14 +262,19 @@ def build_deep_agent(
         scope_id or session_id,
     )
     persist_compaction = None
+    restore_compaction = None
     if scope_kind and scope_id:
         persist_compaction = lambda update: save_summarization_state(scope_kind, scope_id, update)
+        restore_compaction = lambda: load_summarization_state(scope_kind, scope_id)
     elif session_id:
         persist_compaction = lambda update: save_summarization_state("session", session_id, update)
+        restore_compaction = lambda: load_summarization_state("session", session_id)
     summarization, compact = build_novel_summarization_middleware(
-        model, backend, on_compaction=persist_compaction,
+        model, backend, on_compaction=persist_compaction, restore_state=restore_compaction,
     )
     middleware = [summarization, compact]
+    if completion_tool_name == "respond_to_user":
+        middleware.insert(0, RuntimeInputMiddleware())
     if completion_tool_name:
         middleware.insert(0, RequireToolCallMiddleware(
             completion_tool_name=completion_tool_name,
@@ -212,7 +287,7 @@ def build_deep_agent(
         system_prompt=system_prompt,
         middleware=middleware,
         backend=backend,
-        subagents=[],  # 内置通用 task 保持关闭；Writer、Reviewer 通过显式业务工具调用。
+        subagents=[],  # 内置通用 task 保持关闭；Reviewer 与参考通过显式业务工具调用。
         checkpointer=checkpointer,
         name="novel_supervisor",
     )

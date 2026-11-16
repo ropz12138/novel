@@ -256,11 +256,35 @@ def _stream_supervisor_run(
             "chapter_review_intensity": item["intensity"],
             "run_started_at": datetime.utcnow(),
         }
+        from langchain_core.messages import HumanMessage
+        from services.agents.run_control import AgentRunControl
+
+        async def take_user_messages():
+            messages = []
+            for addition in supervisor_run_queue.take_pending(sid):
+                msg = session_store.add_message(sid, 'user', addition['content'], work_id=item['work_id'])
+                _capture_checkpoint_before_agent(sid, item['work_id'], msg)
+                from services.agents.supervisor import get_context
+                active_context = get_context()
+                active_context['current_user_instruction'] += '\n\n作者补充要求：\n' + addition['content']
+                if addition.get('context_node_ids'):
+                    active_context['context_node_ids'] = addition['context_node_ids']
+                messages.append(HumanMessage(content=addition['content']))
+                await wrapped_emit('queued_message_started', {'message_id': msg['id'], 'content': addition['content']})
+            if messages:
+                await wrapped_emit('queue_updated', _queue_state(sid))
+            return messages
+
+        control = AgentRunControl(take_user_messages=take_user_messages,
+                                  has_user_messages=lambda: bool(supervisor_run_queue.pending(sid)))
+        context['run_control'] = control
+        supervisor_run_queue.attach(sid, control.wake)
         try:
             await _execute_supervisor_run(
                 session_id=sid, user_message=item["content"], context=context, wrapped_emit=emit,
             )
         finally:
+            await control.close()
             more = bool(supervisor_run_queue.pending(sid))
             if more:
                 session_store.update_session(sid, stage="running", status="running")

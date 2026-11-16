@@ -36,4 +36,18 @@ describe("agent replacement groups", () => {
     expect(next.hunks[0].old_text).toBe(hunk.old_text);
     expect(next.hunks[0].new_text).toBe("X\n\nA\n\nB′");
   });
+
+  it("accepts or rejects every group in one pass", () => {
+    const other = { start_offset: Array.from("😀前文。\n\nA\n\nB\n\n").length, old_text: "后文", new_text: "后文改", type: "replace" };
+    const grouped = { ...diff, hunks: [hunk, other] };
+    const accepted = decideAgentGroup(grouped, "all", "accept");
+    const rejected = decideAgentGroup(grouped, "all", "reject");
+
+    expect(accepted.hunks).toEqual([]);
+    expect(accepted.original_content).toBe("😀前文。\n\nX\n\nA′\n\nB′\n\n后文改。");
+    expect(accepted.current_content).toBe(accepted.original_content);
+    expect(rejected.hunks).toEqual([]);
+    expect(rejected.current_content).toBe(baseline);
+    expect(rejected.original_content).toBe(baseline);
+  });
 });

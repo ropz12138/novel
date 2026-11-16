@@ -2,6 +2,7 @@ import { forwardRef, useRef, useState, useCallback, useEffect, useLayoutEffect, 
 import { Bot, Send, Square, Sparkles, Plus, ChevronDown, ChevronRight, Trash2 } from "lucide-react";
 import { useSupervisorChat } from "../hooks/useSupervisorChat";
 import { ChatTimeline } from "./supervisor/ChatTimeline";
+import { CurrentTaskPanel } from "./supervisor/CurrentTaskPanel";
 import { useSmartScroll } from "../hooks/useSmartScroll";
 import { sessionApi } from "../lib/api";
 import { getChapterReviewIntensity, putChapterReviewIntensity } from "../lib/canvasApi";
@@ -17,7 +18,7 @@ export function scrollTopAfterPrepend(previousTop, previousHeight, nextHeight) {
 
 const CHAPTER_REVIEW_INTENSITIES = [
   { value: "low", shortLabel: "低", label: "低 · 不评审，不去 AI 味" },
-  { value: "medium", shortLabel: "中", label: "中 · 各评审一次，并去 AI 味" },
+  { value: "medium", shortLabel: "中", label: "中 · 常规评审，并去 AI 味" },
   { value: "high", shortLabel: "高", label: "高 · 按需复评，并去 AI 味" },
 ];
 
@@ -33,6 +34,7 @@ const NODE_PILL_COLORS = {
   character: "#ec4899",
   worldbuilding: "#8b5cf6",
   note: "#a855f7",
+  reviewer_note: "#d97706",
   element: "#d97706",
 };
 
@@ -347,6 +349,7 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
   const [sessionListOpen, setSessionListOpen] = useState(false);
   const dropdownRef = useRef(null);
   const latestSessionLoadedForWorkRef = useRef(null);
+  const sessionSelectionGenerationRef = useRef(0);
   const [sessionReady, setSessionReady] = useState(false);
 
 
@@ -368,10 +371,11 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
     if (latestSessionLoadedForWorkRef.current === workId) return;
 
     let cancelled = false;
+    const generation = sessionSelectionGenerationRef.current;
     setSessionReady(false);
     (async () => {
       const list = await loadSessions();
-      if (cancelled) return;
+      if (cancelled || generation !== sessionSelectionGenerationRef.current) return;
       if (list === null) {
         setSessionReady(true);
         return;
@@ -419,15 +423,19 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
 
   const handleNewSession = useCallback(() => {
     if (chat.running) return;
+    sessionSelectionGenerationRef.current += 1;
+    latestSessionLoadedForWorkRef.current = workId;
     chat.resetState();
     setSessionReady(true);
     setSessionListOpen(false);
-  }, [chat]);
+  }, [chat, workId]);
 
   const handleSelectSession = useCallback(async (session) => {
+    sessionSelectionGenerationRef.current += 1;
+    latestSessionLoadedForWorkRef.current = workId;
     setSessionListOpen(false);
     await chat.handleSelectSession(session);
-  }, [chat]);
+  }, [chat, workId]);
 
   const handleDeleteSession = useCallback(async (e, id) => {
     e.stopPropagation();
@@ -482,15 +490,55 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
     });
   }, [onStateChange, sessionReady, chat.running, streamLine, sessions, chat.sessionId, chapterReviewIntensity, pendingMessages]);
 
+  const intensityControl = (
+    <div
+      ref={intensityTrackRef}
+      role="slider"
+      aria-label="章节评审强度"
+      aria-valuemin={0}
+      aria-valuemax={2}
+      aria-valuenow={intensityIndex}
+      aria-valuetext={chapterReviewIntensity}
+      aria-disabled={chat.running}
+      tabIndex={chat.running ? -1 : 0}
+      onPointerDown={onIntensityPointerDown}
+      onPointerMove={onIntensityPointerMove}
+      onPointerUp={onIntensityPointerUp}
+      onPointerCancel={onIntensityPointerUp}
+      className={`relative grid h-6 w-[5.5rem] grid-cols-3 rounded-lg bg-[#eceff4] p-0.5 text-xs select-none ${
+        chat.running ? "cursor-not-allowed opacity-50" : "cursor-ew-resize"
+      }`}
+    >
+      <div
+        data-intensity-window
+        data-intensity={chapterReviewIntensity}
+        className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded bg-white shadow-sm ${
+          intensityDragRatio == null ? "transition-transform duration-150" : ""
+        }`}
+        style={{ transform: `translateX(${intensityDisplayRatio * 200}%)` }}
+      />
+      {CHAPTER_REVIEW_INTENSITIES.map((item) => (
+        <span
+          key={item.value}
+          className={`pointer-events-none relative z-10 flex items-center justify-center ${
+            chapterReviewIntensity === item.value ? "font-medium text-gray-900" : "text-gray-500"
+          }`}
+        >
+          {item.shortLabel}
+        </span>
+      ))}
+    </div>
+  );
+
   return (
     <div
       data-testid="agent-chat"
-      className="flex h-full flex-col border-l border-gray-200 bg-white"
+      className={`relative flex h-full min-w-0 w-full flex-col bg-white ${appMode ? "" : "border-l border-gray-200"}`}
       style={{ paddingBottom: `${keyboardInset}px` }}
     >
       {/* Header — 下拉选择器 */}
-      <div ref={dropdownRef} className="relative shrink-0 border-b border-gray-200">
-        <div className="flex items-center justify-between px-3 py-2">
+      <div ref={dropdownRef} className={`relative shrink-0 border-b border-gray-200 bg-white ${appMode ? "pt-[max(2.75rem,calc(env(safe-area-inset-top)+0.625rem))]" : ""}`}>
+        <div className="flex items-center justify-between bg-white px-3 py-2">
           <button
             type="button"
             onClick={onCollapse}
@@ -563,10 +611,12 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
         )}
       </div>
 
+      <CurrentTaskPanel key={`${workId}:${chat.sessionId}`} timeline={chat.timeline} />
+
       {/* 消息列表 */}
       <div
         ref={scrollContainerRef}
-        className="flex-1 overflow-y-auto p-4"
+        className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-4 pb-44"
         onScroll={(event) => {
           if (event.currentTarget.scrollTop <= 48) requestOlderMessages();
         }}
@@ -629,28 +679,35 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
             </div>
           )}
         </div>
+      </div>
 
+      <div
+        data-testid="agent-composer"
+        className="pointer-events-none absolute inset-x-3 z-20"
+        style={{ bottom: `calc(0.75rem + env(safe-area-inset-bottom) + ${keyboardInset}px)` }}
+      >
         {!stickToBottom && chat.timeline.length > 3 && (
           <button
+            type="button"
             onClick={scrollToBottom}
-            className="sticky bottom-2 left-1/2 -translate-x-1/2 flex items-center gap-1 rounded-full bg-white/90 border border-slate-200 px-3 py-1 text-xs text-slate-600 shadow-sm backdrop-blur hover:bg-white hover:border-blue-300 transition-colors"
+            className="pointer-events-auto absolute bottom-full left-1/2 z-10 mb-2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-slate-200 bg-white/90 px-3 py-1 text-xs text-slate-600 shadow-sm backdrop-blur hover:border-blue-300 hover:bg-white"
           >
             回到底部
           </button>
         )}
-      </div>
-
-      {/* 输入框 */}
-      <div className="shrink-0 px-3 py-3 border-t border-gray-200 bg-gray-50">
         <ModifiedNodeCapsules nodes={chat.sessionId ? modifiedNodes : []} onRemove={onRemoveModifiedNode} />
         {pendingMessages.length > 0 && (
-          <div aria-label="待发送消息" className="mb-2 max-h-24 space-y-1 overflow-y-auto rounded-lg border border-blue-100 bg-blue-50 p-2">
+          <div aria-label="待插入消息" className="pointer-events-auto mb-2 max-h-24 space-y-1 overflow-y-auto rounded-lg border border-blue-100 bg-blue-50 p-2">
             {pendingMessages.map((message) => (
-              <div key={message.id} className="truncate text-xs text-blue-700">等待发送：{message.content}</div>
+              <div key={message.id} className="truncate text-xs text-blue-700">等待插入：{message.content}</div>
             ))}
           </div>
         )}
-        <div className="flex items-end gap-2">
+        <div
+          data-testid="agent-composer-card"
+          className="pointer-events-auto rounded-2xl border border-[#e3e8ef] bg-white p-2 shadow-[0_12px_34px_rgba(15,23,42,.22)] focus-within:ring-2 focus-within:ring-blue-500"
+        >
+        <div className="flex min-w-0 flex-1 items-end gap-2">
           <div
             ref={inputRef}
             role="textbox"
@@ -691,7 +748,7 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
               document.execCommand("insertText", false, text);
             }}
             data-placeholder="输入指令..."
-            className="ce-input flex-1 px-3 py-2 border border-gray-300 rounded-lg bg-white focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-sm whitespace-pre-wrap break-words min-h-[2.5rem] max-h-32 overflow-y-auto"
+            className="ce-input min-h-[2.5rem] max-h-32 min-w-0 flex-1 overflow-y-auto bg-white px-3 py-2 text-sm whitespace-pre-wrap break-words outline-none"
           />
           <button
             onClick={chat.running && !hasInput ? chat.handleStop : handleContentEditableSend}
@@ -706,46 +763,9 @@ const AgentChat = forwardRef(function AgentChat({ workId, draft = "", onDraftCha
             {chat.running && !hasInput ? <Square className="h-4 w-4" /> : <Send className="h-4 w-4" />}
           </button>
         </div>
-        <div className="mt-2 flex justify-end">
-          <div className="flex items-center gap-2">
-            <span className="text-[10px] text-gray-500">章节评审强度</span>
-            <div
-              ref={intensityTrackRef}
-              role="slider"
-              aria-label="章节评审强度"
-              aria-valuemin={0}
-              aria-valuemax={2}
-              aria-valuenow={intensityIndex}
-              aria-valuetext={chapterReviewIntensity}
-              aria-disabled={chat.running}
-              tabIndex={chat.running ? -1 : 0}
-              onPointerDown={onIntensityPointerDown}
-              onPointerMove={onIntensityPointerMove}
-              onPointerUp={onIntensityPointerUp}
-              onPointerCancel={onIntensityPointerUp}
-              className={`relative grid h-6 w-16 grid-cols-3 rounded-md bg-gray-200 p-0.5 text-[10px] select-none ${
-                chat.running ? "cursor-not-allowed opacity-50" : "cursor-ew-resize"
-              }`}
-            >
-              <div
-                data-intensity-window
-                data-intensity={chapterReviewIntensity}
-                className={`pointer-events-none absolute inset-y-0.5 left-0.5 w-[calc((100%-4px)/3)] rounded bg-white shadow-sm ${
-                  intensityDragRatio == null ? "transition-transform duration-150" : ""
-                }`}
-                style={{ transform: `translateX(${intensityDisplayRatio * 200}%)` }}
-              />
-              {CHAPTER_REVIEW_INTENSITIES.map((item) => (
-                <span
-                  key={item.value}
-                  className={`pointer-events-none relative z-10 flex items-center justify-center ${
-                    chapterReviewIntensity === item.value ? "font-medium text-gray-900" : "text-gray-500"
-                  }`}
-                >
-                  {item.shortLabel}
-                </span>
-              ))}
-            </div>
+        <div className="mt-2 flex items-center justify-between gap-2 border-t border-[#e3e8ef] pt-2">
+            <span className="text-xs text-[#748093]">章节评审强度</span>
+            {intensityControl}
           </div>
         </div>
       </div>

@@ -19,6 +19,16 @@ function renderTimeline(overrides = {}) {
 
 
 describe("ChatTimeline", () => {
+  it("omits task-list messages entirely while retaining adjacent replies", () => {
+    const { container } = renderTimeline({ timeline: [
+      { id: "plan", kind: "message", role: "assistant", type: "requirements_todolist", todoCard: { todolist: [{ task_id: "T1", task: "调整前半段" }] } },
+      { id: "reply", kind: "message", role: "assistant", content: "已收到要求" },
+    ] });
+    expect(container.querySelector('[data-message-id="plan"]')).toBeNull();
+    expect(screen.queryByText("需求任务清单")).toBeNull();
+    expect(screen.getByText("已收到要求")).toBeDefined();
+  });
+
   it("opens source references only when web navigation is supplied", () => {
     const onOpenNodeDetail = vi.fn();
     const content = `[查看原文](/node-reference?node_id=n1&quote=${encodeURIComponent("原文")})`;
@@ -26,6 +36,40 @@ describe("ChatTimeline", () => {
     const view = renderTimeline({ ...props, onOpenDiffNode: onOpenNodeDetail });
     fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
     expect(onOpenNodeDetail).toHaveBeenCalledWith("n1", "原文");
+    view.unmount();
+    const paragraphLink = `[查看原文](/node-reference?node_id=n2&start_paragraph=2&end_paragraph=3)`;
+    const paragraphView = renderTimeline({
+      timeline: [{ kind: "message", id: 100, role: "assistant", content: paragraphLink }],
+      onOpenDiffNode: onOpenNodeDetail,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    expect(onOpenNodeDetail).toHaveBeenLastCalledWith("n2", { startParagraph: 2, endParagraph: 3, part: "content" });
+    paragraphView.unmount();
+    const notesLink = `[查看原文](/node-reference?node_id=n3&part=notes&start_paragraph=4&end_paragraph=4)`;
+    const notesView = renderTimeline({
+      timeline: [{ kind: "message", id: 101, role: "assistant", content: notesLink }],
+      onOpenDiffNode: onOpenNodeDetail,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    expect(onOpenNodeDetail).toHaveBeenLastCalledWith("n3", { startParagraph: 4, endParagraph: 4, part: "notes" });
+    notesView.unmount();
+    const markdownLink = `[查看原文](/node-reference?node_id=n4&part=content&start_paragraph=3&end_paragraph=3&segmentation=markdown-v1&start=12&end=16)`;
+    const markdownView = renderTimeline({
+      timeline: [{ kind: "message", id: 102, role: "assistant", content: markdownLink }],
+      onOpenDiffNode: onOpenNodeDetail,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "查看原文" }));
+    expect(onOpenNodeDetail).toHaveBeenLastCalledWith("n4", {
+      segmentation: "markdown-v1", start: 12, end: 16, part: "content", startParagraph: 3, endParagraph: 3,
+    });
+    markdownView.unmount();
+    const legacyView = renderTimeline({
+      timeline: [{ kind: "message", id: 103, role: "assistant", content: `[查看原文](/node-reference?node_id=n5&segmentation=legacy&start_paragraph=1&end_paragraph=1)` }],
+      onOpenDiffNode: onOpenNodeDetail,
+    });
+    expect(screen.queryByRole("button", { name: "查看原文" })).toBeNull();
+    legacyView.unmount();
+    paragraphView.unmount();
     view.unmount();
     renderTimeline(props);
     expect(screen.queryByRole("link", { name: "查看原文" })).toBeNull();
@@ -187,10 +231,8 @@ describe("ChatTimeline", () => {
     fireEvent.click(screen.getByRole("button", { name: "展开" }));
     fireEvent.click(screen.getByText("替换"));
     expect(screen.getByTestId("inline-diff-new").textContent).toBe("新内容");
-    expect(screen.queryByTestId("inline-diff-old")).toBeNull();
-    fireEvent.click(screen.getByRole("button", { name: "对照" }));
     expect(screen.getByTestId("inline-diff-old").textContent).toBe("旧内容");
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("新内容");
+    expect(screen.queryByRole("button", { name: "对照" })).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "收起" }));
     expect(screen.queryByText("旧内容")).toBeNull();
   });
@@ -239,6 +281,22 @@ describe("ChatTimeline", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "展开" }));
     expect(onOpenDiffNode).not.toHaveBeenCalled();
+  });
+
+  it.each(["chapterContentDiffCard", "chapterNotesDiffCard"])("locates an expanded change in %s without navigating on collapse", (cardKey) => {
+    const onOpenDiffNode = vi.fn();
+    const hunk = { type: "replace", paragraph_index: 2, old_text: "旧内容", new_text: "新内容" };
+    renderTimeline({ onOpenDiffNode, timeline: [{ kind: "message", id: 1, role: "assistant",
+      type: cardKey === "chapterNotesDiffCard" ? "chapter_notes_diff_card" : "chapter_content_diff_card",
+      [cardKey]: { [cardKey === "chapterNotesDiffCard" ? "chapter_node_id" : "node_id"]: "chapter-1", title: "第一章", hunks: [hunk], summary: {} },
+    }] });
+    fireEvent.click(screen.getByRole("button", { name: "展开" }));
+    fireEvent.click(screen.getByRole("button", { name: /替换.*段落 2/ }));
+    expect(onOpenDiffNode).toHaveBeenCalledExactlyOnceWith("chapter-1", undefined, {
+      field: cardKey === "chapterNotesDiffCard" ? "notes" : "content", hunk,
+    });
+    fireEvent.click(screen.getByRole("button", { name: /替换.*段落 2/ }));
+    expect(onOpenDiffNode).toHaveBeenCalledTimes(1);
   });
 
   it("loads diff hunks only after expanding a summary card", () => {
@@ -328,6 +386,7 @@ describe("ChatTimeline", () => {
 
   it("renders streaming reasoning and answer content", () => {
     renderTimeline({
+      timeline: [{ kind: "draft", id: 1 }],
       assistantReasoningDraft: "正在分析",
       assistantDraft: "生成内容",
       running: true,
@@ -335,5 +394,70 @@ describe("ChatTimeline", () => {
 
     expect(screen.getByText("思考过程")).toBeDefined();
     expect(screen.getByText("生成内容")).toBeDefined();
+  });
+
+  it("renders an anchored streaming reply before a later diff without moving it on completion", () => {
+    const diff = { id: 2, kind: "message", role: "assistant", type: "chapter_content_diff_card",
+      chapterContentDiffCard: { title: "第一章正文修改", node_id: "chapter-1", hunks: [] } };
+    const view = renderTimeline({
+      timeline: [{ kind: "draft", id: 1 }, diff], assistantDraft: "正在说明这次修改", running: true,
+    });
+    const stream = screen.getByTestId("streaming-message-bubble");
+    const card = screen.getByText("第一章正文修改");
+    expect(stream.compareDocumentPosition(card) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    view.rerender(<ChatTimeline
+      timeline={[{ kind: "message", id: 1, role: "assistant", content: "修改完成" }, diff]}
+      assistantDraft="" assistantReasoningDraft="" running={false} onToggleStep={vi.fn()}
+    />);
+    expect(screen.getByText("修改完成").compareDocumentPosition(screen.getByText("第一章正文修改"))
+      & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByTestId("streaming-message-bubble")).toBeNull();
+  });
+
+  it("renders literal newline escapes as markdown breaks in assistant bubbles", () => {
+    renderTimeline({
+      timeline: [{
+        kind: "message",
+        id: "newline",
+        role: "assistant",
+        content: "接成：\\n\\n“老头揉左膝。”\\n→“砸膝。” `\\n`",
+      }, { kind: "draft", id: "draft" }],
+      assistantDraft: "草稿：\\n下一句",
+    });
+    const bubble = screen.getByTestId("assistant-message-bubble");
+    expect(bubble.querySelectorAll("p")).toHaveLength(2);
+    expect(bubble.querySelector("br")).toBeTruthy();
+    expect(bubble.textContent).toContain("接成：");
+    expect(bubble.textContent).toContain("“老头揉左膝。”");
+    expect(bubble.textContent).toContain("→“砸膝。”");
+    expect(bubble.textContent).toContain("\\n");
+    expect(bubble.textContent).not.toContain("接成：\\n");
+    const stream = screen.getByTestId("streaming-message-bubble");
+    expect(stream.querySelector("br")).toBeTruthy();
+    expect(stream.textContent).toContain("草稿：");
+    expect(stream.textContent).toContain("下一句");
+    expect(stream.textContent).not.toContain("\\n");
+  });
+
+  it("wraps long unbroken tokens inside chat bubbles", () => {
+    const token = "【[ctx|a991c15f-e598-4b51-9762-51c2e4b18347|chapter|第一章：倒计时三小时]】";
+    renderTimeline({
+      timeline: [
+        { kind: "message", id: 1, role: "user", content: token },
+        { kind: "message", id: 2, role: "assistant", content: token },
+        { kind: "draft", id: 3 },
+      ],
+      assistantDraft: token,
+    });
+
+    for (const testId of ["user-message-body", "assistant-message-bubble", "streaming-message-bubble"]) {
+      const bubble = screen.getByTestId(testId);
+      expect(bubble.className).toContain("min-w-0");
+      expect(bubble.className).toContain("break-words");
+      expect(bubble.className).toContain("[overflow-wrap:anywhere]");
+    }
+
+    expect(screen.getByTestId("user-message-body").closest("[data-testid='chat-message-shell']").className).toContain("min-w-0");
+    expect(screen.getByTestId("assistant-message-bubble").closest("[data-testid='chat-message-shell']").className).toContain("min-w-0");
   });
 });

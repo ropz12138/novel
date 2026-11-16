@@ -22,11 +22,6 @@ class CanvasWork(Base):
     # 关联
     nodes = relationship("Node", back_populates="work", cascade="all, delete-orphan")
     edges = relationship("Edge", back_populates="work", cascade="all, delete-orphan")
-    character_relations = relationship(
-        "CharacterRelation",
-        back_populates="work",
-        cascade="all, delete-orphan",
-    )
     user_canvas_actions = relationship(
         "UserCanvasAction",
         back_populates="work",

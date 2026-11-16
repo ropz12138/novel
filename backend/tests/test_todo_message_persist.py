@@ -86,6 +86,15 @@ def test_enrich_messages_from_todo_items_when_no_message(db_session):
     assert len(enriched) == 1
     assert enriched[0]["meta"]["type"] == "requirements_todolist"
     assert enriched[0]["meta"]["todoCard"]["todolist"][0]["task"] == "持久化任务"
+    assert "delivery_status" not in enriched[0]["meta"]["todoCard"]
+    db_session.get(SupervisorSession, session_id).status = "needs_user"
+    db_session.commit()
+    waiting = enrich_messages_with_todolist(db_session, session_id, [])
+    assert waiting[0]["meta"]["todoCard"]["delivery_status"] == "needs_user"
+    db_session.get(SupervisorSession, session_id).status = "running"
+    db_session.commit()
+    resumed = enrich_messages_with_todolist(db_session, session_id, [])
+    assert "delivery_status" not in resumed[0]["meta"]["todoCard"]
 
 
 def test_enrich_messages_syncs_latest_status(db_session):

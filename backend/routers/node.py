@@ -4,7 +4,11 @@ from sqlalchemy.orm import Session, selectinload
 from database import get_db
 from models.node import Node
 from models.user import User
+from models.work import CanvasWork
+from services.work_access import require_work_owner
+from services.node_copy_service import copy_node_to_work
 from node_types import resolve_scope, resolve_update_scope
+from schemas.edge import EdgeResponse
 from schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from routers.auth import get_current_user
 from services.agents.tools.node_tools import (
@@ -47,6 +51,17 @@ class NotesDiffDecision(BaseModel):
     expected_baseline: str
     baseline_notes: str
     current_notes: str
+
+
+class NodeCopyRequest(BaseModel):
+    target_work_id: str = Field(..., min_length=1, max_length=36)
+
+
+class NodeCopyResponse(BaseModel):
+    target_work_id: str
+    nodes: list[NodeResponse]
+    edges: list[EdgeResponse]
+    omitted_character_refs: list[str]
 
 
 @router.get("/works/{work_id}/content-diffs")
@@ -188,6 +203,7 @@ def create_node(
     current_user: User = Depends(get_current_user),
 ):
     """在指定作品中创建节点"""
+    require_work_owner(db, work_id, current_user.id)
     try:
         final_scope = resolve_scope(data.type, data.scope)
     except ValueError as e:
@@ -216,6 +232,49 @@ def create_node(
     return node
 
 
+@router.post("/nodes/{node_id}/copy", response_model=NodeCopyResponse, status_code=201)
+def copy_node_across_works(
+    node_id: str,
+    data: NodeCopyRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """把节点、它的下级和章节引用的角色复制到当前用户的另一部作品。"""
+    node = db.query(Node).filter(Node.id == node_id).first()
+    if node is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    source_work = db.query(CanvasWork).filter(
+        CanvasWork.id == node.work_id,
+        CanvasWork.user_id == current_user.id,
+    ).first()
+    if source_work is None:
+        raise HTTPException(status_code=404, detail="Node not found")
+    require_work_owner(db, data.target_work_id, current_user.id)
+    if node.work_id == data.target_work_id:
+        raise HTTPException(status_code=400, detail="不能复制到当前作品")
+    result = copy_node_to_work(db, node, data.target_work_id)
+    response = NodeCopyResponse(
+        target_work_id=data.target_work_id,
+        nodes=[NodeResponse.model_validate(item) for item in result.nodes],
+        edges=[EdgeResponse.model_validate(item) for item in result.edges],
+        omitted_character_refs=result.omitted_character_refs,
+    )
+    titles = {item.id: item.title for item in result.nodes}
+    for created in result.nodes:
+        action_svc.record_node_action(
+            db, work_id=data.target_work_id, user_id=current_user.id,
+            action_type="create_node", node=created,
+        )
+    for created_edge in result.edges:
+        action_svc.record_edge_action(
+            db, work_id=data.target_work_id, user_id=current_user.id,
+            action_type="create_edge", edge=created_edge,
+            source_title=titles.get(created_edge.source_id, ""),
+            target_title=titles.get(created_edge.target_id, ""),
+        )
+    return response
+
+
 @router.get("/works/{work_id}/nodes", response_model=NodeListResponse)
 def list_nodes(
     work_id: str,
@@ -223,6 +282,7 @@ def list_nodes(
     current_user: User = Depends(get_current_user),
 ):
     """获取指定作品的所有节点"""
+    require_work_owner(db, work_id, current_user.id)
     nodes = db.query(Node).options(selectinload(Node.chapter_record)).filter(Node.work_id == work_id).all()
     return NodeListResponse(nodes=nodes, total=len(nodes))
 
@@ -238,6 +298,7 @@ def update_node(
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    require_work_owner(db, node.work_id, current_user.id)
 
     update_data = data.model_dump(exclude_unset=True)
     old_content = node.content or ""
@@ -326,6 +387,7 @@ def delete_node(
     node = db.query(Node).filter(Node.id == node_id).first()
     if not node:
         raise HTTPException(status_code=404, detail="Node not found")
+    require_work_owner(db, node.work_id, current_user.id)
 
     action_svc.record_node_action(
         db, work_id=node.work_id, user_id=current_user.id, action_type="delete_node", node=node

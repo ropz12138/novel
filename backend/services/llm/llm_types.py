@@ -15,3 +15,4 @@ class LLMModelConfig:
     model_type: LLMModelType = "llm"
     enable_thinking: bool | None = None
     extra_body: dict[str, Any] = field(default_factory=dict)
+    extra_headers: dict[str, str] = field(default_factory=dict)

@@ -39,6 +39,10 @@ engine = create_engine(
 SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
 
+def open_db():
+    return SessionLocal()
+
+
 class Base(DeclarativeBase):
     pass
 
@@ -50,7 +54,7 @@ def init_db() -> None:
     import models.edge
     import models.chapter
     import models.session
-    import models.character_relation
+    import models.short_drama
     import models.todo_item
     import models.chapter_illustration
     import models.canvas_checkpoint
@@ -61,11 +65,22 @@ def init_db() -> None:
     import models.research
     import models.workflow
     import models.llm_token_usage
-    Base.metadata.create_all(bind=engine)
+    # 立绘迁移完成后再创建引用新版立绘表的任务表。
+    image_jobs = models.short_drama.DramaImageJob.__table__
+    Base.metadata.create_all(bind=engine, tables=[table for table in Base.metadata.sorted_tables if table is not image_jobs])
+    from services.short_drama_migration import migrate_sessions_to_work, upgrade_character_portraits, upgrade_first_frame_lock, upgrade_storyboard_records, upgrade_video_quality
+    migrate_sessions_to_work(engine)
+    upgrade_storyboard_records(engine)
+    upgrade_character_portraits(engine)
+    image_jobs.create(bind=engine, checkfirst=True)
+    upgrade_video_quality(engine)
+    upgrade_first_frame_lock(engine)
     from services.token_usage import ensure_llm_token_usage_work_column
     ensure_llm_token_usage_work_column()
     _ensure_user_chapter_review_intensity_column()
     _ensure_user_role_column()
+    _drop_unused_chapter_json_columns()
+    _drop_character_relation_storage()
 
 
 def _ensure_user_chapter_review_intensity_column() -> None:
@@ -101,6 +116,37 @@ def _ensure_user_role_column() -> None:
         conn.execute(text(
             "ALTER TABLE users ADD COLUMN role VARCHAR(16) NOT NULL DEFAULT 'user'"
         ))
+
+
+def _drop_character_relation_storage() -> None:
+    with engine.begin() as conn:
+        conn.execute(text("DROP TABLE IF EXISTS canvas_checkpoint_relations"))
+        conn.execute(text("DROP TABLE IF EXISTS character_relations"))
+        table = conn.execute(text("SELECT to_regclass('public.canvas_checkpoints')")).scalar()
+        if table is None:
+            return
+        column = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'canvas_checkpoints' "
+            "AND column_name = 'relation_count'"
+        )).scalar()
+        if column:
+            conn.execute(text("ALTER TABLE canvas_checkpoints DROP COLUMN relation_count"))
+
+
+def _drop_unused_chapter_json_columns() -> None:
+    with engine.begin() as conn:
+        table = conn.execute(text("SELECT to_regclass('public.chapters')")).scalar()
+        if table is None:
+            return
+        for name in ("new_facts", "foreshadows", "generation_context"):
+            column = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_schema = 'public' AND table_name = 'chapters' "
+                "AND column_name = :name"
+            ), {"name": name}).scalar()
+            if column:
+                conn.execute(text(f"ALTER TABLE chapters DROP COLUMN {name}"))
 
 
 def get_db():

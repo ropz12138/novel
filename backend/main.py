@@ -8,7 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from config import settings
 from database import init_db
 from observability import setup_langsmith
-from routers import app_release, auth, work, node, edge, supervisor, supervisor_sessions, me, character_relation, illustration, research, token_usage
+from routers import app_release, audiobook, auth, work, node, edge, supervisor, supervisor_sessions, me, illustration, research, token_usage, short_drama
 
 LOG_DIR = Path(__file__).resolve().parents[1] / "logs"
 LOG_DIR.mkdir(exist_ok=True)
@@ -19,7 +19,7 @@ logging.basicConfig(
     datefmt="%Y-%m-%d %H:%M:%S",
     handlers=[
         TimedRotatingFileHandler(
-            LOG_DIR / "canvas-prod.log",
+            LOG_DIR / ("canvas-dev.log" if settings.environment == "development" else "canvas-prod.log"),
             when="midnight",
             interval=1,
             backupCount=30,
@@ -41,6 +41,10 @@ app = FastAPI(title="Novel Canvas API")
 @app.on_event("startup")
 def on_startup():
     init_db()
+    from services.short_drama_store import recover_interrupted
+    from database import SessionLocal
+    with SessionLocal() as drama_db:
+        recover_interrupted(drama_db)
     from services.session_store import session_store
     from services.research_chat import migrate_legacy_research_conversations
 
@@ -72,6 +76,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    expose_headers=["X-Audio-Format", "X-Audio-Sample-Rate", "X-Audio-Scope", "X-Audio-Chunk"],
 )
 
 
@@ -82,11 +87,12 @@ app.include_router(edge.router, prefix="/api")
 app.include_router(supervisor.router, prefix="/api")
 app.include_router(supervisor_sessions.router, prefix="/api")
 app.include_router(me.router, prefix="/api")
-app.include_router(character_relation.router, prefix="/api")
 app.include_router(illustration.router, prefix="/api")
 app.include_router(research.router, prefix="/api")
 app.include_router(app_release.router, prefix="/api")
 app.include_router(token_usage.router, prefix="/api")
+app.include_router(audiobook.router, prefix="/api")
+app.include_router(short_drama.router, prefix="/api")
 
 
 @app.post("/health")

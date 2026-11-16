@@ -1,10 +1,8 @@
-"""章节顺序、前序上下文与评估提示词组装。"""
+"""章节顺序。字数统计按 sort_order 定位章节。"""
 from __future__ import annotations
 
-from langchain_core.messages import HumanMessage, SystemMessage
 from sqlalchemy.orm import selectinload
 
-from models.chapter import Chapter
 from models.node import Node
 
 
@@ -17,25 +15,6 @@ def chapter_order_key(node: Node) -> tuple:
     """
     return (node.sort_order, node.id or "")
 
-RECENT_FULL_HISTORY_LIMIT = 5
-
-CHARACTER_SCOPE_LABELS = {
-    "global": "主角",
-    "major": "主要配角",
-    "minor": "次要配角",
-    "temp": "临时",
-}
-
-_EVALUATE_LATEST_CHAPTER_INSTRUCTION = """你是一位资深网文读者。请结合上一条消息中的前序章节信息，阅读本章全文，从读者视角评估本章。
-
-评估需涵盖：情节逻辑是否通顺、人物行为是否合理、与前文是否衔接、文笔与可读性、节奏与代入感等；明确指出具体问题和可取之处。
-
-请严格输出 JSON（不要 markdown 代码块），包含两个字段：
-{
-  "evaluation": "详细评估结果，例如哪里逻辑不通、哪里文笔不好",
-  "chapter_overview": "将该章压缩成很简短的摘要信息（100字以内）"
-}"""
-
 
 def list_ordered_chapters(db, work_id: str) -> list[Node]:
     chapters = db.query(Node).options(selectinload(Node.chapter_record)).filter(
@@ -44,80 +23,6 @@ def list_ordered_chapters(db, work_id: str) -> list[Node]:
     ).all()
     chapters.sort(key=chapter_order_key)
     return chapters
-
-
-def get_chapter_summary(db, node: Node) -> str:
-    chapter = db.query(Chapter).filter(Chapter.node_id == node.id).first()
-    if chapter and chapter.summary:
-        return chapter.summary.strip()
-    return ""
-
-
-def format_characters_system_message(db, work_id: str) -> str:
-    characters = db.query(Node).filter(
-        Node.work_id == work_id,
-        Node.type == "character",
-    ).all()
-    if not characters:
-        return "（暂无角色设定）"
-    parts = ["## 角色设定"]
-    for character in characters:
-        scope = CHARACTER_SCOPE_LABELS.get(character.scope or "minor", character.scope or "minor")
-        parts.append(f"\n### {character.title}（{scope}）\n{character.content or ''}")
-    return "\n".join(parts)
-
-
-def build_history_user_message(
-    db,
-    work_id: str,
-    latest_chapter_id: str,
-    recent_full_limit: int = RECENT_FULL_HISTORY_LIMIT,
-) -> str:
-    chapters = list_ordered_chapters(db, work_id)
-    current_index = next(
-        (index for index, chapter in enumerate(chapters) if chapter.id == latest_chapter_id),
-        None,
-    )
-    if current_index is None:
-        raise ValueError("章节节点不存在")
-    history = chapters[:current_index]
-    if not history:
-        return "（无前序章节）"
-
-    split_at = max(0, len(history) - recent_full_limit)
-    older = history[:split_at]
-    recent = history[split_at:]
-    sections: list[str] = []
-
-    if older:
-        sections.append("======= 更早章节笔记 =======")
-        for chapter in older:
-            summary = get_chapter_summary(db, chapter) or "（暂无概览）"
-            sections.append(f"【{chapter.title}】\n{summary}")
-
-    if recent:
-        sections.append("======= 近几章正文（全文） =======")
-        for chapter in recent:
-            sections.append(f"【{chapter.title}】\n{chapter.content or '（空）'}")
-
-    return "\n\n".join(sections)
-
-
-def build_latest_chapter_user_message(chapter: Node) -> str:
-    return (
-        "======= 待评估的最新章节（全文） =======\n"
-        f"【{chapter.title}】\n{chapter.content or ''}\n"
-        "=====================================\n\n"
-        f"{_EVALUATE_LATEST_CHAPTER_INSTRUCTION}"
-    )
-
-
-def build_evaluate_chapter_messages(db, work_id: str, chapter: Node) -> list:
-    return [
-        SystemMessage(content=format_characters_system_message(db, work_id)),
-        HumanMessage(content=build_history_user_message(db, work_id, chapter.id)),
-        HumanMessage(content=build_latest_chapter_user_message(chapter)),
-    ]
 
 
 def resolve_chapter_for_evaluation(

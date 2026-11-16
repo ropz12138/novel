@@ -58,22 +58,6 @@ export function mergeRefreshedNodes(_currentNodes, fetchedRawNodes) {
   }));
 }
 
-export function buildFlowCharacterRelations(relationsData) {
-  return (relationsData.relations || []).map((relation) => ({
-    id: relation.id,
-    source: relation.source_id,
-    target: relation.target_id,
-    type: "characterRelation",
-    label: relation.relation_type,
-    markerEnd: { type: MarkerType.ArrowClosed },
-    data: {
-      isCharacterRelation: true,
-      relation_type: relation.relation_type,
-      label: relation.label || "",
-    },
-  }));
-}
-
 export function buildFlowEdges(edgesData, nodes = []) {
   const nodeTypeById = nodes.length && nodes[0].data
     ? nodeTypeByIdFromFlowNodes(nodes)
@@ -94,7 +78,7 @@ export function buildFlowEdges(edgesData, nodes = []) {
   });
 }
 
-export function toCanvasSnapshot(nodes, edges, characterRelations = []) {
+export function toCanvasSnapshot(nodes, edges) {
   return {
     nodes: nodes.map((node) => ({
       id: node.id,
@@ -116,13 +100,6 @@ export function toCanvasSnapshot(nodes, edges, characterRelations = []) {
       edge_type: edge.data?.edge_type || "uses",
       label: edge.label || "",
       extra_data: edge.data?.extra_data || {},
-    })),
-    character_relations: characterRelations.map((relation) => ({
-      id: relation.id,
-      source_id: relation.source,
-      target_id: relation.target,
-      relation_type: relation.data?.relation_type || relation.label || "关系",
-      label: relation.data?.label || "",
     })),
   };
 }

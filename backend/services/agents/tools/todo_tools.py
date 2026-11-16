@@ -1,5 +1,7 @@
 """Todolist 工具 — write_todolist / update_todolist"""
+import database
 import asyncio
+import json
 import logging
 from functools import partial
 from typing import Optional
@@ -13,9 +15,6 @@ from services.todo_service import write_todolist as _write_todolist_service
 logger = logging.getLogger(__name__)
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _get_session_id():
@@ -30,15 +29,6 @@ def _get_emit():
     try:
         from services.agents.supervisor import get_context
         return get_context().get("emit")
-    except Exception:
-        return None
-
-
-def _get_workflow_gate():
-    try:
-        from services.agents.supervisor import get_context
-
-        return get_context().get("workflow_gate")
     except Exception:
         return None
 
@@ -71,9 +61,14 @@ class UpdateTodolistInput(BaseModel):
     tasks: Optional[list[str]] = Field(default=None, description="add 时要追加的任务文案列表")
 
 
+def _mark_todo_used():
+    from services.agents.supervisor import get_context
+    get_context()["todo_used_this_turn"] = True
+
+
 def _write_todolist_sync(tasks: list[str]):
     session_id = _get_session_id()
-    db = _get_db()
+    db = database.open_db()
     try:
         return _write_todolist_service(session_id, tasks, db)
     finally:
@@ -87,9 +82,9 @@ def _update_todolist_sync(
     tasks: Optional[list[str]] = None,
 ):
     session_id = _get_session_id()
-    db = _get_db()
+    db = database.open_db()
     try:
-        return _update_todolist_service(
+        result = _update_todolist_service(
             session_id,
             action,
             db,
@@ -97,12 +92,17 @@ def _update_todolist_sync(
             task=task,
             tasks=tasks,
         )
+        if not result.ok:
+            db.rollback()
+        return result
     finally:
         db.close()
 
 
 async def _write_todolist_async(tasks: list[str]) -> str:
     result = await asyncio.to_thread(partial(_write_todolist_sync, tasks))
+    if result.ok:
+        _mark_todo_used()
     await _emit_events(result.events)
     return result.message
 
@@ -113,16 +113,13 @@ async def _update_todolist_async(
     task: Optional[str] = None,
     tasks: Optional[list[str]] = None,
 ) -> str:
-    gate = _get_workflow_gate()
-    if action == "complete" and isinstance(gate, dict) and gate.get("passed") is False:
-        return (
-            "失败：当前工作流质量门未通过，不能将任务标记完成。"
-            f"状态：{gate.get('status') or 'unknown'}；"
-            f"门禁：{gate.get('code') or 'unknown'}"
-        )
+    action = action.strip().lower()
     result = await asyncio.to_thread(
         partial(_update_todolist_sync, action, task_id, task, tasks),
     )
+    if not result.ok:
+        return f"失败：{result.message}"
+    _mark_todo_used()
     await _emit_events(result.events)
     return result.message
 
@@ -131,7 +128,7 @@ write_todolist = StructuredTool.from_function(
     coroutine=_write_todolist_async,
     name="write_todolist",
     description=(
-        "收到可执行的用户需求后，必须先创建任务清单再逐项执行。"
+        "为独立新任务创建清单并替换本会话旧清单；继续任务先 read_todolist，再追加或更新。"
         "参数名必须是 tasks，禁止使用 todos。"
         "tasks 为自然语言字符串列表，必须是 JSON 数组，禁止传字符串化的 JSON；"
         "每条只写「做什么」，禁止写工具名、坐标、node_id 等「怎么做」的内容；通常 1–4 条。"
@@ -143,10 +140,24 @@ update_todolist = StructuredTool.from_function(
     coroutine=_update_todolist_async,
     name="update_todolist",
     description=(
-        "更新任务清单。action=complete 打勾完成任务；add 追加 pending 任务；"
-        "edit 修改未完成任务文案；remove 删除未完成任务。"
+        "更新任务清单。action=complete 在对应工作已经实际完成后打勾；add 追加 pending 任务；"
+        "edit 修改未完成任务文案；remove 删除未完成任务。completed_task_ids 由 respond_to_user 调用同一完成逻辑。"
     ),
     args_schema=UpdateTodolistInput,
 )
 
 todo_tools = [write_todolist, update_todolist]
+
+
+async def _read_todolist_async() -> str:
+    """读取当前会话任务及状态，用于继续未完成的工作。"""
+    import json
+    from services.todo_service import list_todo_items, serialize_todo_item
+    with database.open_db() as db:
+        result = [serialize_todo_item(item) for item in list_todo_items(db, _get_session_id())]
+    _mark_todo_used()
+    return json.dumps(result, ensure_ascii=False)
+
+
+read_todolist = StructuredTool.from_function(coroutine=_read_todolist_async, name="read_todolist")
+todo_tools.append(read_todolist)

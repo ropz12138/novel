@@ -16,6 +16,7 @@ build/
 
 # === Virtual Environment ===
 .venv/
+.venv-dev/
 venv/
 env/
 
@@ -38,7 +39,12 @@ artifacts/
 
 # === Config with secrets ===
 config.json
+config.dev.json
+.tts-settings-*
+*.pem
 refs/
+backend/vendor/iflytek_xtts/
+backend/vendor/iflytek_xtts-sdk.zip
 # === Runtime ===
 logs/
 data/
@@ -55,3 +61,7 @@ tmp/
 .DS_Store
 Thumbs.db
 docs/
+
+# === Generated outputs and installers ===
+outputs/
+*.apk

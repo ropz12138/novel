@@ -42,17 +42,33 @@ def request(chapter, source):
             "author_requirements": "完整作者要求", "review_goal": "判断是否愿意继续读"}
 
 
-def report():
-    return {"reading_experience": "开始容易进入，结尾有放松感", "continue_reading": True,
-            "continue_reason": "想看两人的后续合作", "needed_elements": [
-                {"element": "人物温情", "experience": "短暂放下戒备", "evidence": "唐宁放下弓。"}],
-            "issues": [{"chapter_node_id": "TARGET", "evidence": "陆沉推开门。",
-                        "impact": "开场缺乏可感知的目的", "suggestion": "交代此刻要解决的事",
-                        "priority": "medium", "revision_scope": "local_edit"}]}
+def report(with_issue=True):
+    payload = {"report": "开始容易进入，结尾有放松感。想看两人的后续合作。"}
+    if with_issue:
+        payload["issues"] = [{"chapter_node_id": "TARGET", "evidence": "陆沉推开门。",
+                              "impact": "开场缺乏可感知的目的", "suggestion": "交代此刻要解决的事"}]
+    return payload
 
 
 def invoke(args):
-    return json.loads(asyncio.run(module().run_review_agent.ainvoke(args)))
+    async def run():
+        result = json.loads(await module().run_review_agent.ainvoke(args))
+        if result.get('task_id'):
+            return await get_context()['run_control'].children[result['task_id']].handle
+        return result
+    return asyncio.run(run())
+
+
+def test_review_accepts_report_without_issues(review_context, monkeypatch):
+    chapter, source, _ = review_context
+
+    async def reviewer(**kwargs):
+        await kwargs['tools'][0].ainvoke(report(with_issue=False))
+
+    monkeypatch.setattr(module(), 'invoke_isolated_subagent', reviewer)
+    result = invoke(request(chapter, source))
+    assert result['success']
+    assert result['reports'][0]['report']['issues'] == []
 
 
 def test_only_unified_review_entry_is_registered():
@@ -79,8 +95,9 @@ def test_review_submits_evidence_and_preserves_full_snapshot(review_context, db_
     assert result["success"]
     assert result["reports"][0]["perspective"] == "tired_reader"
     assert result["chapters"][0]["content_sha256"] == hashlib.sha256(before.encode()).hexdigest()
-    assert seen[0]["task"]["chapters"][0]["content"] == before
-    assert seen[0]["task"]["sources"][0]["content"] == source.content
+    assert seen[0]["task"]["chapters"][0]["content_paragraphs"][0]["text"] == before
+    assert "content" not in seen[0]["task"]["chapters"][0]
+    assert seen[0]["task"]["sources"][0]["content_paragraphs"][0]["text"] == source.content
     assert seen[0]["task"]["author_requirements"] == "完整作者要求"
     assert "父对话秘密" not in json.dumps(seen[0]["task"], ensure_ascii=False)
     assert [t.name for t in seen[0]["tools"]] == ["submit_review"]
@@ -130,8 +147,8 @@ def test_ai_taste_review_loads_complete_rules_and_only_requested_perspective(rev
     assert seen[0]["name"] == "reviewer_ai_taste"
     rules = module().REVIEW_PERSPECTIVES["ai_taste"].read_text(encoding="utf-8")
     assert rules in seen[0]["system_prompt"]
-    assert seen[0]["task"]["chapters"][0]["content"] == chapter.content
-    for dimension in ("逐句", "重复", "对白", "比喻", "保留事实", "local_edit"):
+    assert seen[0]["task"]["chapters"][0]["content_paragraphs"][0]["text"] == chapter.content
+    for dimension in ("逐句", "重复", "对白", "比喻", "保留事实", "影响范围"):
         assert dimension in rules
 
 
@@ -224,7 +241,7 @@ def test_review_uses_project_model_and_isolated_context(review_context, monkeypa
     assert [message["role"] for message in seen[0]] == ["system", "user"]
     assert "父对话秘密" not in str(seen)
     task = json.loads(seen[0][1]["content"])
-    assert task["chapters"][0]["content"] == chapter.content
+    assert task["chapters"][0]["content_paragraphs"][0]["text"] == chapter.content
     prompt = module().PROMPT_ROOT
     assert (prompt / "reviewer_system.txt").read_text(encoding="utf-8") in seen[0][0]["content"]
     assert module().REVIEW_PERSPECTIVES["tired_reader"].read_text(encoding="utf-8") in seen[0][0]["content"]
@@ -239,3 +256,138 @@ def test_cancellation_propagates(review_context, monkeypatch):
     monkeypatch.setattr(module(), "invoke_isolated_subagent", cancelled)
     with pytest.raises(asyncio.CancelledError):
         invoke(request(chapter, source))
+
+
+def test_both_reviewers_automatically_receive_current_notes(review_context, db_session, monkeypatch):
+    from services import workflow_records
+    chapter, source, _ = review_context
+    note = Node(work_id=chapter.work_id, type='note', title='节奏', content='薄荷糖动作简洁带过', sort_order=3)
+    db_session.add(note)
+    db_session.commit()
+    seen = []
+    calls = []
+
+    async def derive(*args, **kwargs):
+        calls.append(args)
+        raise AssertionError('评审直接阅读笔记')
+
+    async def reviewer(**kwargs):
+        seen.append(kwargs['task'])
+        result = report()
+        result['issues'][0]['chapter_node_id'] = chapter.id
+        await kwargs['tools'][0].ainvoke(result)
+    monkeypatch.setattr(workflow_records, '_invoke_json_agent', derive)
+    monkeypatch.setattr(module(), 'invoke_isolated_subagent', reviewer)
+    result = invoke(dict(request(chapter, source), perspectives=['tired_reader', 'ai_taste']))
+    assert result['success']
+    assert calls == []
+    assert len(seen) == 2
+    assert 'review_guidelines' not in seen[0]
+    assert seen[0]['author_notes'][0]['content_paragraphs'][0]['text'] == note.content
+    assert seen[1]['author_notes'] == seen[0]['author_notes']
+    assert json.dumps(seen[0], ensure_ascii=False).count(note.content) == 1
+
+
+@pytest.mark.parametrize('changed', ['unrelated', 'target', 'source'])
+def test_review_checks_actual_dependencies_during_parallel_writing(review_context, db_session, monkeypatch, changed):
+    chapter, source, _ = review_context
+    unrelated = Node(work_id=chapter.work_id, type='chapter', title='并行写作中的下一章', content='初稿', sort_order=2)
+    db_session.add(unrelated)
+    db_session.commit()
+    async def reviewer(**kwargs):
+        target = {'unrelated': unrelated, 'target': chapter, 'source': source}[changed]
+        target.content += '新版本'
+        db_session.commit()
+        result = report()
+        result['issues'][0]['chapter_node_id'] = chapter.id
+        await kwargs['tools'][0].ainvoke(result)
+    monkeypatch.setattr(module(), 'invoke_isolated_subagent', reviewer)
+    result = invoke(request(chapter, source))
+    assert result['success'] is (changed == 'unrelated')
+
+
+def test_supervisor_can_maintain_reviewer_note(review_context, db_session):
+    chapter, _, _ = review_context
+    tools = {tool.name: tool for tool in SupervisorAgent()._get_tools()}
+    created = json.loads(asyncio.run(tools['create_node'].ainvoke({
+        'node_type': 'reviewer_note', 'title': '本作评审要求',
+        'content': '检查无用数字堆砌，保留交易金额。', 'sort_order': 0,
+    })))
+    assert created['success']
+    note = db_session.query(Node).filter_by(work_id=chapter.work_id, type='reviewer_note').one()
+    assert note.scope == 'global'
+    updated = json.loads(asyncio.run(tools['update_node'].ainvoke({
+        'node_id': note.id, 'mode': 'replace',
+        'expected_content_sha256': hashlib.sha256(note.content.encode()).hexdigest(),
+        'replacements': [{
+            'start_paragraph': 1, 'end_paragraph': 1,
+            'new': '检查无用数字堆砌，保留交易金额与倒计时。',
+        }],
+    })))
+    assert updated['success']
+    context = SupervisorAgent()._load_work_note_context(chapter.work_id)
+    assert note.id in context
+    assert '检查无用数字堆砌，保留交易金额与倒计时。' in context
+
+
+def test_reviewer_note_full_latest_text_is_injected_into_each_system_prompt(review_context, db_session, monkeypatch):
+    chapter, source, foreign = review_context
+    note = Node(work_id=chapter.work_id, type='reviewer_note', title='随意命名', scope='global', sort_order=1,
+                content='保留必要的数字。\n' + '完整评审要求\n' * 1800 + 'REVIEW_ONLY_TAIL')
+    other = Node(work_id=foreign.work_id, type='reviewer_note', title='其他作品', scope='global', sort_order=0,
+                 content='FOREIGN_REVIEW_SECRET')
+    db_session.add_all([note, other])
+    db_session.commit()
+    seen = []
+    async def reviewer(**kwargs):
+        seen.append(kwargs)
+        result = report()
+        result['issues'][0]['chapter_node_id'] = chapter.id
+        await kwargs['tools'][0].ainvoke(result)
+    monkeypatch.setattr(module(), 'invoke_isolated_subagent', reviewer)
+
+    assert invoke(dict(request(chapter, source), perspectives=['tired_reader', 'ai_taste']))['success']
+    for call in seen:
+        rendered = json.dumps(call['task'], ensure_ascii=False)
+        assert '保留必要的数字。' in rendered
+        assert rendered.count('REVIEW_ONLY_TAIL') == 1
+        assert 'REVIEW_ONLY_TAIL' not in call['system_prompt']
+        assert [tool.name for tool in call['tools']] == ['submit_review']
+        assert 'FOREIGN_REVIEW_SECRET' not in str(call)
+    note.content = '更新后的评审准则，只对过度展开提出问题。'
+    note.title = '更名不影响注入'
+    db_session.commit()
+    assert invoke(request(chapter, source))['success']
+    assert note.content in json.dumps(seen[-1]['task'], ensure_ascii=False)
+    assert 'REVIEW_ONLY_TAIL' not in json.dumps(seen[-1]['task'], ensure_ascii=False)
+    db_session.delete(note)
+    db_session.commit()
+    assert invoke(request(chapter, source))['success']
+    assert '更新后的评审准则' not in json.dumps(seen[-1]['task'], ensure_ascii=False)
+
+
+@pytest.mark.parametrize('change', ['edit', 'delete', 'add'])
+def test_reviewer_note_changes_invalidate_running_review(review_context, db_session, monkeypatch, change):
+    chapter, source, _ = review_context
+    note = Node(work_id=chapter.work_id, type='reviewer_note', title='评审要求', scope='global', sort_order=0,
+                content='原评审要求')
+    if change != 'add':
+        db_session.add(note)
+        db_session.commit()
+    async def reviewer(**kwargs):
+        if change == 'delete':
+            db_session.delete(note)
+        elif change == 'add':
+            db_session.add(note)
+        else:
+            note.content = '用户刚更新的评审要求'
+        db_session.commit()
+        result = report()
+        result['issues'][0]['chapter_node_id'] = chapter.id
+        await kwargs['tools'][0].ainvoke(result)
+    monkeypatch.setattr(module(), 'invoke_isolated_subagent', reviewer)
+
+    result = invoke(request(chapter, source))
+
+    assert not result['success']
+    assert '变化' in result['error']

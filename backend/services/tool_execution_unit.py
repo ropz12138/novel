@@ -1,6 +1,8 @@
 """进行中的工具视为一个整体：未完成则丢弃该次执行的全部副作用。"""
 from __future__ import annotations
 
+import database
+
 import copy
 import logging
 from dataclasses import dataclass, field
@@ -20,9 +22,6 @@ from services.node_content_write_service import write_node_content
 logger = logging.getLogger(__name__)
 
 
-def _get_db() -> Session:
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _max_message_sort_order(db: Session, session_id: str | None) -> int:
@@ -110,7 +109,7 @@ class ToolExecutionUnit:
         session_id: str | None,
         tool_call_id: str,
     ) -> "ToolExecutionUnit":
-        db = _get_db()
+        db = database.open_db()
         try:
             snapshot = copy.deepcopy(_work_to_snapshot(db, work_id)) if work_id else None
             return cls(
@@ -126,7 +125,7 @@ class ToolExecutionUnit:
             db.close()
 
     def rollback(self) -> None:
-        db = _get_db()
+        db = database.open_db()
         try:
             if self.work_id and self.canvas_snapshot is not None:
                 apply_canvas_snapshot(db, self.work_id, self.canvas_snapshot)
@@ -201,10 +200,7 @@ async def run_atomic_tool_calls(
             content=extract_text_content(getattr(last, "content", "")),
             tool_calls=[call],
         )
-        try:
-            out = await tool_node.ainvoke({"messages": [partial]})
-        except BaseException:
-            raise
+        out = await tool_node.ainvoke({"messages": [partial]})
         collected.extend(out.get("messages") or [])
         if ctx.get("active_tool_unit") is unit:
             ctx["active_tool_unit"] = None

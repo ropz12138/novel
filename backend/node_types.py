@@ -1,13 +1,13 @@
 """Canvas 节点类型与作用域(scope)的统一定义。
 
-节点类型（仅以下 7 种合法，创建/更新节点时强制校验，不允许 agent 自创）：
+节点类型（仅以下 8 种合法，创建/更新节点时强制校验）：
   层级链：outline(大纲) → volume(卷) → plot(情节) → chapter(章节)
   关联节点：character(角色) — 完整实体，不在画布上显示；章节通过 extra_data.characters 引用
   情节元素：不再作为独立节点创建，存放在 chapter.extra_data.chapter_elements
-  全局节点：worldbuilding(世界观)、note(笔记)
+  全局节点：worldbuilding(世界观)、note(笔记)、reviewer_note(评审笔记)
 
 作用域 scope（5 值，按类型受限）：
-  global — 全局（worldbuilding/note 固定；character 表示主角）
+  global — 全局（worldbuilding/note/reviewer_note 固定；character 表示主角）
   local  — 局部层级链（outline/volume/plot/chapter 固定）
   major  — 主要配角（仅 character）
   minor  — 次要配角（仅 character，默认）
@@ -23,6 +23,7 @@ STANDARD_NODE_TYPES = frozenset({
     "chapter",
     "worldbuilding",
     "note",
+    "reviewer_note",
 })
 
 
@@ -46,8 +47,8 @@ STANDARD_SCOPES = frozenset({
     SCOPE_GLOBAL, SCOPE_LOCAL, SCOPE_MAJOR, SCOPE_MINOR, SCOPE_TEMP,
 })
 
-# 固定为 global 的类型：worldbuilding/note（全局节点）
-GLOBAL_LOCKED_TYPES = frozenset({"worldbuilding", "note"})
+# 固定为 global 的类型：worldbuilding/note/reviewer_note（全局节点）
+GLOBAL_LOCKED_TYPES = frozenset({"worldbuilding", "note", "reviewer_note"})
 # 固定为 local 的类型：层级链 outline/volume/plot/chapter
 LOCAL_LOCKED_TYPES = frozenset({"outline", "volume", "plot", "chapter"})
 # character 允许的 scope（角色分类：主角/主要配角/次要配角/临时）
@@ -74,7 +75,7 @@ def allowed_scopes_for_type(node_type: str) -> frozenset:
 
 
 def default_scope_for_type(node_type: str) -> str:
-    """按类型返回默认 scope：worldbuilding/note→global，character→minor，层级链→local。"""
+    """按类型返回默认 scope：worldbuilding/note/reviewer_note→global，character→minor，层级链→local。"""
     if node_type in GLOBAL_LOCKED_TYPES:
         return SCOPE_GLOBAL
     if node_type == "character":
@@ -122,7 +123,8 @@ def resolve_update_scope(old_type, old_scope, new_type, proposed_scope):
 
 
 NODE_TYPES_RULES_TEXT = (
-    "仅限 7 种：character, outline, volume, plot, chapter, worldbuilding, note。"
+    "仅限 8 种：character, outline, volume, plot, chapter, worldbuilding, note, reviewer_note。"
+    "reviewer_note 是由 Supervisor 维护的专用评审笔记，其最新全文自动注入 Reviewer 系统提示词。"
     "element 不再是节点类型；章节元素请在创建/更新 chapter 时使用 chapter_elements 参数。"
     "角色发展线请在创建/更新 character 时使用 storylines 参数（写入 extra_data.storylines；"
     "每项含 name、description、body 字符串列表），不要把发展线只写进 content。"
@@ -131,7 +133,7 @@ NODE_TYPES_RULES_TEXT = (
 
 EDGE_ENDPOINT_RULES_TEXT = (
     "端点限制（违反会报错）："
-    "scope=global 的节点（worldbuilding/note + 主角 character）禁止任何连线；"
+    "scope=global 的节点（worldbuilding/note/reviewer_note + 主角 character）禁止任何连线；"
     "character 禁止任何画布连线，章节出场角色请写入 chapter.extra_data.characters（每项含 id 与 name）；"
     "同级节点之间禁止连线（chapter↔chapter、volume↔volume、plot↔plot），"
     "同级顺序由节点的 sort_order 字段表达，不要用连线表示顺序。"
@@ -169,24 +171,7 @@ def validate_edge_endpoints(source_type: str, target_type: str, source_scope: st
             "每项必须含角色节点 id 与 name。"
         )
     if source_scope == "global" or target_scope == "global":
-        return "全局节点(scope=global：主角/worldbuilding/note)禁止创建关联线"
+        return "全局节点(scope=global：主角/worldbuilding/note/reviewer_note)禁止创建关联线"
     if source_type == "element" or target_type == "element":
         return "element 不再是画布节点类型；章节元素请写入 chapter.extra_data.chapter_elements，不要创建 element 连线"
     return None
-
-
-def validate_character_relation(source_type: str, target_type: str) -> str | None:
-    """校验角色关系线端点：两端必须是 character。"""
-    if source_type != "character" or target_type != "character":
-        return "角色关系线的两端必须是 character 节点"
-    return None
-
-
-def validate_relation_type(relation_type: str) -> str:
-    """自然语言关系类型：非空，最长 100 字符。"""
-    normalized = (relation_type or "").strip()
-    if not normalized:
-        raise ValueError("关系类型不能为空")
-    if len(normalized) > 100:
-        raise ValueError("关系类型不能超过100字符")
-    return normalized

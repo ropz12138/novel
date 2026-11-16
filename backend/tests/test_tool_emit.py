@@ -7,6 +7,7 @@
 - 回归：_create_node_async 在 emit 注入后能正常触发 nodes_updated。
 """
 import asyncio
+import hashlib
 import importlib
 import json
 
@@ -153,7 +154,10 @@ def test_draft_write_records_diff_before_commit_so_keep_all_matches(monkeypatch)
     collect, events = _make_collector()
     _inject_emit(work_id, collect)
     try:
-        asyncio.run(nt._update_node_async(chapter_id, content="新正文"))
+        asyncio.run(nt._update_node_async(
+            chapter_id, content="新正文",
+            expected_content_sha256=hashlib.sha256("原正文".encode()).hexdigest(),
+        ))
         diffs = [data for event, data in events if event == "chapter_edit_diff"]
         assert len(diffs) == 1
         assert diffs[0]["original_content"] == "原正文"
@@ -167,13 +171,14 @@ def test_draft_write_records_diff_before_commit_so_keep_all_matches(monkeypatch)
 
     from database import Base
     from models.node_content_diff_state import NodeContentDiffState
+    from models.node_agent_diff import NodeAgentDiffState, NodeAgentDiffGroup
     from models.session import SupervisorMessage, SupervisorSession
     from services.node_content_diff_state import save_decision
     from services.supervisor_event_persist import persist_supervisor_event
 
     engine = create_engine("sqlite:///:memory:")
     Base.metadata.create_all(engine, tables=[
-        Node.__table__, NodeContentDiffState.__table__,
+        Node.__table__, NodeContentDiffState.__table__, NodeAgentDiffState.__table__, NodeAgentDiffGroup.__table__,
         SupervisorSession.__table__, SupervisorMessage.__table__,
     ])
     db = sessionmaker(bind=engine)()
@@ -203,14 +208,13 @@ def test_draft_write_records_diff_before_commit_so_keep_all_matches(monkeypatch)
         engine.dispose()
 
 
-def test_needs_user_gate_blocks_todo_completion(monkeypatch):
-    called = False
+def test_workflow_gate_does_not_block_todo_completion(monkeypatch):
+    from services.todo_service import TodoServiceResult
 
-    def unexpected_update(*args, **kwargs):
-        nonlocal called
-        called = True
+    def update(*args, **kwargs):
+        return TodoServiceResult(message="任务 T5 已标记完成：保存正文", ok=True)
 
-    monkeypatch.setattr(tt, "_update_todolist_sync", unexpected_update)
+    monkeypatch.setattr(tt, "_update_todolist_service", update)
     supervisor_mod.set_context({
         "workflow_gate": {
             "passed": False,
@@ -220,8 +224,7 @@ def test_needs_user_gate_blocks_todo_completion(monkeypatch):
     })
     try:
         result = asyncio.run(tt._update_todolist_async("complete", task_id="T5"))
-        assert called is False
-        assert result.startswith("失败：")
-        assert "chapter_version_conflict" in result
+        assert result.startswith("任务 T5 已标记完成")
+        assert "chapter_version_conflict" not in result
     finally:
         _clear_context()

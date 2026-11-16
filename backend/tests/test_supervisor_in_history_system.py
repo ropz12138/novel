@@ -57,7 +57,7 @@ def test_assemble_appends_in_history_system_after_history_before_new_user():
 
     assert isinstance(messages[0], SystemMessage)
     assert "node-1" not in messages[0].content
-    assert "每个评审视角检查一次" in messages[0].content
+    assert "评审与修订次数不限" in messages[0].content
     assert [type(m) for m in messages] == [
         SystemMessage,
         HumanMessage,

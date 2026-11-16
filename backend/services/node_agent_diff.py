@@ -4,6 +4,7 @@ from difflib import SequenceMatcher
 from models.node_agent_diff import NodeAgentDiffGroup, NodeAgentDiffState
 from models.node_content_diff_state import NodeContentDiffState
 from services.agent_diff_groups import apply_groups, compose_groups
+from services.agent_paragraphs import paragraph_index_for_span, segmentation_mode
 
 
 def get_snapshot(db, node, *, expected_content=None):
@@ -16,7 +17,9 @@ def get_snapshot(db, node, *, expected_content=None):
     for group in groups:
         old, new = group["old_text"], group["new_text"]
         group["type"] = "replace" if old and new else "delete" if old else "insert_after"
-        group["paragraph_index"] = state.baseline_content[:group["start_offset"]].count("\n\n") + (1 if old else 0)
+        group["paragraph_index"] = paragraph_index_for_span(
+            state.baseline_content, group["start_offset"], old, segmentation_mode(node.type),
+        )
     current = apply_groups(state.baseline_content, groups)
     if current != (node.content or "" if expected_content is None else expected_content):
         raise ValueError("工具分组状态与当前正文不一致")
@@ -54,7 +57,7 @@ def record_change(db, node, old_content, diff):
             # 历史状态只保存过整稿基线，以完整对照迁移，保留尚未审阅的旧修改。
             baseline = legacy.baseline_content
             groups = [{"start_offset": 0, "old_text": baseline, "new_text": old_content}]
-    groups = compose_groups(baseline, groups, diff["hunks"])
+    groups = compose_groups(baseline, groups, diff["hunks"], segmentation_mode(node.type))
     if apply_groups(baseline, groups) != (new_content or ""):
         raise ValueError("工具分组应用结果与新正文不一致")
     store_snapshot(db, node, baseline, groups)
@@ -70,7 +73,7 @@ def record_manual_change(db, node, old_content):
     changes = [{"start_offset": a, "old_text": old_content[a:b], "new_text": new_content[c:d]}
                for tag, a, b, c, d in reversed(SequenceMatcher(None, old_content, new_content, autojunk=False).get_opcodes())
                if tag != "equal"]
-    groups = compose_groups(snapshot["original_content"], snapshot["hunks"], changes)
+    groups = compose_groups(snapshot["original_content"], snapshot["hunks"], changes, segmentation_mode(node.type))
     unchanged = {(g["start_offset"], g["old_text"], g["new_text"]) for g in snapshot["hunks"]}
     baseline = snapshot["original_content"]
     cursor, shift, pieces, remaining = 0, 0, [], []
@@ -86,4 +89,22 @@ def record_manual_change(db, node, old_content):
         cursor = start + len(old)
     pieces.append(baseline[cursor:])
     store_snapshot(db, node, "".join(pieces), remaining)
+    return True
+
+
+def repair_inconsistent_snapshot(db, node):
+    """Explicit maintenance: reconcile review metadata, preserving baseline and current body."""
+    state = db.get(NodeAgentDiffState, node.id)
+    if state is None:
+        return False
+    rows = db.query(NodeAgentDiffGroup.start_offset, NodeAgentDiffGroup.old_text, NodeAgentDiffGroup.new_text).filter(NodeAgentDiffGroup.node_id == node.id).order_by(NodeAgentDiffGroup.group_index).all()
+    groups = [{'start_offset': r.start_offset, 'old_text': r.old_text, 'new_text': r.new_text} for r in rows]
+    recorded_content = apply_groups(state.baseline_content, groups)
+    current_content = node.content or ''
+    if recorded_content == current_content:
+        return False
+    reconciled = compose_groups(state.baseline_content, groups, [{
+        'start_offset': 0, 'old_text': recorded_content, 'new_text': current_content,
+    }], segmentation_mode(node.type))
+    store_snapshot(db, node, state.baseline_content, reconciled)
     return True

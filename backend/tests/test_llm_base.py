@@ -139,8 +139,14 @@ def test_openai_client_assembles_tool_call_from_fragments():
                 client=_FakeAsyncClient(lines),
             )
         ]
+        deltas = [ev for ev in events if ev.kind == "tool_call_delta"]
+        assert "".join(ev.text for ev in deltas) == '{"a":1}'
+        assert [ev.index for ev in deltas] == [0, 0]
+        assert deltas[0].tool_call.tool_name == "query_nodes"
+        assert deltas[0].tool_call.call_id == "c1"
         tool_events = [ev for ev in events if ev.kind == "tool_call"]
         assert len(tool_events) == 1
+        assert tool_events[0].index == 0
         assert tool_events[0].tool_call.tool_name == "query_nodes"
         assert tool_events[0].tool_call.call_id == "c1"
         assert tool_events[0].tool_call.arguments == {"a": 1}
@@ -220,7 +226,7 @@ def test_base_provider_hides_llm_error_details_without_fallback():
         with pytest.raises(RuntimeError) as caught:
             async for _event in provider.stream_chat([{"role": "user", "content": "hi"}]):
                 pass
-        assert str(caught.value) == "AI额度不足，请稍后再试"
+        assert str(caught.value) == "AI服务请求失败，请稍后再试"
         assert "secret gateway body" not in str(caught.value)
 
     asyncio.run(_run())
@@ -231,5 +237,29 @@ def test_base_provider_hides_complete_error_details_without_fallback():
         _cfg("gemini"),
         _client=_FakeProtocolClient(exc=RuntimeError("secret gateway body")),
     )
-    with pytest.raises(RuntimeError, match="^AI额度不足，请稍后再试$"):
+    with pytest.raises(RuntimeError, match="^AI服务请求失败，请稍后再试$"):
         provider.complete([{"role": "user", "content": "hi"}])
+
+
+def test_provider_reports_service_unavailable_as_service_unavailable():
+    import httpx
+    request = httpx.Request('POST', 'https://example.test')
+    response = httpx.Response(503, request=request)
+    provider = BaseLLMProvider(_cfg('gemini'), _client=_FakeProtocolClient(
+        exc=httpx.HTTPStatusError('secret', request=request, response=response)))
+    with pytest.raises(RuntimeError, match='服务.*繁忙') as caught:
+        provider.complete([{'role': 'user', 'content': 'hi'}])
+    assert 'secret' not in str(caught.value)
+
+
+def test_provider_distinguishes_rate_limit_and_quota():
+    import httpx
+    request = httpx.Request('POST', 'https://example.test')
+    for response, expected in [
+        (httpx.Response(429, json={'error': {'code': 'rate_limit_exceeded'}}, request=request), '请求过于频繁'),
+        (httpx.Response(429, json={'error': {'code': 'insufficient_quota'}}, request=request), '额度不足'),
+    ]:
+        provider = BaseLLMProvider(_cfg('gemini'), _client=_FakeProtocolClient(
+            exc=httpx.HTTPStatusError('secret', request=request, response=response)))
+        with pytest.raises(RuntimeError, match=expected):
+            provider.complete([{'role': 'user', 'content': 'hi'}])

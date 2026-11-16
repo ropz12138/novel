@@ -5,10 +5,12 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 let authFetchCalls = [];
 let streamChunks = null;
 let enqueueStartsStream = false;
+let pendingEnqueueResponse = null;
 
 vi.mock("../lib/authFetch", () => ({
   authFetch: (url, options = {}) => {
     const { signal, ...request } = options;
+    if (url.endsWith("/supervisor/enqueue") && pendingEnqueueResponse) return pendingEnqueueResponse;
     authFetchCalls.push([url, request]);
     const chunks = streamChunks;
     let index = 0;
@@ -72,6 +74,33 @@ describe("useSupervisorChat", () => {
     expect(sessionApi.getSupervisor).not.toHaveBeenCalled();
   });
 
+  it("ignores an old enqueue response after starting a new conversation", async () => {
+    let resolveEnqueue;
+    pendingEnqueueResponse = new Promise((resolve) => { resolveEnqueue = resolve; });
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current._testOnSSE("session_created", { session_id: "old-session" }));
+    act(() => result.current.handleSend("旧会话消息"));
+    act(() => result.current.resetState());
+    await act(async () => {
+      resolveEnqueue({ ok: true, json: async () => ({ started_new_stream: true }) });
+    });
+    expect(authFetchCalls.filter(([url]) => url.endsWith("/supervisor/stream"))).toHaveLength(0);
+    expect(result.current.sessionId).toBeNull();
+    expect(result.current.running).toBe(false);
+    expect(result.current.timeline).toEqual([]);
+  });
+
+  it("ignores an old interruption callback after starting a new conversation", async () => {
+    let resolveHistory;
+    sessionApi.getSupervisorMessages.mockReturnValueOnce(new Promise((resolve) => { resolveHistory = resolve; }));
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current._testOnSSE("session_created", { session_id: "old-session" }));
+    act(() => result.current._testOnSSE("supervisor_interrupted", {}));
+    act(() => result.current.resetState());
+    await act(async () => { resolveHistory({ messages: [], has_more: false }); });
+    expect(result.current.timeline).toEqual([]);
+  });
+
   it("submits while running and displays only the backend queue", async () => {
     const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
     act(() => {
@@ -96,10 +125,83 @@ describe("useSupervisorChat", () => {
 
   beforeEach(() => {
     enqueueStartsStream = false;
+    pendingEnqueueResponse = null;
     authFetchCalls = [];
     streamChunks = null;
     vi.clearAllMocks();
     sessionApi.getSupervisorMessages.mockResolvedValue({ messages: [], has_more: false });
+  });
+
+  it.each(["chapter_edit_diff", "node_content_diff", "chapter_notes_diff"])(
+    "keeps the streaming reply before an interleaved %s through completion", (event) => {
+      const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+      act(() => result.current._testOnSSE("supervisor_stream", { phase: "reasoning", chunk: "正在核对。" }));
+      const anchorId = result.current.timeline[0]?.id;
+      act(() => {
+        result.current._testOnSSE("supervisor_stream", { chunk: "修改说明的前半段。" });
+        result.current._testOnSSE(event, {
+          node_id: "chapter-1", title: "第一章", task_id: event === "chapter_edit_diff" ? "writer-1" : undefined,
+          diff: { hunks: [{ type: "replace" }], summary: {} },
+        });
+        result.current._testOnSSE("supervisor_stream", { chunk: "后半段。" });
+      });
+      const cardType = event === "chapter_notes_diff" ? "chapter_notes_diff_card" : "chapter_content_diff_card";
+      expect(result.current.timeline.map(item => item.type || item.kind)).toEqual(["draft", cardType]);
+      expect(result.current.timeline[0].id).toBe(anchorId);
+      expect(result.current.assistantDraft).toBe("修改说明的前半段。后半段。");
+      act(() => result.current._testOnSSE("supervisor_done", { message: "修改说明的前半段。后半段。" }));
+      expect(result.current.timeline.map(item => item.type || item.kind)).toEqual(["message", cardType]);
+      expect(result.current.timeline[0]).toMatchObject({ id: anchorId,
+        content: "修改说明的前半段。后半段。", reasoningContent: "正在核对。" });
+      expect(result.current.assistantDraft).toBe("");
+      expect(result.current.timeline.filter(item => item.content === "修改说明的前半段。后半段。")).toHaveLength(1);
+    },
+  );
+
+  it("retains all batched stream fragments before freezing at a tool call", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => {
+      result.current._testOnSSE("supervisor_stream", { chunk: "甲" });
+      result.current._testOnSSE("supervisor_stream", { chunk: "乙" });
+      result.current._testOnSSE("chapter_edit_diff", {
+        chapter_node_id: "chapter-1", task_id: "writer-1", diff: { hunks: [], summary: {} },
+      });
+      result.current._testOnSSE("tool_calls", { tools: [{ name: "read_node_content", id: "read-1" }] });
+    });
+    expect(result.current.timeline.map(item => item.type || item.kind)).toEqual([
+      "message", "chapter_content_diff_card", "step",
+    ]);
+    expect(result.current.timeline[0].content).toBe("甲乙");
+  });
+
+  it("shows a direct chapter diff card without a writer task id", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current._testOnSSE("chapter_edit_diff", {
+      node_id: "chapter-1", chapter_node_id: "chapter-1", node_type: "chapter", title: "第一章",
+      diff: { hunks: [{ old_text: "清晨", new_text: "黄昏" }], summary: {} },
+      original_content: "清晨出发。", current_content: "黄昏出发。",
+    }));
+    const card = result.current.timeline.find(item => item.type === "chapter_content_diff_card");
+    expect(card.chapterContentDiffCard.task_id).toBeUndefined();
+    expect(card.chapterContentDiffCard.current_content).toBe("黄昏出发。");
+    expect(card.chapterContentDiffCard.hunks).toEqual([{ old_text: "清晨", new_text: "黄昏" }]);
+  });
+
+  it("keeps a parallel writer stage from splitting the supervisor reply", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => result.current._testOnSSE("supervisor_stream", { chunk: "正在处理。" }));
+    act(() => result.current._testOnSSE("stage_start", {
+      stage: "writing", label: "写作子 Agent 正在创作", task_id: "writer-1", chapter_node_id: "chapter-1",
+    }));
+    expect(result.current.assistantDraft).toBe("正在处理。");
+    expect(result.current.timeline.map(item => item.kind)).toEqual(["draft", "step"]);
+    act(() => {
+      result.current._testOnSSE("supervisor_stream", { chunk: "已经完成。" });
+      result.current._testOnSSE("supervisor_done", { message: "正在处理。已经完成。" });
+    });
+    expect(result.current.timeline.filter(item => item.kind === "message")).toEqual([
+      expect.objectContaining({ content: "正在处理。已经完成。" }),
+    ]);
   });
 
   it("shows the fixed public copy for an LLM error without an extra prefix", () => {
@@ -518,7 +620,7 @@ describe("useSupervisorChat", () => {
     });
   });
 
-  it("does not duplicate the final reply after a thinking retry stage", () => {
+  it("streams the next model response without a continuation step or duplicate reply", () => {
     const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
 
     act(() => {
@@ -533,11 +635,16 @@ describe("useSupervisorChat", () => {
     });
 
     expect(result.current.assistantDraft).toBe("");
-    expect(result.current.timeline.at(-1)).toMatchObject({
-      kind: "step",
-      label: "继续执行",
-      status: "running",
+    expect(result.current.timeline).toHaveLength(0);
+
+    act(() => {
+      result.current._testOnSSE("supervisor_stream", {
+        phase: "reasoning",
+        chunk: "核对更新结果",
+      });
     });
+    expect(result.current.assistantReasoningDraft).toBe("核对更新结果");
+    expect(result.current.timeline.map(item => item.kind)).toEqual(["draft"]);
 
     act(() => {
       result.current._testOnSSE("supervisor_stream", {
@@ -547,11 +654,7 @@ describe("useSupervisorChat", () => {
     });
 
     expect(result.current.assistantDraft).toBe("角色卡已更新，在侧栏查看。");
-    expect(result.current.timeline.at(-1)).toMatchObject({
-      kind: "step",
-      label: "继续执行",
-      status: "done",
-    });
+    expect(result.current.timeline.map(item => item.kind)).toEqual(["draft"]);
 
     act(() => {
       result.current._testOnSSE("supervisor_done", {
@@ -653,6 +756,24 @@ describe("useSupervisorChat", () => {
       title: "第一章",
       hunks: [{ type: "replace" }],
     }));
+  });
+
+  it("updates the same writer task review card to its current version", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => {
+      for (const content of ["中间版本", "最终版本"]) {
+        result.current._testOnSSE("chapter_edit_diff", {
+          task_id: "writer-task", chapter_node_id: "chapter-1",
+          original_content: "初始正文", current_content: content,
+          diff: { hunks: [], summary: {} },
+        });
+      }
+    });
+    const cards = result.current.timeline.filter(item => item.type === "chapter_content_diff_card");
+    expect(cards).toHaveLength(1);
+    expect(cards[0].chapterContentDiffCard).toMatchObject({
+      task_id: "writer-task", original_content: "初始正文", current_content: "最终版本",
+    });
   });
 
   it("handles chapter notes diffs like chapter body diffs", () => {
@@ -774,6 +895,26 @@ describe("useSupervisorChat", () => {
       result.current._testOnSSE("todolist_task_deleted", { db_id: "db-2" });
     });
     expect(result.current.timeline[0].todoCard.todolist).toHaveLength(1);
+  });
+
+  it("applies delivery status from the finished turn and clears it when the next turn starts", () => {
+    const { result } = renderHook(() => useSupervisorChat({ workId: "w1" }));
+    act(() => {
+      result.current._testOnSSE("todolist_generated", {
+        todolist: [{ db_id: "db-1", task_id: "T1", task: "确认方案", status: "pending" }],
+        ready_to_execute: true,
+      });
+      result.current._testOnSSE("supervisor_done", { message: "请选择。", workflow_status: "needs_user" });
+    });
+    expect(result.current.timeline.find((item) => item.todoCard).todoCard.delivery_status).toBe("needs_user");
+    act(() => {
+      result.current._testOnSSE("queued_message_started", { message_id: "m2", content: "用方案A" });
+    });
+    expect(result.current.timeline.find((item) => item.todoCard).todoCard.delivery_status).toBeUndefined();
+    act(() => {
+      result.current._testOnSSE("supervisor_done", { message: "已改为方案A。", workflow_status: "completed" });
+    });
+    expect(result.current.timeline.find((item) => item.todoCard).todoCard.delivery_status).toBeUndefined();
   });
 
   it("removes the edited message and abandoned todo branch immediately", () => {

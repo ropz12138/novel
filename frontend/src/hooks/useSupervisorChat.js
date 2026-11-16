@@ -32,10 +32,12 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   const [running, setRunning] = useState(false);
   const [sessionId, setSessionId] = useState(null);
   const activeSessionIdRef = useRef(null);
+  const sessionGenerationRef = useRef(0);
   const [assistantDraft, setAssistantDraft] = useState("");
   const assistantDraftRef = useRef("");
   const [assistantReasoningDraft, setAssistantReasoningDraft] = useState("");
   const assistantReasoningDraftRef = useRef("");
+  const draftAnchorRef = useRef(null);
   const timelineIdRef = useRef(0);
   const lastStreamSeqRef = useRef(0);
   const sseRef = useRef(null);
@@ -49,6 +51,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
 
   // 离开作品时解除前端订阅，后台任务继续运行，返回作品后可重新连接。
   useEffect(() => () => {
+    sessionGenerationRef.current += 1;
     historyGenRef.current += 1;
     disconnectRecoveryRef.current = null;
     activeSessionIdRef.current = null;
@@ -58,6 +61,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   }, []);
 
   const syncSessionId = useCallback((id) => {
+    if (activeSessionIdRef.current !== id) sessionGenerationRef.current += 1;
     activeSessionIdRef.current = id;
     setSessionId(id);
   }, []);
@@ -116,14 +120,48 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     setTimeline((prev) => [...prev, { kind: "message", id, role, content, ...meta, timestamp: Date.now() }]);
   }, []);
 
+  const resetDraftBuffers = useCallback(() => {
+    assistantDraftRef.current = "";
+    assistantReasoningDraftRef.current = "";
+    setAssistantDraft("");
+    setAssistantReasoningDraft("");
+  }, []);
+
+  const discardDraft = useCallback(() => {
+    const anchorId = draftAnchorRef.current;
+    draftAnchorRef.current = null;
+    resetDraftBuffers();
+    if (anchorId != null) {
+      setTimeline(prev => prev.filter(item => item.kind !== "draft" || item.id !== anchorId));
+    }
+  }, [resetDraftBuffers]);
+
+  const ensureDraftAnchor = useCallback(() => {
+    if (draftAnchorRef.current != null) return;
+    const id = ++timelineIdRef.current;
+    draftAnchorRef.current = id;
+    setTimeline(prev => [...prev, { kind: "draft", id, timestamp: Date.now() }]);
+  }, []);
+
   const freezeDraft = useCallback((meta = {}) => {
     const draft = assistantDraftRef.current;
     const reasoning = assistantReasoningDraftRef.current;
     const visibleDraft = isPlaceholderEllipsisContent(draft) ? "" : (draft || "");
     const hasVisible = Boolean(visibleDraft && visibleDraft.trim());
     const hasReasoning = Boolean(reasoning && reasoning.trim());
+    const anchorId = draftAnchorRef.current;
+    draftAnchorRef.current = null;
     if (hasVisible || hasReasoning) {
       setTimeline((prev) => {
+        const anchorIndex = prev.findIndex(item => item.kind === "draft" && item.id === anchorId);
+        const message = {
+          kind: "message", id: anchorIndex >= 0 ? anchorId : ++timelineIdRef.current,
+          role: "assistant", content: visibleDraft, reasoningContent: reasoning || "",
+          ...meta, timestamp: anchorIndex >= 0 ? prev[anchorIndex].timestamp : Date.now(),
+        };
+        if (anchorIndex >= 0) {
+          return prev.map((item, index) => index === anchorIndex ? message : item);
+        }
         const last = [...prev].reverse().find(
           (item) => item.kind === "message" && item.role === "assistant",
         );
@@ -134,23 +172,13 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         ) {
           return prev;
         }
-        const id = ++timelineIdRef.current;
-        return [...prev, {
-          kind: "message",
-          id,
-          role: "assistant",
-          content: visibleDraft,
-          reasoningContent: reasoning || "",
-          ...meta,
-          timestamp: Date.now(),
-        }];
+        return [...prev, message];
       });
+    } else if (anchorId != null) {
+      setTimeline(prev => prev.filter(item => item.kind !== "draft" || item.id !== anchorId));
     }
-    setAssistantDraft("");
-    assistantDraftRef.current = "";
-    setAssistantReasoningDraft("");
-    assistantReasoningDraftRef.current = "";
-  }, []);
+    resetDraftBuffers();
+  }, [resetDraftBuffers]);
 
   const rememberHistoryPage = useCallback((page) => {
     const messages = page.messages;
@@ -165,6 +193,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   }, []);
 
   const replaceTimelineFromPage = useCallback((page) => {
+    discardDraft();
     const messages = rememberHistoryPage(page);
     if (messages.length === 0) {
       setTimeline([]);
@@ -180,7 +209,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       onNodeContentDiff,
     );
     onNodeNotesDiffsReset?.();
-  }, [onNodeContentDiff, onNodeContentDiffsReset, onNodeNotesDiffsReset, rememberHistoryPage]);
+  }, [discardDraft, onNodeContentDiff, onNodeContentDiffsReset, onNodeNotesDiffsReset, rememberHistoryPage]);
 
   const reloadTimelineFromSession = useCallback(async (sid) => {
     const sessionKey = sid || activeSessionIdRef.current;
@@ -225,10 +254,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         }
 
         sseCompletedRef.current = true;
-        setAssistantDraft("");
-        assistantDraftRef.current = "";
-        setAssistantReasoningDraft("");
-        assistantReasoningDraftRef.current = "";
+        discardDraft();
         await reloadTimelineFromSession(sid);
         if (disconnectRecoveryRef.current !== recovery) return;
         onNodesUpdate?.();
@@ -254,6 +280,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     }
   }, [
     addMessage,
+    discardDraft,
     disconnectPollIntervalMs,
     finalizeAllRunningSteps,
     onNodesUpdate,
@@ -274,10 +301,12 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       case "queued_message_started":
         sseCompletedRef.current = false;
         setRunning(true);
-        setAssistantDraft("");
-        assistantDraftRef.current = "";
-        setAssistantReasoningDraft("");
-        assistantReasoningDraftRef.current = "";
+        discardDraft();
+        setTimeline((prev) => prev.map((item) => (
+          item.type === "requirements_todolist" && item.todoCard?.delivery_status
+            ? { ...item, todoCard: { ...item.todoCard, delivery_status: undefined } }
+            : item
+        )));
         setTimeline((prev) => {
           if (prev.some((item) => item.dbMessageId === d.message_id)) return prev;
           const optimistic = prev.findIndex((item) => item.role === "user" && !item.dbMessageId && item.content === d.content);
@@ -373,21 +402,17 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         break;
 
       case "supervisor_stream": {
+        if (!d.chunk) break;
+        ensureDraftAnchor();
         const phase = d.phase || "content";
         if (phase === "reasoning") {
-          setAssistantReasoningDraft((p) => {
-            const next = p + d.chunk;
-            assistantReasoningDraftRef.current = next;
-            return next;
-          });
+          assistantReasoningDraftRef.current += d.chunk;
+          setAssistantReasoningDraft(assistantReasoningDraftRef.current);
         } else {
           // 正文已经开始输出时，思考阶段已结束，不应继续显示旋转中的“继续执行”。
           finalizeAllRunningSteps();
-          setAssistantDraft((p) => {
-            const next = p + d.chunk;
-            assistantDraftRef.current = next;
-            return next;
-          });
+          assistantDraftRef.current += d.chunk;
+          setAssistantDraft(assistantDraftRef.current);
         }
         break;
       }
@@ -402,6 +427,19 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
           assistantDraftRef.current = finalText;
           setAssistantDraft(finalText);
         }
+        const deliveryStatus = d.workflow_status === "needs_user" || d.workflow_status === "needs_revision"
+          ? d.workflow_status
+          : undefined;
+        setTimeline((prev) => {
+          const index = prev.findLastIndex((item) => item.type === "requirements_todolist" && item.todoCard);
+          if (index < 0) return prev;
+          const next = [...prev];
+          next[index] = {
+            ...next[index],
+            todoCard: { ...next[index].todoCard, delivery_status: deliveryStatus },
+          };
+          return next;
+        });
         freezeDraft();
         reconcileTodolist(activeSessionIdRef.current, setTimeline);
         setRunning(!finished);
@@ -415,11 +453,13 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         const label = d.label || d.stage || "进行中";
         if (d.stage === "thinking") {
           // 新一轮思考意味着上一轮输出未被接受；丢弃它，避免最终正文继续拼接后重复显示。
-          setAssistantDraft("");
-          assistantDraftRef.current = "";
-          setAssistantReasoningDraft("");
-          assistantReasoningDraftRef.current = "";
-        } else {
+          discardDraft();
+          // 工具执行后的下一轮模型响应直接使用流式气泡。
+          if (d.label === "继续执行") {
+            finalizeAllRunningSteps();
+            break;
+          }
+        } else if (!d.task_id) {
           freezeDraft();
         }
         pushExecStep(label);
@@ -479,9 +519,10 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         const nodeId = d.node_id || d.chapter_node_id;
         const nodeType = d.node_type || (ev === "chapter_edit_diff" ? "chapter" : undefined);
         finalizeAllRunningSteps();
-        addMessage("assistant", "", {
+        const card = {
           type: "chapter_content_diff_card",
           chapterContentDiffCard: {
+            task_id: d.task_id,
             node_id: nodeId,
             chapter_node_id: d.chapter_node_id || nodeId,
             node_type: nodeType,
@@ -496,7 +537,18 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
             word_count: d.word_count,
             word_count_delta: d.word_count_delta,
           },
-        });
+        };
+        if (d.task_id) {
+          setTimeline((prev) => {
+            const existing = prev.findIndex(item => item.type === "chapter_content_diff_card"
+              && item.chapterContentDiffCard?.task_id === d.task_id
+              && item.chapterContentDiffCard?.node_id === nodeId);
+            if (existing >= 0) return prev.map((item, index) => index === existing ? { ...item, ...card } : item);
+            return [...prev, { kind: "message", id: ++timelineIdRef.current, role: "assistant", content: "", timestamp: Date.now(), ...card }];
+          });
+        } else {
+          addMessage("assistant", "", card);
+        }
         if (nodeType === "chapter" && onChapterUpdated) onChapterUpdated(nodeId);
         if (nodeType !== "chapter" && onNodesUpdate) onNodesUpdate();
         if (nodeId && onNodeContentDiff) {
@@ -610,6 +662,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       case "error":
         sseCompletedRef.current = ev === "error";
         finalizeAllRunningSteps();
+        freezeDraft();
         addMessage(
           "system",
           d.message === "AI额度不足，请稍后再试" ? d.message : `错误: ${d.message}`,
@@ -623,13 +676,12 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         setPendingMessages([]);
         sseCompletedRef.current = true;
         finalizeAllRunningSteps();
-        setAssistantDraft("");
-        assistantDraftRef.current = "";
-        setAssistantReasoningDraft("");
-        assistantReasoningDraftRef.current = "";
+        discardDraft();
         setRunning(false);
         onNodesUpdate?.();
+        const generation = sessionGenerationRef.current;
         Promise.resolve(reloadTimelineFromSession()).finally(() => {
+          if (generation !== sessionGenerationRef.current) return;
           addMessage("system", "任务已被中断", { type: "interrupted" });
         });
         break;
@@ -642,7 +694,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       lastStreamSeqRef.current = Math.max(lastStreamSeqRef.current, streamSeq);
     }
   }, [
-    syncSessionId, freezeDraft, pushExecStep,
+    syncSessionId, freezeDraft, discardDraft, ensureDraftAnchor, pushExecStep,
     appendLastRunningStream, finalizeLastRunningStep, finalizeAllRunningSteps, addMessage,
     onChapterUpdated, onNodesUpdate, onNodeContentDiff, onNodeNotesDiff, reloadTimelineFromSession,
   ]);
@@ -655,11 +707,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     setRunning(true);
     sseCompletedRef.current = false;
     if (!resume) {
-      setAssistantDraft("");
-      assistantDraftRef.current = "";
-      setAssistantReasoningDraft("");
-      assistantReasoningDraftRef.current = "";
-      timelineIdRef.current = 0;
+      discardDraft();
       lastStreamSeqRef.current = 0;
     }
 
@@ -688,6 +736,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
               /* ignore */
             }
           }
+          if (ctl.signal.aborted) return;
           finalizeAllRunningSteps();
           setRunning(false);
           addMessage("system", `错误: ${msg}`, { type: "error" });
@@ -737,12 +786,12 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         });
       })
       .catch((e) => {
-        if (e?.name !== "AbortError") {
+        if (!ctl.signal.aborted && e?.name !== "AbortError") {
           recoverDisconnectedRun();
         }
       });
     sseRef.current = { close: () => ctl.abort() };
-  }, [onSSE, recoverDisconnectedRun]);
+  }, [discardDraft, onSSE, recoverDisconnectedRun]);
 
   resumeStreamRef.current = (sid) => connectSSE(`${API_BASE}/supervisor/stream`, {
     session_id: sid,
@@ -753,12 +802,9 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   const handleStop = useCallback(async () => {
     const sid = activeSessionIdRef.current;
     if (!sid || !running) return;
-    setAssistantDraft("");
-    assistantDraftRef.current = "";
-    setAssistantReasoningDraft("");
-    assistantReasoningDraftRef.current = "";
+    discardDraft();
     await sessionApi.stopSupervisor(sid);
-  }, [running]);
+  }, [discardDraft, running]);
 
   const handleSend = useCallback((overrideMsg, chapterReviewIntensity = "medium") => {
     const raw = (overrideMsg ?? input).trim();
@@ -775,6 +821,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         chapter_review_intensity: chapterReviewIntensity,
       });
     } else {
+      const generation = sessionGenerationRef.current;
       void (async () => {
       try {
         const res = await authFetch(`${API_BASE}/supervisor/enqueue`, {
@@ -786,8 +833,10 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
         chapter_review_intensity: chapterReviewIntensity,
           }),
         });
+        if (generation !== sessionGenerationRef.current) return;
         if (!res.ok) throw new Error("消息提交失败，请重试");
         const state = await res.json();
+        if (generation !== sessionGenerationRef.current) return;
         setInput("");
         // 保留正在读取的 SSE；空闲或已结束时订阅后端任务流。
         if (state.started_new_stream || !running || sseCompletedRef.current) {
@@ -795,6 +844,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
           connectSSE(`${API_BASE}/supervisor/stream`, { session_id: sid }, { resume: true });
         }
       } catch (error) {
+        if (generation !== sessionGenerationRef.current) return;
         addMessage("system", error.message, { type: "error" });
       }
       })();
@@ -821,14 +871,13 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
 
   const handleSelectSession = useCallback(async (session) => {
     if (running) return;
+    sseRef.current?.close();
+    sseRef.current = null;
     setPendingMessages([]);
     disconnectRecoveryRef.current = null;
     setTimeline([]);
     setInput("");
-    setAssistantDraft("");
-    assistantDraftRef.current = "";
-    setAssistantReasoningDraft("");
-    assistantReasoningDraftRef.current = "";
+    discardDraft();
     timelineIdRef.current = 0;
     lastStreamSeqRef.current = 0;
     historyCursorRef.current = null;
@@ -855,6 +904,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
     }
   }, [
     running,
+    discardDraft,
     syncSessionId,
     addMessage,
     onNodeContentDiff,
@@ -919,16 +969,15 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
   }, []);
 
   const resetState = useCallback(() => {
+    sessionGenerationRef.current += 1;
+    sseCompletedRef.current = true;
     disconnectRecoveryRef.current = null;
     setPendingMessages([]);
     setTimeline([]);
     setInput("");
     setRunning(false);
     syncSessionId(null);
-    setAssistantDraft("");
-    assistantDraftRef.current = "";
-    setAssistantReasoningDraft("");
-    assistantReasoningDraftRef.current = "";
+    discardDraft();
     timelineIdRef.current = 0;
     lastStreamSeqRef.current = 0;
     historyCursorRef.current = null;
@@ -941,7 +990,7 @@ export function useSupervisorChat({ workId, callbacks = {}, disconnectPollInterv
       sseRef.current.close();
       sseRef.current = null;
     }
-  }, [syncSessionId, onNodeContentDiffsReset, onNodeNotesDiffsReset]);
+  }, [discardDraft, syncSessionId, onNodeContentDiffsReset, onNodeNotesDiffsReset]);
 
   // ── Return ──
 

@@ -1,4 +1,5 @@
 """Supervisor Agent - 主编排Agent"""
+import database
 import json
 import logging
 import uuid
@@ -8,11 +9,11 @@ from pathlib import Path
 from typing import Callable, Optional, Dict, Any
 
 from langchain_core.messages import HumanMessage, SystemMessage, AIMessage, ToolMessage
-from langgraph.graph import END, MessagesState, StateGraph
+from langgraph.graph import MessagesState
 from langgraph.prebuilt import ToolNode
 from langsmith import traceable
 
-from services.agents.llm import get_llm, bind_tools_to_llm, should_continue
+from services.agents.llm import get_llm, bind_tools_to_llm
 from langgraph.errors import GraphRecursionError
 
 from services.agents.supervisor_turn import (
@@ -94,48 +95,20 @@ async def wrap_up_supervisor_after_tool_limit(
                     ],
                     additional_kwargs=getattr(response, "additional_kwargs", None) or {},
                 )
+        tool_response = response
         action, response = prepare_supervisor_ai_message(response)
         if action == "end":
-            return response
+            end_call = next(call for call in extract_tool_calls(tool_response) if call['name'] == 'respond_to_user')
+            delivered = json.loads(await respond_to_user.ainvoke(end_call.get('args') or {}))
+            if delivered.get('success'):
+                return AIMessage(content=delivered['message'])
+            working.extend([tool_response, ToolMessage(content=json.dumps(delivered, ensure_ascii=False), name='respond_to_user', tool_call_id=end_call['id'])])
         if turn_retry >= MAX_SUPERVISOR_TURN_RETRIES:
             raise RuntimeError("Agent stopped repeatedly without acting")
         turn_retry += 1
-        working.append(response)
+        if action != "end":
+            working.append(response)
         working.append(HumanMessage(content=SUPERVISOR_TOOL_LIMIT_INSTRUCTION))
-
-
-def _tool_call_diagnostic_payload(message) -> dict:
-    """Summarize streaming tool-call parse state without dumping huge args."""
-    invalid_tool_calls = getattr(message, "invalid_tool_calls", None) or []
-    tool_call_chunks = getattr(message, "tool_call_chunks", None) or []
-    response_metadata = getattr(message, "response_metadata", None) or {}
-
-    def _summarize_call(call: dict) -> dict:
-        args = call.get("args", "")
-        return {
-            "name": call.get("name") or "",
-            "id": call.get("id") or "",
-            "args_preview": str(args)[:500],
-            "args_len": len(str(args)),
-            "error": str(call.get("error") or "")[:300],
-        }
-
-    return {
-        "finish_reason": response_metadata.get("finish_reason"),
-        "tool_calls_count": len(getattr(message, "tool_calls", None) or []),
-        "invalid_tool_calls_count": len(invalid_tool_calls),
-        "tool_call_chunks_count": len(tool_call_chunks),
-        "invalid_tool_calls": [
-            _summarize_call(call)
-            for call in invalid_tool_calls
-            if isinstance(call, dict)
-        ][:3],
-        "tool_call_chunks": [
-            _summarize_call(call)
-            for call in tool_call_chunks
-            if isinstance(call, dict)
-        ][:3],
-    }
 
 
 def _json_error_details(raw_args: Any) -> dict:
@@ -242,9 +215,6 @@ def _structured_tool_error(exc: Exception) -> str:
     }, ensure_ascii=False)
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 # 请求级上下文必须随异步任务隔离，不能由并发 Agent 共享。
@@ -326,11 +296,11 @@ class SupervisorAgent:
             return None
         from models.node import Node
 
-        db = _get_db()
+        db = database.open_db()
         try:
             notes = (
                 db.query(Node)
-                .filter(Node.work_id == work_id, Node.type == "note")
+                .filter(Node.work_id == work_id, Node.type.in_(["note", "reviewer_note"]))
                 .order_by(Node.sort_order.asc(), Node.created_at.asc(), Node.id.asc())
                 .all()
             )
@@ -339,16 +309,43 @@ class SupervisorAgent:
         sections = [
             "## 作品笔记（自动注入）",
             "本消息是当前作品笔记的最新完整版本，覆盖历史中的旧版本。创作与修改时直接将其作为用户需求、偏好和备忘执行。",
+            "reviewer_note 是你维护的 Reviewer 专用评审准则，评审时由运行时注入 Reviewer 系统提示词；普通 note 承载创作需求与偏好。",
         ]
         if not notes:
             sections.append("当前作品暂无笔记节点。")
+        from services.agent_paragraphs import format_numbered_text
         for note in notes:
             sections.append(
-                f"### {note.title}\n"
+                f"### {note.title}" + ("（Reviewer 专用评审笔记）" if note.type == "reviewer_note" else "") + "\n"
                 f"节点 ID：{note.id}\n\n"
-                f"{note.content or ''}"
+                f"{format_numbered_text(note.content or '')}"
             )
         return "\n\n".join(sections)
+
+    def _initial_messages(
+        self,
+        *,
+        session_id: str | None,
+        work_id: str | None,
+        user_message: str,
+        context_node_ids: list | None,
+        chapter_review_intensity: str,
+        persist_system_updates: bool,
+    ) -> list:
+        chat_history, current_turn_msgs = self._load_chat_history(session_id)
+        from services.message_langchain import db_message_dicts_to_langchain
+        current_turn = db_message_dicts_to_langchain(current_turn_msgs)
+        if not current_turn:
+            current_turn = [HumanMessage(content=user_message)]
+        return self._assemble_initial_messages(
+            chat_history,
+            current_turn,
+            note_context=self._load_work_note_context(work_id),
+            context_node_ids=context_node_ids,
+            chapter_review_intensity=chapter_review_intensity,
+            session_id=session_id if persist_system_updates else None,
+            before_message_id=current_turn_msgs[0]["id"] if current_turn_msgs and persist_system_updates else None,
+        )
 
     def _assemble_initial_messages(
         self,
@@ -399,36 +396,29 @@ class SupervisorAgent:
         return messages
 
     def _get_tools(self):
-        """Supervisor 管理作品，通过显式任务调用隔离的写作与评审子 Agent。"""
+        """Supervisor 管理作品并直接编写章节，评审与参考通过显式任务调用。"""
         from services.agents.tools.query_tools import query_tools
         from services.agents.tools.supervisor_node_tools import supervisor_node_tools as node_tools
-        from services.agents.tools.writing_agent_tools import run_writing_agent
+        from services.agents.tools.subagent_task_tools import steer_subagent, wait_for_subagents
         from services.agents.tools.review_agent_tools import run_review_agent
         from services.agents.tools.chapter_tools import count_chapter_words
-        from services.agents.tools.illustration_tools import insert_chapter_illustration
-        from services.agents.tools.character_relation_tools import character_relation_tools
         from services.agents.tools.research_tools import research_tools
-        from services.agents.tools.humanizer_tools import humanizer_tools
         from services.agents.tools.workflow_skill_tools import workflow_skill_tools
         from services.agents.tools.respond_to_user_tool import respond_to_user
 
-        reference_tools = []
-        user_id = get_context().get("user_id")
-        if user_id:
-            from services.agents.tools.reference_agent_tools import (
-                run_reference_agent,
-                user_has_uploaded_novels,
-            )
-            if user_has_uploaded_novels(user_id):
-                reference_tools.append(run_reference_agent)
+        from services.agents.tools.reference_agent_tools import reference_agent_tool
+        reference_tool = reference_agent_tool(get_context().get("user_id"))
+        reference_tools = [reference_tool] if reference_tool is not None else []
 
-        return [respond_to_user, run_writing_agent, run_review_agent] + reference_tools + query_tools + node_tools + [count_chapter_words, insert_chapter_illustration] + character_relation_tools + research_tools + humanizer_tools + workflow_skill_tools
+        from services.agents.tools.todo_tools import todo_tools
+
+        return todo_tools + [respond_to_user, run_review_agent, steer_subagent, wait_for_subagents] + reference_tools + query_tools + node_tools + [count_chapter_words] + research_tools + workflow_skill_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""
         if not user_id:
             return None
-        db = _get_db()
+        db = database.open_db()
         try:
             user = db.query(User).filter_by(id=user_id).first()
             if not user:
@@ -514,6 +504,10 @@ class SupervisorAgent:
             context_node_ids = run_context.get("context_node_ids")
 
             model_pref = self._load_model_pref(user_id)
+            from services.agents.run_control import AgentRunControl
+            run_context.setdefault("run_control", AgentRunControl())
+            run_context["todo_used_this_turn"] = False
+            run_context["current_user_instruction"] = user_message
             run_context["emit"] = run_emit
             run_context["model_pref"] = model_pref
             context_token = set_context(run_context)
@@ -531,21 +525,14 @@ class SupervisorAgent:
             )
 
             # 注入历史对话（多轮），让 agent 看到上文，理解"需要/好/不用了"等省略回答
-            chat_history, current_turn_msgs = self._load_chat_history(session_id)
-            from services.message_langchain import db_message_dicts_to_langchain
-            current_turn = db_message_dicts_to_langchain(current_turn_msgs)
-            if not current_turn:
-                current_turn = [HumanMessage(content=user_message)]
-
             initial_state = {
-                "messages": self._assemble_initial_messages(
-                    chat_history,
-                    current_turn,
-                    note_context=self._load_work_note_context(work_id),
+                "messages": self._initial_messages(
+                    session_id=session_id,
+                    work_id=work_id,
+                    user_message=user_message,
                     context_node_ids=context_node_ids,
                     chapter_review_intensity=chapter_review_intensity,
-                    session_id=session_id,
-                    before_message_id=current_turn_msgs[0]["id"] if current_turn_msgs else None,
+                    persist_system_updates=True,
                 ),
             }
             if session_id:
@@ -706,6 +693,7 @@ class SupervisorAgent:
             }
         finally:
             if context_token is not None:
+                await get_context()['run_control'].close()
                 reset_context(context_token)
 
     def _save_intermediate_messages(self, session_id: str, messages: list, work_id: str = None):

@@ -169,6 +169,74 @@ def test_prepare_edit_resend_restores_and_truncates(db_session, mock_auth):
     assert new_msg["content"] == "第二轮-编辑后"
 
 
+def _session_with_two_turns(db, user_id):
+    work = _make_work(db, user_id)
+    session = _make_session(db, user_id, work.id)
+    first = _add_user_message(db, session.id, "第一轮", work.id, 0)
+    capture_canvas_checkpoint(
+        db, session_id=session.id, work_id=work.id,
+        trigger_message_id=first.id, sort_order=first.sort_order,
+    )
+    db.add(SupervisorMessage(
+        session_id=session.id, role="assistant", content="A1", work_id=work.id, sort_order=1,
+    ))
+    second = _add_user_message(db, session.id, "第二轮", work.id, 2)
+    capture_canvas_checkpoint(
+        db, session_id=session.id, work_id=work.id,
+        trigger_message_id=second.id, sort_order=second.sort_order,
+    )
+    db.add(SupervisorMessage(
+        session_id=session.id, role="assistant", content="A2", work_id=work.id, sort_order=3,
+    ))
+    db.commit()
+    return work, session, second
+
+
+def _save_cutoff(monkeypatch, tmp_path, session_id, cutoff_index):
+    from langchain_core.messages import HumanMessage
+    from services.agents.deep_agent_runtime import save_summarization_state
+
+    monkeypatch.setattr("services.agents.deep_agent_runtime.DEEP_AGENT_CONTEXT_ROOT", tmp_path)
+    save_summarization_state("session", session_id, {
+        "_summarization_event": {
+            "cutoff_index": cutoff_index,
+            "summary_message": HumanMessage(content="已压缩的前文"),
+            "file_path": "/conversation_history/session.md",
+        },
+        "_summarization_session_id": "summary-session",
+    })
+
+
+def test_edit_resend_drops_summarization_when_cutoff_passes_remaining_history(db_session, mock_auth, monkeypatch, tmp_path):
+    from services.agents.deep_agent_runtime import load_summarization_state
+
+    work, session, second = _session_with_two_turns(db_session, mock_auth.id)
+    _save_cutoff(monkeypatch, tmp_path, session.id, 10_000)
+
+    prepare_edit_resend(
+        db_session, session_id=session.id, work_id=work.id,
+        message_id=second.id, new_content="第二轮-编辑后",
+    )
+
+    assert load_summarization_state("session", session.id) == {}
+
+
+def test_edit_resend_keeps_summarization_when_cutoff_is_inside_remaining_history(db_session, mock_auth, monkeypatch, tmp_path):
+    from services.agents.deep_agent_runtime import load_summarization_state
+
+    work, session, second = _session_with_two_turns(db_session, mock_auth.id)
+    _save_cutoff(monkeypatch, tmp_path, session.id, 1)
+
+    prepare_edit_resend(
+        db_session, session_id=session.id, work_id=work.id,
+        message_id=second.id, new_content="第二轮-编辑后",
+    )
+
+    restored = load_summarization_state("session", session.id)
+    assert restored["_summarization_event"]["cutoff_index"] == 1
+    assert restored["_summarization_event"]["summary_message"].content == "已压缩的前文"
+
+
 def test_prepare_edit_resend_restores_todolist_checkpoint(db_session, mock_auth):
     work = _make_work(db_session, mock_auth.id)
     session = _make_session(db_session, mock_auth.id, work.id)

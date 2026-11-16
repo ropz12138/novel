@@ -25,29 +25,7 @@ describe("ChapterContentDiffViewer", () => {
     expect(screen.getByText(/替换/)).toBeDefined();
   });
 
-  it("shows the submitted new group first and reveals the complete old group in comparison", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChapterContentDiffViewer
-        hunks={[{
-          type: "replace",
-          paragraph_index: 1,
-          old_text: "旧段落",
-          new_text: "新段落",
-        }]}
-        summary={{}}
-      />
-    );
-
-    await user.click(screen.getByRole("button"));
-    expect(screen.queryByTestId("inline-diff-old")).toBeNull();
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("新段落");
-    await user.click(screen.getByRole("button", { name: "对照" }));
-    expect(screen.getByTestId("inline-diff-old").textContent).toBe("旧段落");
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("新段落");
-  });
-
-  it("keeps a replacement as one indivisible submitted group", async () => {
+  it("shows old text above new text when a replacement is expanded", async () => {
     const user = userEvent.setup();
     render(
       <ChapterContentDiffViewer
@@ -62,34 +40,15 @@ describe("ChapterContentDiffViewer", () => {
     );
 
     await user.click(screen.getByRole("button"));
-    expect(screen.queryByText("废墟")).toBeNull();
-    const group = screen.getByTestId("inline-diff-new").querySelector('[data-diff-kind="replace"]');
-    expect(group.textContent).toBe("林川在雨中遇见苏婉。");
-    expect(screen.getByTestId("inline-diff-new").querySelectorAll("[data-diff-kind]")).toHaveLength(1);
-    await user.click(screen.getByRole("button", { name: "对照" }));
-    expect(screen.getByTestId("inline-diff-old").textContent).toBe("林川在废墟中遇见苏婉。");
+    const oldText = screen.getByTestId("inline-diff-old");
+    const newText = screen.getByTestId("inline-diff-new");
+    expect(oldText.textContent).toBe("林川在废墟中遇见苏婉。");
+    expect(newText.textContent).toBe("林川在雨中遇见苏婉。");
+    expect(oldText.compareDocumentPosition(newText) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "对照" })).toBeNull();
   });
 
-  it("does not infer a deleted subsegment inside a submitted replacement", async () => {
-    const user = userEvent.setup();
-    render(
-      <ChapterContentDiffViewer
-        hunks={[{
-          type: "replace",
-          paragraph_index: 1,
-          old_text: "甲删除乙",
-          new_text: "甲乙",
-        }]}
-        summary={{}}
-      />
-    );
-
-    await user.click(screen.getByRole("button"));
-    expect(screen.getByTestId("inline-diff-new").textContent).toBe("甲乙");
-    expect(screen.queryByRole("button", { name: "查看已删除文本" })).toBeNull();
-  });
-
-  it("renders a delete hunk as a single red old-text region", async () => {
+  it("renders a delete hunk as the old paragraph only", async () => {
     const user = userEvent.setup();
     render(
       <ChapterContentDiffViewer
@@ -104,9 +63,7 @@ describe("ChapterContentDiffViewer", () => {
     );
 
     await user.click(screen.getByRole("button"));
-    expect(screen.queryByTestId("inline-diff-old")).toBeNull();
-    await user.click(screen.getByRole("button", { name: "查看已删除段落" }));
-    expect(screen.getByRole("tooltip").textContent).toContain("待删段落");
+    expect(screen.getByTestId("inline-diff-old").textContent).toBe("待删段落");
     expect(screen.queryByTestId("inline-diff-new")).toBeNull();
   });
 
@@ -129,6 +86,56 @@ describe("ChapterContentDiffViewer", () => {
     expect(screen.getByText("新增段落").getAttribute("data-diff-kind")).toBe("insert");
     expect(screen.queryByTestId("inline-diff-old")).toBeNull();
     expect(screen.queryByTestId("inline-diff-divider")).toBeNull();
+  });
+
+  it("shows only changed paragraphs when a hunk contains the whole chapter", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChapterContentDiffViewer
+        hunks={[{
+          type: "replace",
+          paragraph_index: 1,
+          old_text: "开头未改。\n\n林川在废墟中遇见苏婉。\n\n结尾未改。",
+          new_text: "开头未改。\n\n林川在雨中遇见苏婉。\n\n结尾未改。",
+        }]}
+        summary={{ paragraphs_changed: 1 }}
+      />
+    );
+
+    await user.click(screen.getByRole("button"));
+    expect(screen.getByText("段落 2")).toBeDefined();
+    expect(screen.getByText(/1 处修改/)).toBeDefined();
+    expect(screen.queryByText(/开头未改/)).toBeNull();
+    expect(screen.queryByText(/结尾未改/)).toBeNull();
+    expect(screen.getByTestId("inline-diff-old").textContent).toContain("废墟");
+    expect(screen.getByTestId("inline-diff-new").textContent).toContain("雨");
+  });
+
+  it("renders markdown in a notes diff instead of the source marks", async () => {
+    const user = userEvent.setup();
+    render(
+      <ChapterContentDiffViewer
+        markdown
+        hunks={[{
+          type: "replace",
+          paragraph_index: 1,
+          old_text: "## 旧标题\n\n- 旧条目",
+          new_text: "## 新标题\n\n**重点**",
+        }]}
+        summary={{}}
+      />
+    );
+
+    for (const button of screen.getAllByRole("button", { name: /段落/ })) {
+      await user.click(button);
+    }
+    expect(screen.getByRole("heading", { name: "旧标题" })).toBeDefined();
+    expect(screen.getByRole("heading", { name: "新标题" })).toBeDefined();
+    expect(screen.getByRole("listitem").textContent).toBe("旧条目");
+    expect(screen.getByText("重点").tagName).toBe("STRONG");
+    expect(screen.getAllByTestId("notes-diff-markdown").every((node) => node.className.includes("max-w-full") && node.className.includes("overflow-hidden"))).toBe(true);
+    expect(screen.queryByText(/##/)).toBeNull();
+    expect(screen.queryByText(/\*\*重点\*\*/)).toBeNull();
   });
 
   it("returns null when hunks empty", () => {

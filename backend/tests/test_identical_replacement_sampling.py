@@ -1,5 +1,6 @@
 """old 与 new 完全相同时，只改下一次 agent 请求的采样参数。"""
 import asyncio
+import hashlib
 import json
 
 import database
@@ -40,21 +41,24 @@ def test_identical_old_new_arms_next_request_only():
     token = supervisor_mod.set_context({"work_id": "sampling-work"})
     try:
         node, _original = _seed_chapter(db, "arm-identical")
+        paragraph = _original.split("\n\n")[0]
         identical = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
-            replacements=[{"old": "就你理性", "new": "就你理性"}],
+            expected_content_sha256=hashlib.sha256(_original.encode()).hexdigest(),
+            replacements=[{"start_paragraph": 1, "end_paragraph": 1, "new": paragraph}],
         ))
-        assert "old 和 new 完全相同" in identical["error"]
+        assert "正文不会发生任何变化" in identical["error"]
         assert supervisor_mod.get_context()["identical_replacement_sampling"] is True
 
         supervisor_mod.get_context()["identical_replacement_sampling"] = False
         missing = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
-            replacements=[{"old": "正文里没有", "new": "改后"}],
+            expected_content_sha256=hashlib.sha256(_original.encode()).hexdigest(),
+            replacements=[{"start_paragraph": 9, "end_paragraph": 9, "new": "改后"}],
         ))
-        assert "未找到" in missing["error"]
+        assert "超出有效段落" in missing["error"]
         assert supervisor_mod.get_context()["identical_replacement_sampling"] is False
     finally:
         supervisor_mod.reset_context(token)
@@ -69,7 +73,8 @@ def test_successful_replace_does_not_arm_sampling():
         result = json.loads(nt._update_node_sync(
             node.id,
             mode="replace",
-            replacements=[{"old": "就你理性", "new": "就你能耐"}],
+            expected_content_sha256=hashlib.sha256(_original.encode()).hexdigest(),
+            replacements=[{"start_paragraph": 1, "end_paragraph": 1, "new": _original.split("\n\n")[0].replace("就你理性", "就你能耐")}],
         ))
         assert result["success"] is True
         assert "identical_replacement_sampling" not in supervisor_mod.get_context()

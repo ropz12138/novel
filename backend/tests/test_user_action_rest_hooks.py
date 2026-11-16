@@ -58,7 +58,10 @@ def test_content_diff_api_restores_and_reviews_exact_agent_groups(mock_auth):
         db.add(node)
         db.flush()
         record_change(db, node, old, build_replacement_diff(old, [
-            {"old": "A", "new": "X\n\nA′"}, {"old": "B", "new": "B′"}, {"old": "C", "new": "C′"}]))
+            {"start": 0, "end": 1, "new": "X\n\nA′"},
+            {"start": old.index("B"), "end": old.index("B") + 1, "new": "B′"},
+            {"start": old.index("C"), "end": old.index("C") + 1, "new": "C′"},
+        ]))
         db.commit()
         response = client.get(f"/api/works/{work.id}/content-diffs")
         assert response.status_code == 200

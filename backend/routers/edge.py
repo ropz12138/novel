@@ -5,6 +5,7 @@ from database import get_db
 from models.edge import Edge
 from models.node import Node
 from models.user import User
+from services.work_access import require_work_owner
 from schemas.edge import EdgeCreate, EdgeUpdate, EdgeResponse, EdgeListResponse
 from routers.auth import get_current_user
 from node_types import validate_edge_endpoints
@@ -28,6 +29,7 @@ def create_edge(
     current_user: User = Depends(get_current_user),
 ):
     """在指定作品中创建连线"""
+    require_work_owner(db, work_id, current_user.id)
     source = db.query(Node).filter(Node.id == data.source_id, Node.work_id == work_id).first()
     if not source:
         raise HTTPException(status_code=404, detail="Source node not found")
@@ -72,6 +74,7 @@ def list_edges(
     current_user: User = Depends(get_current_user),
 ):
     """获取指定作品的所有连线"""
+    require_work_owner(db, work_id, current_user.id)
     edges = db.query(Edge).filter(Edge.work_id == work_id).all()
     return EdgeListResponse(edges=edges, total=len(edges))
 
@@ -87,6 +90,7 @@ def update_edge(
     edge = db.query(Edge).filter(Edge.id == edge_id).first()
     if not edge:
         raise HTTPException(status_code=404, detail="Edge not found")
+    require_work_owner(db, edge.work_id, current_user.id)
 
     update_data = data.model_dump(exclude_unset=True)
     for key, value in update_data.items():
@@ -113,6 +117,7 @@ def delete_edge(
     edge = db.query(Edge).filter(Edge.id == edge_id).first()
     if not edge:
         raise HTTPException(status_code=404, detail="Edge not found")
+    require_work_owner(db, edge.work_id, current_user.id)
 
     src_title, tgt_title = _endpoint_titles(db, edge.source_id, edge.target_id)
     action_svc.record_edge_action(

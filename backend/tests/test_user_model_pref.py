@@ -27,21 +27,20 @@ def _make_user(db, **kw):
 # ---------- get_llm 覆盖 ----------
 
 def test_get_llm_uses_config_defaults_when_no_pref():
-    llm = llm_mod.get_llm(temperature=0.1, streaming=False)
+    llm = llm_mod.get_llm(temperature=0.1)
     assert llm_mod.settings.default_model in (llm._primary.model_name, llm.model_name)
 
 
 def test_get_llm_user_primary_overrides_default():
     target = next(m for m in settings.available_models if m != settings.default_model)
-    llm = llm_mod.get_llm(temperature=0.1, streaming=False, primary=target)
+    llm = llm_mod.get_llm(temperature=0.1, primary=target)
     assert llm._primary.model_name == target
 
 
 def test_get_llm_user_fallback_overrides_default():
     primary = settings.available_models[0]
     fallback = settings.available_models[1]
-    llm = llm_mod.get_llm(temperature=0.1, streaming=False,
-                          primary=primary, fallback=fallback)
+    llm = llm_mod.get_llm(temperature=0.1, primary=primary, fallback=fallback)
     assert llm._fallback.model_name == fallback
 
 
@@ -49,7 +48,7 @@ def test_get_llm_null_fallback_falls_back_to_config(monkeypatch):
     primary = settings.available_models[0]
     monkeypatch.setattr(settings, "fallback_model", settings.available_models[1])
     # fallback=None（未设置）→ 用 config 默认备模型
-    llm = llm_mod.get_llm(temperature=0.1, streaming=False, primary=primary, fallback=None)
+    llm = llm_mod.get_llm(temperature=0.1, primary=primary, fallback=None)
     assert llm._fallback.model_name == settings.fallback_model
 
 
@@ -57,7 +56,6 @@ def test_get_llm_empty_fallback_disables_config_fallback():
     primary = settings.available_models[0]
     llm = llm_mod.get_llm(
         temperature=0.1,
-        streaming=False,
         primary=primary,
         fallback="",
     )

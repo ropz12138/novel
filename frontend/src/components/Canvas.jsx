@@ -24,9 +24,9 @@ import "@xyflow/react/dist/style.css";
 import CustomNode from "./nodes/CustomNode";
 import IsolatedNodePanel from "./nodes/IsolatedNodePanel";
 import CustomEdge from "./edges/CustomEdge";
-import CharacterRelationEdge from "./edges/CharacterRelationEdge";
 import NodeDetailDrawer from "./nodes/NodeDetailDrawer";
 import { firstOutlineNode, orderedNavigationNodes } from "../lib/nodeNavigation";
+import { paragraphSpan } from "../lib/agentParagraphs";
 import {
   fetchNodes,
   createNode,
@@ -37,10 +37,8 @@ import {
   createEdge,
   deleteEdge,
   deleteNode,
+  copyNodeToWork,
   restoreCanvasSnapshot,
-  fetchCharacterRelations,
-  createCharacterRelation,
-  deleteCharacterRelation,
 } from "../lib/canvasApi";
 import {
   applyEdgeLabelAvoidance,
@@ -81,12 +79,12 @@ import {
 } from "../lib/structuralEdgeStyle";
 import {
   applyNodeUpdateToData,
-  buildFlowCharacterRelations,
   buildFlowEdges,
   canvasSnapshotKey,
   mergeRefreshedNodes,
   toCanvasSnapshot,
 } from "../lib/canvasFlowAdapters";
+import { copyDialogText, describeNodeCopy } from "../lib/nodeCopy";
 
 const createNodeTypes = (
   onNodeClick,
@@ -117,31 +115,28 @@ const createNodeTypes = (
 
 const edgeTypes = {
   custom: CustomEdge,
-  characterRelation: CharacterRelationEdge,
 };
-
-function isRelHandle(handleId) {
-  return (handleId || "").startsWith("rel-");
-}
 
 export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
-const Canvas = memo(forwardRef(function Canvas({ workId, onAddContext, onNodeEdited, nodeContentDiffs = {}, nodeNotesDiffs = {}, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
+const Canvas = memo(forwardRef(function Canvas({ workId, works = [], onAddContext, onNodeEdited, nodeContentDiffs = {}, nodeNotesDiffs = {}, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
   return (
     <ReactFlowProvider>
-      <CanvasContent workId={workId} onAddContext={onAddContext} onNodeEdited={onNodeEdited} nodeContentDiffs={nodeContentDiffs} nodeNotesDiffs={nodeNotesDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeNotesDiffChange={onNodeNotesDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} onNodeNotesDiffsRefresh={onNodeNotesDiffsRefresh} agentRunning={agentRunning} appMode={appMode} charactersPanelOpen={charactersPanelOpen} onCharactersPanelOpenChange={onCharactersPanelOpenChange} onNodeEditingChange={onNodeEditingChange} ref={ref} />
+      <CanvasContent workId={workId} works={works} onAddContext={onAddContext} onNodeEdited={onNodeEdited} nodeContentDiffs={nodeContentDiffs} nodeNotesDiffs={nodeNotesDiffs} onNodeContentDiffChange={onNodeContentDiffChange} onNodeNotesDiffChange={onNodeNotesDiffChange} onNodeContentDiffsRefresh={onNodeContentDiffsRefresh} onNodeNotesDiffsRefresh={onNodeNotesDiffsRefresh} agentRunning={agentRunning} appMode={appMode} charactersPanelOpen={charactersPanelOpen} onCharactersPanelOpenChange={onCharactersPanelOpenChange} onNodeEditingChange={onNodeEditingChange} ref={ref} />
     </ReactFlowProvider>
   );
 }));
 
-const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, onNodeEdited, nodeContentDiffs, nodeNotesDiffs, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode, charactersPanelOpen, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
+const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], onAddContext, onNodeEdited, nodeContentDiffs, nodeNotesDiffs, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode, charactersPanelOpen, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
-  const [characterRelations, setCharacterRelations, onCharacterRelationsChange] = useEdgesState([]);
-  const [showStructuralEdges, setShowStructuralEdges] = useState(true);
   const [contextMenu, setContextMenu] = useState(null);
+  const [copyDialog, setCopyDialog] = useState(null);
+  const [copying, setCopying] = useState(false);
+  const [copyError, setCopyError] = useState("");
+  const [copyNotice, setCopyNotice] = useState("");
   const [selectedNode, setSelectedNode] = useState(null);
   const [loadError, setLoadError] = useState("");
   // 视图状态在挂载时同步读取：defaultViewport 只在挂载生效，晚一帧就来不及
@@ -159,7 +154,6 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const layoutPositionsRef = useRef(new Map());
   const nodesRef = useRef(nodes);
   const edgesRef = useRef(edges);
-  const characterRelationsRef = useRef(characterRelations);
   const undoStackRef = useRef([]);
   const isDraggingRef = useRef(false);
   const selectedNodeIdsRef = useRef([]);
@@ -174,15 +168,10 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     edgesRef.current = edges;
   }, [edges]);
 
-  useEffect(() => {
-    characterRelationsRef.current = characterRelations;
-  }, [characterRelations]);
-
   const pushUndoSnapshot = useCallback((snapshot = null) => {
     const value = snapshot || toCanvasSnapshot(
       nodesRef.current,
       edgesRef.current,
-      characterRelationsRef.current,
     );
     const stack = undoStackRef.current;
     if (stack.length && snapshotKey(stack[stack.length - 1]) === snapshotKey(value)) return;
@@ -213,22 +202,18 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
     setLoadError("");
     try {
-      const [nodesData, edgesData, relationsData] = await Promise.all([
+      const [nodesData, edgesData] = await Promise.all([
         fetchNodes(workId),
         fetchEdges(workId),
-        fetchCharacterRelations(workId),
       ]);
 
       const flowNodes = mergeRefreshedNodes([], nodesData.nodes);
       const flowEdges = buildFlowEdges(edgesData, flowNodes);
-      const flowRelations = buildFlowCharacterRelations(relationsData);
 
       setNodes(flowNodes);
       setEdges(flowEdges);
-      setCharacterRelations(flowRelations);
       nodesRef.current = flowNodes;
       edgesRef.current = flowEdges;
-      characterRelationsRef.current = flowRelations;
       undoStackRef.current = [];
     } catch (err) {
       console.error("Failed to load data:", err);
@@ -240,29 +225,24 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     if (!workId) return;
     setLoadError("");
     try {
-      const [nodesData, edgesData, relationsData] = await Promise.all([
+      const [nodesData, edgesData] = await Promise.all([
         fetchNodes(workId),
         fetchEdges(workId),
-        fetchCharacterRelations(workId),
       ]);
       const nextNodes = mergeRefreshedNodes(nodesRef.current, nodesData.nodes);
       const nextEdges = buildFlowEdges(edgesData, nextNodes);
-      const nextRelations = buildFlowCharacterRelations(relationsData);
       const previousSnapshot = toCanvasSnapshot(
         nodesRef.current,
         edgesRef.current,
-        characterRelationsRef.current,
       );
-      const nextSnapshot = toCanvasSnapshot(nextNodes, nextEdges, nextRelations);
+      const nextSnapshot = toCanvasSnapshot(nextNodes, nextEdges);
       if (!restoringRef.current && snapshotKey(previousSnapshot) !== snapshotKey(nextSnapshot)) {
         pushUndoSnapshot(previousSnapshot);
       }
       nodesRef.current = nextNodes;
       edgesRef.current = nextEdges;
-      characterRelationsRef.current = nextRelations;
       setNodes(nextNodes);
       setEdges(nextEdges);
-      setCharacterRelations(nextRelations);
       // The detail drawer keeps its own selected-node state, so keep it in
       // sync when an agent update refreshes the canvas data.
       setSelectedNode((previousSelectedNode) => {
@@ -278,7 +258,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       console.error("Failed to refresh data:", err);
       setLoadError(err?.message || "刷新画布失败，已保留当前内容");
     }
-  }, [workId, setNodes, setEdges, setCharacterRelations, pushUndoSnapshot]);
+  }, [workId, setNodes, setEdges, pushUndoSnapshot]);
 
   const undo = useCallback(async () => {
     if (!workId || restoringRef.current || undoStackRef.current.length === 0) return;
@@ -292,15 +272,10 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
         title: node.title,
       })));
       const restoredEdges = buildFlowEdges({ edges: snapshot.edges }, restoredNodes);
-      const restoredRelations = buildFlowCharacterRelations({
-        relations: snapshot.character_relations || [],
-      });
       nodesRef.current = restoredNodes;
       edgesRef.current = restoredEdges;
-      characterRelationsRef.current = restoredRelations;
       setNodes(restoredNodes);
       setEdges(restoredEdges);
-      setCharacterRelations(restoredRelations);
       setSelectedNode(null);
     } catch (err) {
       undoStackRef.current = [...undoStackRef.current, snapshot];
@@ -308,7 +283,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     } finally {
       restoringRef.current = false;
     }
-  }, [workId, setNodes, setEdges, setCharacterRelations]);
+  }, [workId, setNodes, setEdges]);
 
   const removeNodesByIds = useCallback(async (nodeIds) => {
     const uniqueIds = [...new Set((nodeIds || []).filter(Boolean))];
@@ -320,19 +295,13 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
 
       const idSet = new Set(uniqueIds);
       setNodes((currentNodes) => {
-        const next = filterGraphAfterNodeRemoval(uniqueIds, currentNodes, [], []).nodes;
+        const next = filterGraphAfterNodeRemoval(uniqueIds, currentNodes, []).nodes;
         nodesRef.current = next;
         return next;
       });
       setEdges((currentEdges) => {
-        const next = filterGraphAfterNodeRemoval(uniqueIds, [], currentEdges, []).edges;
+        const next = filterGraphAfterNodeRemoval(uniqueIds, [], currentEdges).edges;
         edgesRef.current = next;
-        return next;
-      });
-      setCharacterRelations((currentRelations) => {
-        const next = filterGraphAfterNodeRemoval(uniqueIds, [], [], currentRelations)
-          .characterRelations;
-        characterRelationsRef.current = next;
         return next;
       });
 
@@ -342,7 +311,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       console.error("Failed to delete nodes:", err);
       alert("删除节点失败");
     }
-  }, [setNodes, setEdges, setCharacterRelations, pushUndoSnapshot]);
+  }, [setNodes, setEdges, pushUndoSnapshot]);
 
   const handleDeleteNode = useCallback(async (nodeData) => {
     const nodeId = nodeData?.id;
@@ -467,13 +436,35 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
         setSelectedNode(null);
         return true;
       },
-      openNodeDetail: (nodeId, quote) => {
+      openNodeDetail: (nodeId, quote, diffTarget) => {
         const flowNode = nodesRef.current.find((node) => node.id === nodeId);
         if (!flowNode) {
           if (quote) window.alert("引用节点已不存在。");
           return false;
         }
-        if (quote) {
+        let sourceReference = quote;
+        if (quote && typeof quote === "object") {
+          const part = quote.part === "notes" ? "notes" : "content";
+          const text = part === "notes" ? (flowNode.data.notes || "") : (flowNode.data.content || "");
+          if (quote.segmentation === "markdown-v1") {
+            const { start, end } = quote;
+            if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > text.length) {
+              window.alert("引用段落已不存在，请让 AI 重新生成引用。");
+              return false;
+            }
+            sourceReference = { start, end, part };
+          } else if (quote.segmentation) {
+            window.alert("引用段落已不存在，请让 AI 重新生成引用。");
+            return false;
+          } else {
+            const span = paragraphSpan(text, quote.startParagraph, quote.endParagraph);
+            if (!span) {
+              window.alert("引用段落已不存在，请让 AI 重新生成引用。");
+              return false;
+            }
+            sourceReference = { ...span, part };
+          }
+        } else if (quote) {
           const content = flowNode.data.content || "";
           const start = content.indexOf(quote);
           if (start < 0 || content.indexOf(quote, start + 1) >= 0) {
@@ -481,7 +472,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
             return false;
           }
         }
-        setSelectedNode({ id: flowNode.id, ...flowNode.data, sourceReference: quote });
+        setSelectedNode({ id: flowNode.id, ...flowNode.data, sourceReference, diffTarget });
         return true;
       },
     }),
@@ -492,46 +483,14 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
     async (params) => {
       if (!workId) return;
 
-      const isRel = isRelHandle(params.sourceHandle) && isRelHandle(params.targetHandle);
       const sourceNode = nodesRef.current.find((n) => n.id === params.source);
       const targetNode = nodesRef.current.find((n) => n.id === params.target);
       const handles = sourceNode && targetNode
-        ? edgeHandlesFromSides(resolveOptimalSides(sourceNode, targetNode), { relation: isRel })
-        : edgeHandlesFromSides({ source_side: "bottom", target_side: "top" }, { relation: isRel });
+        ? edgeHandlesFromSides(resolveOptimalSides(sourceNode, targetNode))
+        : edgeHandlesFromSides({ source_side: "bottom", target_side: "top" });
 
       try {
         pushUndoSnapshot();
-
-        if (isRel) {
-          const newRel = await createCharacterRelation(workId, {
-            source_id: params.source,
-            target_id: params.target,
-            relation_type: "关系",
-            label: "",
-          });
-
-          setCharacterRelations((eds) => {
-            const next = addEdge(
-              {
-                ...params,
-                ...handles,
-                id: newRel.id,
-                type: "characterRelation",
-                label: newRel.relation_type,
-                markerEnd: { type: MarkerType.ArrowClosed },
-                data: {
-                  isCharacterRelation: true,
-                  relation_type: newRel.relation_type,
-                  label: newRel.label || "",
-                },
-              },
-              eds,
-            );
-            characterRelationsRef.current = next;
-            return next;
-          });
-          return;
-        }
 
         const edgeData = {
           source_id: params.source,
@@ -562,69 +521,41 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
         console.error("Failed to create connection:", err);
       }
     },
-    [workId, setEdges, setCharacterRelations, pushUndoSnapshot]
+    [workId, setEdges, pushUndoSnapshot]
   );
 
   const isValidConnection = useCallback((connection) => {
-    const srcRel = isRelHandle(connection.sourceHandle);
-    const tgtRel = isRelHandle(connection.targetHandle);
     const srcNode = nodesRef.current.find((n) => n.id === connection.source);
     const tgtNode = nodesRef.current.find((n) => n.id === connection.target);
 
-    // 角色暂不进画布；角色关系线本期不接；任一端是 character 或 rel handle 一律拒绝
-    if (srcRel || tgtRel) return false;
     if (srcNode?.data?.type === "character" || tgtNode?.data?.type === "character") {
       return false;
     }
-    // 同级、跨级与反向的层级链组合都会被后端拒绝，这里提前挡住，避免拖出连线后再失败
     return deriveRelationKind(srcNode?.data?.type, tgtNode?.data?.type) !== null;
   }, []);
 
   const onCombinedEdgesChange = useCallback(
     (changes) => {
-      const structuralChanges = [];
-      const relationChanges = [];
-      const structuralRemovals = [];
-      const relationRemovals = [];
+      const updates = [];
+      const removals = [];
 
       for (const change of changes) {
-        const isRelation = change.id
-          ? characterRelationsRef.current.some((e) => e.id === change.id)
-          : false;
-
-        if (change.type === "remove" && change.id) {
-          if (isRelation) {
-            relationRemovals.push(change);
-            continue;
-          }
-          structuralRemovals.push(change);
-          continue;
-        }
-
-        if (isRelation) relationChanges.push(change);
-        else structuralChanges.push(change);
+        if (change.type === "remove" && change.id) removals.push(change);
+        else updates.push(change);
       }
 
-      if (structuralChanges.length) onEdgesChange(structuralChanges);
-      if (relationChanges.length) onCharacterRelationsChange(relationChanges);
-
-      if (structuralRemovals.length || relationRemovals.length) {
+      if (updates.length) onEdgesChange(updates);
+      if (removals.length) {
         pushUndoSnapshot();
-        Promise.all([
-          ...structuralRemovals.map((change) => deleteEdge(change.id)),
-          ...relationRemovals.map((change) => deleteCharacterRelation(change.id)),
-        ])
-          .then(() => {
-            if (structuralRemovals.length) onEdgesChange(structuralRemovals);
-            if (relationRemovals.length) onCharacterRelationsChange(relationRemovals);
-          })
+        Promise.all(removals.map((change) => deleteEdge(change.id)))
+          .then(() => onEdgesChange(removals))
           .catch((err) => {
             console.error("Failed to delete canvas connection:", err);
             alert("删除连线失败，画布已保留原状态");
           });
       }
     },
-    [onEdgesChange, onCharacterRelationsChange, pushUndoSnapshot],
+    [onEdgesChange, pushUndoSnapshot],
   );
 
   const onPaneClick = useCallback(() => {
@@ -667,6 +598,35 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   const closeContextMenu = useCallback(() => {
     setContextMenu(null);
   }, []);
+
+  const openCopyDialog = useCallback((node) => {
+    setCopyError("");
+    setCopyNotice("");
+    setCopyDialog({
+      nodeId: node.id,
+      text: copyDialogText(describeNodeCopy(nodes, edges, node.id)),
+    });
+  }, [nodes, edges]);
+
+  const handleCopyToWork = useCallback(async (work) => {
+    if (!copyDialog || copying) return;
+    setCopying(true);
+    setCopyError("");
+    setCopyNotice("");
+    try {
+      const result = await copyNodeToWork(copyDialog.nodeId, work.id);
+      const omitted = result.omitted_character_refs.length
+        ? `有 ${result.omitted_character_refs.length} 条已失效的角色引用未复制。`
+        : "";
+      setCopyNotice(`已复制到「${work.title}」。${omitted}`);
+    } catch (err) {
+      setCopyError(err.message || "复制失败");
+    } finally {
+      setCopying(false);
+    }
+  }, [copyDialog, copying]);
+
+  const otherWorks = works.filter((work) => work.id !== workId);
 
   useEffect(() => {
     const handleClick = (e) => {
@@ -938,32 +898,14 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
   }, [currentNodeById, layoutNodes]);
 
   // 连线的连接点与标签避让必须基于布局后的坐标，否则会指向节点的旧位置
-  const visibleStructuralEdges = useMemo(
-    () => {
-      if (!showStructuralEdges) return [];
-      return visibleGraph.visibleEdges;
-    },
-    [visibleGraph, showStructuralEdges],
-  );
+  const visibleStructuralEdges = visibleGraph.visibleEdges;
 
-  const visibleCharacterRelations = useMemo(() => [], []);
-
-  const displayStructuralEdges = useMemo(
+  const displayedEdges = useMemo(
     () => applyEdgeLabelAvoidance(
       layoutNodes,
       applyEdgeHandles(layoutNodes, visibleStructuralEdges),
     ),
     [layoutNodes, visibleStructuralEdges],
-  );
-
-  const displayCharacterRelations = useMemo(
-    () => applyEdgeHandles(layoutNodes, visibleCharacterRelations, { relation: true }),
-    [layoutNodes, visibleCharacterRelations],
-  );
-
-  const displayedEdges = useMemo(
-    () => [...displayStructuralEdges, ...displayCharacterRelations],
-    [displayStructuralEdges, displayCharacterRelations],
   );
 
   const nodeTypes = useMemo(
@@ -995,30 +937,17 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
             {loadError}
           </div>
         )}
-        <div className="absolute top-3 left-3 z-10 flex gap-2">
+        <div className="absolute top-3 left-3 z-10 flex overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
           <button
             type="button"
             aria-label="定位到大纲"
             title="定位到大纲"
             disabled={!outlineTarget}
             onClick={handleFocusOutline}
-            className="rounded border border-slate-300 bg-white px-2 py-1 text-xs text-slate-700 shadow-sm transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
+            className="border-0 bg-white px-2.5 py-1 text-xs text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            大纲
+            定位大纲
           </button>
-          {!appMode && (
-          <button
-            type="button"
-            onClick={() => setShowStructuralEdges((v) => !v)}
-            className={`rounded px-2 py-1 text-xs border shadow-sm transition-colors ${
-              showStructuralEdges
-                ? "bg-white border-slate-300 text-slate-700"
-                : "bg-slate-100 border-slate-200 text-slate-400"
-            }`}
-          >
-            结构线
-          </button>
-          )}
         </div>
         <ReactFlow
           nodes={displayedNodes}
@@ -1083,6 +1012,17 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
               </button>
               <button
                 type="button"
+                aria-label="复制到其他作品"
+                onClick={() => {
+                  openCopyDialog(contextMenu.node);
+                  closeContextMenu();
+                }}
+                className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
+              >
+                复制到其他作品
+              </button>
+              <button
+                type="button"
                 aria-label="删除节点"
                 onClick={() => {
                   const node = contextMenu.node;
@@ -1109,6 +1049,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
                   { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
                   { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
                   { type: "note", icon: "📝", label: "笔记", color: "text-fuchsia-600" },
+                  { type: "reviewer_note", icon: "🔎", label: "评审笔记", color: "text-amber-600" },
                 ].map((item) => (
                   <button
                     key={item.type}
@@ -1144,6 +1085,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       <IsolatedNodePanel
         nodes={nodes}
         onSelect={handleNodeClick}
+        onCopyNode={openCopyDialog}
         appMode={appMode}
         initialCollapsed={appMode}
         collapsed={appMode ? !charactersPanelOpen : undefined}
@@ -1154,7 +1096,56 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, onAddContext, 
       />
 
       {/* 节点详情抽屉 */}
-      <NodeDetailDrawer appMode={appMode} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} notesDiff={selectedNode ? nodeNotesDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onNotesDiffDecision={handleNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={handleSelectedContentDiffChange} onNotesDiffChange={handleSelectedNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} onEditingChange={onNodeEditingChange} />
+      <NodeDetailDrawer appMode={appMode} workId={workId} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} notesDiff={selectedNode ? nodeNotesDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onNotesDiffDecision={handleNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={handleSelectedContentDiffChange} onNotesDiffChange={handleSelectedNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} onEditingChange={onNodeEditingChange} />
+      {copyDialog && (
+        <div
+          className="absolute inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4"
+          onMouseDown={() => {
+            if (!copying) setCopyDialog(null);
+          }}
+        >
+          <div
+            role="dialog"
+            aria-label="复制到其他作品"
+            className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-4 shadow-lg"
+            onMouseDown={(event) => event.stopPropagation()}
+          >
+            <h2 className="text-sm font-semibold text-slate-900">复制到其他作品</h2>
+            <p className="mt-2 text-sm leading-6 text-slate-600">{copyDialog.text}</p>
+            <div className="mt-3 max-h-60 overflow-y-auto">
+              {otherWorks.length === 0 ? (
+                <p className="rounded-md bg-slate-50 px-3 py-2 text-sm text-slate-500">
+                  还没有其他作品。先在左上角创建一部作品，再把节点复制过去。
+                </p>
+              ) : (
+                otherWorks.map((work) => (
+                  <button
+                    key={work.id}
+                    type="button"
+                    disabled={copying}
+                    onClick={() => handleCopyToWork(work)}
+                    className="block w-full rounded-md px-3 py-2 text-left text-sm text-slate-800 hover:bg-slate-50 disabled:opacity-50"
+                  >
+                    {work.title}
+                  </button>
+                ))
+              )}
+            </div>
+            {copyError && <p className="mt-2 text-sm text-red-600">{copyError}</p>}
+            {copyNotice && <p className="mt-2 text-sm text-green-700">{copyNotice}</p>}
+            <div className="mt-3 flex justify-end">
+              <button
+                type="button"
+                disabled={copying}
+                onClick={() => setCopyDialog(null)}
+                className="rounded-md px-3 py-1.5 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50"
+              >
+                关闭
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 });

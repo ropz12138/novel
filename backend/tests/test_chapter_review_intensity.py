@@ -25,11 +25,11 @@ def test_low_blocks_all_chapter_reviews(kind):
     assert policy.try_reserve(kind, "chapter-1") is False
 
 
-def test_medium_allows_each_review_once_per_chapter():
+def test_medium_allows_repeated_reviews_per_chapter():
     policy = ChapterReviewPolicy("medium")
     for kind in ("continuity", "dialogue", "fiction_quality", "ai_taste"):
         assert policy.try_reserve(kind, "chapter-1") is True
-        assert policy.try_reserve(kind, "chapter-1") is False
+        assert policy.try_reserve(kind, "chapter-1") is True
         assert policy.try_reserve(kind, "chapter-2") is True
 
 
@@ -43,10 +43,10 @@ def test_high_has_no_review_count_limit():
     assert all(policy.try_reserve("dialogue", "chapter-1") for _ in range(5))
 
 
-def test_ai_taste_review_runs_once_on_medium_and_is_unlimited_on_high():
+def test_ai_taste_review_is_unlimited_on_medium_and_high():
     medium = ChapterReviewPolicy("medium")
     assert medium.try_reserve("ai_taste", "chapter-1") is True
-    assert medium.try_reserve("ai_taste", "chapter-1") is False
+    assert medium.try_reserve("ai_taste", "chapter-1") is True
     high = ChapterReviewPolicy("high")
     assert all(high.try_reserve("ai_taste", "chapter-1") for _ in range(3))
 
@@ -59,7 +59,7 @@ def test_supervisor_prompt_explains_selected_intensity():
     assert "本次章节评审强度为中" in stable
     assert "humanize-fiction" in stable
     assert "AI 味" in stable
-    assert "每个评审视角检查一次" in stable
+    assert "评审与修订次数不限" in stable
     assert "run_review_agent" in stable
     assert "tired_reader" in stable
     assert agent._build_in_history_system_prompt(chapter_review_intensity="medium") is None
@@ -90,29 +90,3 @@ def test_saved_chapter_review_intensity_round_trip():
     finally:
         db.close()
 
-
-def test_ai_taste_prompt_requires_strict_exhaustive_audit():
-    from services.agents.tools import workflow_skill_tools as wat
-
-    prompt = (wat.REFERENCE_ROOT / "ai_taste_review.txt").read_text(encoding="utf-8")
-
-    assert "逐句扫描、逐段复核、重复模式汇总" in prompt
-    assert "整体质量与局部命中分别判断" in prompt
-    assert "删除、合并或改成直接表达后明显更自然" in prompt
-    assert "逐项列出全部命中" in prompt
-    assert "完成全文核验且命中数为零" in prompt
-    assert "命中统计" in prompt
-    assert "任一“建议优化”" in prompt
-    assert "自我抵消式动作句 / 否定尾注句" in prompt
-    assert "动作主体发生暗换" in prompt
-    assert "预期反应缺席" in prompt
-    assert "省略了人物主语或承受对象" in prompt
-    assert "全章否定句的总量只用于重复模式统计" in prompt
-    assert "每一处都必须单独完成句法和语义判断" in prompt
-    assert "至少列为“建议优化”" in prompt
-    assert "AI_TASTE_PASS" in prompt
-    assert "AI_TASTE_FAIL" in prompt
-    assert "真实命中总数为 0" in prompt
-    assert "轻微命中同样判定为失败" in prompt
-    assert "林越的脚步顿了一下，没停" not in prompt
-    assert "裤兜里的手机震过几次，没掏" not in prompt

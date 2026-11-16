@@ -103,15 +103,16 @@ def test_direct_edit_round_trip_includes_saved_summary_and_preserves_on_edit(cha
                     expected_content_sha256=first['content_sha256'])
     assert result['success']
     saved = json.loads(query_tools._read_node_content_sync([chapter.id]))['nodes'][0]
-    assert saved['notes'] == '主角关门。'
+    assert saved['notes_paragraphs'][0]['text'] == '主角关门。'
     edited = json.loads(asyncio.run(node_tools.update_node.ainvoke({
         'node_id': chapter.id, 'mode': 'replace',
-        'replacements': [{'old': '完整正文。', 'new': '他拉开门，走到屋外。'}],
+        'expected_content_sha256': first['content_sha256'],
+        'replacements': [{'start_paragraph': 1, 'end_paragraph': 1, 'new': '他拉开门，走到屋外。'}],
     })))
     assert edited['success']
     updated = json.loads(query_tools._read_node_content_sync([chapter.id]))['nodes'][0]
-    assert updated['content'] == '他拉开门，走到屋外。'
-    assert updated['notes'] == '主角关门。'
+    assert updated['content_paragraphs'][0]['text'] == '他拉开门，走到屋外。'
+    assert updated['notes_paragraphs'][0]['text'] == '主角关门。'
     assert updated['content_sha256'] != first['content_sha256']
 
 
@@ -144,11 +145,10 @@ def test_supervisor_graph_executes_skill_writer_and_memory(chapter, db_session, 
         ('load_workflow_skill', {'skill_name': 'revise-chapter'}),
         ('read_skill_reference', {'skill_name': 'revise-chapter', 'reference_name': 'chapter_local_edit.txt'}),
         ('read_node_content', {'node_ids': [chapter.id]}),
-        ('run_writing_agent', {
-            'chapter_node_id': chapter.id, 'operation': 'rewrite', 'source_node_ids': [],
-            'brief': {'scene_plan': '人物出门', 'narrative_pov': '第三人称限知',
-                      'character_knowledge': [{'character': '人物', 'known_information': '他持有钥匙', 'source': '本场景'}],
-                      'story_facts': '人在门内', 'prose_requirements': '白描', 'revision_scope': '完整重写'},
+        ('update_node', {
+            'node_id': chapter.id, 'mode': 'overwrite', 'content': content,
+            'expected_content_sha256': hashlib.sha256(chapter.content.encode()).hexdigest(),
+            'reason': '人物出门。第三人称限知。他持有钥匙，来源是本场景。',
         }),
         ('read_node_content', {'node_ids': [chapter.id]}),
         ('save_chapter_notes', {'chapter_node_id': chapter.id, 'notes': '人物收起钥匙出门。',
@@ -177,14 +177,9 @@ def test_supervisor_graph_executes_skill_writer_and_memory(chapter, db_session, 
     fake.profile = {"max_input_tokens": 1_000_000}
     factories = []
 
-    class WriterProvider(SupervisorProvider):
-        async def stream_chat(self, messages, **kwargs):
-            yield ToolStreamEvent(kind='tool_call', tool_call=ToolCallFinished(
-                tool_name='submit_writing', arguments={'content': content}, call_id='writer-1'))
-
     def factory(**kw):
         factories.append(kw)
-        return fake if len(factories) == 1 else DeepAgentChatModel(provider=WriterProvider(), model_name='test')
+        return fake
 
     monkeypatch.setattr(llm, 'get_deep_agent_model', factory)
     monkeypatch.setattr(llm, 'get_llm', lambda **kw: pytest.fail('应统一使用 get_deep_agent_model'))
@@ -192,14 +187,14 @@ def test_supervisor_graph_executes_skill_writer_and_memory(chapter, db_session, 
     graph = SupervisorAgent()._build_graph(work_id=chapter.work_id)
     result = asyncio.run(graph.ainvoke({'messages': [HumanMessage(content='修改本章并保存摘要')]},
                                      config={'recursion_limit': 30}))
-    assert len(factories) == 2
+    assert len(factories) == 1
     assert provider.count == 7
     tool_msgs = [m for m in result['messages'] if isinstance(m, ToolMessage)]
     assert [m.name for m in tool_msgs] == [
         'load_workflow_skill',
         'read_skill_reference',
         'read_node_content',
-        'run_writing_agent',
+        'update_node',
         'read_node_content',
         'save_chapter_notes',
         'respond_to_user',

@@ -297,3 +297,41 @@ def test_get_supervisor_session_returns_authoritative_status(db_session):
     assert response.status_code == 200
     assert response.json()["id"] == session["id"]
     assert response.json()["status"] == "completed"
+
+
+def test_new_message_inserts_into_current_supervisor_without_second_run(db_session, monkeypatch):
+    from routers import supervisor as router
+    from services.agents.supervisor import set_context, reset_context
+    from services.agents.deep_agent_runtime import RuntimeInputMiddleware
+    from services.supervisor_run_queue import supervisor_run_queue
+    user_id = db_session.query(User).first().id
+    sid = session_store.create_session(user_id=user_id)['id']
+
+    async def run():
+        generating, release = asyncio.Event(), asyncio.Event()
+        starts, received = [], []
+        async def fake_run(message, context, emit):
+            starts.append(message)
+            token = set_context(dict(context, current_user_instruction=message, emit=emit))
+            try:
+                generating.set()
+                await release.wait()
+                update = await RuntimeInputMiddleware().abefore_model({'messages': []}, None)
+                received.extend(msg.content for msg in update['messages'])
+                await emit('supervisor_done', {'message': '完成'})
+                return {'success': True}
+            finally:
+                reset_context(token)
+        monkeypatch.setattr(router.supervisor_agent, 'run', fake_run)
+        kwargs = dict(session_id=sid, work_id=None, user_id=user_id, context_node_ids=None)
+        router._stream_supervisor_run(user_message='写两个章节', **kwargs)
+        await generating.wait()
+        router._stream_supervisor_run(user_message='第二章保留钥匙', **kwargs)
+        release.set()
+        await supervisor_run_queue.tasks[sid]
+        assert starts == ['写两个章节']
+        assert received == ['第二章保留钥匙']
+        users = [msg['content'] for msg in session_store.get_messages(sid) if msg['role'] == 'user']
+        assert users == ['写两个章节', '第二章保留钥匙']
+        assert supervisor_run_queue.pending(sid) == []
+    asyncio.run(run())

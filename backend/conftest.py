@@ -22,7 +22,7 @@ import models.node  # noqa: E402, F401
 import models.edge  # noqa: E402, F401
 import models.chapter  # noqa: E402, F401
 import models.session  # noqa: E402, F401
-import models.character_relation  # noqa: E402, F401
+import models.short_drama  # noqa: E402, F401
 import models.todo_item  # noqa: E402, F401
 import models.canvas_checkpoint  # noqa: E402, F401
 import models.user_canvas_action  # noqa: E402, F401

@@ -1,344 +1,139 @@
-"""角色关系线 character_relations — TDD。
+"""角色之间的关系线已从后端移除。"""
+from pathlib import Path
 
-- 独立表，仅 character ↔ character
-- relation_type 为自然语言（非枚举），最长 100 字符
-- 同一对角色（含反向）只允许一条关系线
-- 禁止自环
-- 主角 scope=global 可参与角色关系
-- 画布关联线 edges 禁止 character ↔ character
-"""
-import json
-import uuid
-
-import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import text
 
 from main import app
 import database
-from node_types import validate_edge_endpoints, validate_character_relation
+from node_types import validate_edge_endpoints
 from routers.auth import get_current_user
 from models.user import User
 from models.work import CanvasWork
 from models.node import Node
-from models.character_relation import CharacterRelation
+from services.agents.supervisor import SupervisorAgent
+from services.work_state import snapshot
 
 client = TestClient(app)
+SKILLS = Path(__file__).resolve().parents[1] / "services" / "agents"
 
 
-@pytest.fixture(autouse=True)
-def mock_auth():
+def test_character_relation_routes_are_absent():
+    missing = client.get("/api/works/work-1/character-relations")
+    assert missing.status_code == 404
+    created = client.post("/api/works/work-1/character-relations", json={
+        "source_id": "a",
+        "target_id": "b",
+        "relation_type": "师徒",
+    })
+    assert created.status_code == 404
+
+
+def test_supervisor_does_not_offer_character_relation_tools():
+    names = {tool.name for tool in SupervisorAgent()._get_tools()}
+    assert names.isdisjoint({
+        "query_character_relations",
+        "create_character_relation",
+        "update_character_relation",
+        "delete_character_relation",
+    })
+
+
+def test_work_snapshot_has_no_character_relations():
     db = database.SessionLocal()
     try:
-        user = User(username="tester", email="t@t.t", password_hash="x")
+        user = User(username="relation-gone", email="relation-gone@t.t", password_hash="x")
+        db.add(user)
+        db.commit()
+        work = CanvasWork(user_id=user.id, title="作品")
+        db.add(work)
+        db.commit()
+        db.add(Node(sort_order=0, work_id=work.id, type="character", title="林雨", scope="minor"))
+        db.commit()
+        state = snapshot(work.id)
+    finally:
+        db.close()
+    assert "character_relations" not in state
+    assert state["nodes"][0]["title"] == "林雨"
+
+
+def test_canvas_restore_ignores_character_relations():
+    db = database.SessionLocal()
+    try:
+        user = User(username="restore-user", email="restore-user@t.t", password_hash="x")
         db.add(user)
         db.commit()
         db.refresh(user)
         app.dependency_overrides[get_current_user] = lambda: user
-        yield user
-        app.dependency_overrides.pop(get_current_user, None)
+        work = CanvasWork(user_id=user.id, title="作品")
+        db.add(work)
+        db.commit()
+        character = Node(sort_order=0, work_id=work.id, type="character", title="旧名", scope="minor")
+        db.add(character)
+        db.commit()
+        response = client.post(f"/api/works/{work.id}/canvas/restore", json={
+            "nodes": [{
+                "id": character.id,
+                "type": "character",
+                "title": "新名",
+                "scope": "minor",
+                "layer": 0,
+                "position_x": 0,
+                "position_y": 0,
+            }],
+            "edges": [],
+            "character_relations": [{
+                "id": "rel-1",
+                "source_id": character.id,
+                "target_id": character.id,
+                "relation_type": "师徒",
+            }],
+        })
+        assert response.status_code == 200
+        body = response.json()
+        assert body["success"] is True
+        assert body["node_count"] == 1
+        assert "relation_count" not in body
+        db.expire_all()
+        assert db.get(Node, character.id).title == "新名"
+        with database.engine.connect() as conn:
+            assert conn.execute(text("SELECT to_regclass('public.character_relations')")).scalar() is None
     finally:
+        app.dependency_overrides.pop(get_current_user, None)
         db.close()
 
 
-def _make_work(db, user_id):
-    work = CanvasWork(user_id=user_id, title="w")
-    db.add(work)
-    db.commit()
-    db.refresh(work)
-    return work
+def test_character_skills_do_not_instruct_relation_lines():
+    texts = [
+        (SKILLS / "skills" / "design-characters" / "SKILL.md").read_text(),
+        (SKILLS / "skills" / "references" / "character_design.txt").read_text(),
+        (SKILLS / "skills" / "maintain-story-memory" / "SKILL.md").read_text(),
+        (SKILLS / "prompts" / "supervisor_system.txt").read_text(),
+    ]
+    for text_content in texts:
+        assert "create_character_relation" not in text_content
+        assert "角色关系工具" not in text_content
+        assert "角色关系线" not in text_content
 
 
-def _make_character(db, work_id, title, scope="minor"):
-    node = Node(sort_order=0, work_id=work_id, type="character", title=title, scope=scope)
-    db.add(node)
-    db.commit()
-    db.refresh(node)
-    return node
-
-
-# ---------- validate_character_relation 纯函数 ----------
-
-def test_validate_character_relation_rejects_non_character_type():
-    err = validate_character_relation("character", "chapter")
-    assert err is not None
-    assert "character" in err
-
-
-def test_validate_character_relation_accepts_two_characters():
-    assert validate_character_relation("character", "character") is None
-
-
-def test_validate_relation_type_rejects_empty():
-    from node_types import validate_relation_type
-    import pytest
-    with pytest.raises(ValueError):
-        validate_relation_type("")
-    with pytest.raises(ValueError):
-        validate_relation_type("   ")
-
-
-def test_validate_relation_type_accepts_natural_language():
-    from node_types import validate_relation_type
-    assert validate_relation_type("表面同事，实为监视者") == "表面同事，实为监视者"
-
-
-def test_validate_edge_endpoints_rejects_character_to_character():
-    assert validate_edge_endpoints("character", "character", "minor", "major") is not None
+def test_edges_still_reject_character_endpoints():
     assert "角色不是画布连线端点" in validate_edge_endpoints("character", "character", "minor", "major")
 
 
-# ---------- HTTP API ----------
-
-def test_create_character_relation(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "张三")
-        b = _make_character(db, work.id, "李四")
-        resp = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={
-                "source_id": a.id,
-                "target_id": b.id,
-                "relation_type": "暗恋",
-                "label": "读者尚不知情",
-            },
-        )
-        assert resp.status_code == 201
-        data = resp.json()
-        assert data["relation_type"] == "暗恋"
-        assert data["label"] == "读者尚不知情"
-        assert data["source_id"] == a.id
-        assert data["target_id"] == b.id
-    finally:
-        db.close()
-
-
-def test_create_character_relation_allows_protagonist(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        hero = _make_character(db, work.id, "主角", scope="global")
-        side = _make_character(db, work.id, "配角")
-        resp = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={
-                "source_id": hero.id,
-                "target_id": side.id,
-                "relation_type": "师徒",
-            },
-        )
-        assert resp.status_code == 201
-    finally:
-        db.close()
-
-
-def test_create_character_relation_rejects_self_loop(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "张三")
-        resp = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={
-                "source_id": a.id,
-                "target_id": a.id,
-                "relation_type": "自我分裂",
-            },
-        )
-        assert resp.status_code == 400
-    finally:
-        db.close()
-
-
-def test_create_character_relation_rejects_non_character_endpoint(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "张三")
-        ch = Node(sort_order=0, work_id=work.id, type="chapter", title="第一章")
-        db.add(ch)
-        db.commit()
-        resp = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={
-                "source_id": a.id,
-                "target_id": ch.id,
-                "relation_type": "登场",
-            },
-        )
-        assert resp.status_code == 400
-    finally:
-        db.close()
-
-
-def test_create_character_relation_rejects_second_same_direction(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "A")
-        b = _make_character(db, work.id, "B")
-        first = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={"source_id": a.id, "target_id": b.id, "relation_type": "同事"},
-        )
-        assert first.status_code == 201
-
-        second = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={"source_id": a.id, "target_id": b.id, "relation_type": "暗中敌对"},
-        )
-        assert second.status_code == 409
-        assert "A" in second.json()["detail"] or "同事" in second.json()["detail"]
-        assert client.get(f"/api/works/{work.id}/character-relations").json()["total"] == 1
-    finally:
-        db.close()
-
-
-def test_create_character_relation_rejects_reverse_pair(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "刘猛")
-        b = _make_character(db, work.id, "林小鹿")
-        first = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={"source_id": a.id, "target_id": b.id, "relation_type": "暗恋"},
-        )
-        assert first.status_code == 201
-
-        second = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={"source_id": b.id, "target_id": a.id, "relation_type": "逐渐信赖"},
-        )
-        assert second.status_code == 409
-        assert "林小鹿" in second.json()["detail"] or "刘猛" in second.json()["detail"]
-        assert client.get(f"/api/works/{work.id}/character-relations").json()["total"] == 1
-    finally:
-        db.close()
-
-
-def test_create_character_relation_tool_skips_existing_pair_with_warning(monkeypatch):
-    import importlib
-    rt = importlib.import_module("services.agents.tools.character_relation_tools")
-    db = database.SessionLocal()
-    try:
-        user = User(username="x", email="x@x.x", password_hash="x")
-        db.add(user)
-        db.commit()
-        work = CanvasWork(user_id=user.id, title="w")
-        db.add(work)
-        db.commit()
-        monkeypatch.setattr(rt, "_get_current_work_id", lambda: work.id)
-        a = _make_character(db, work.id, "甲")
-        b = _make_character(db, work.id, "乙")
-        db.add(CharacterRelation(
-            work_id=work.id,
-            source_id=a.id,
-            target_id=b.id,
-            relation_type="师徒",
-            label="",
+def test_startup_drops_leftover_character_relation_storage():
+    with database.engine.begin() as conn:
+        conn.execute(text("CREATE TABLE character_relations (id VARCHAR(36) PRIMARY KEY)"))
+        conn.execute(text("CREATE TABLE canvas_checkpoint_relations (id VARCHAR(36) PRIMARY KEY)"))
+        conn.execute(text(
+            "ALTER TABLE canvas_checkpoints ADD COLUMN relation_count INTEGER NOT NULL DEFAULT 0"
         ))
-        db.commit()
-
-        result = json.loads(rt._create_character_relation_sync(b.id, a.id, "恋人"))
-        assert result.get("skipped") is True
-        assert "warning" in result
-        assert result.get("success") is False
-        assert db.query(CharacterRelation).filter(CharacterRelation.work_id == work.id).count() == 1
-    finally:
-        db.close()
-
-
-def test_list_agent_update_delete_character_relation(mock_auth, monkeypatch):
-    import importlib
-    relation_tools = importlib.import_module(
-        "services.agents.tools.character_relation_tools"
-    )
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        monkeypatch.setattr(relation_tools, "_get_current_work_id", lambda: work.id)
-        a = _make_character(db, work.id, "A")
-        b = _make_character(db, work.id, "B")
-        created = client.post(
-            f"/api/works/{work.id}/character-relations",
-            json={"source_id": a.id, "target_id": b.id, "relation_type": "挚友"},
-        ).json()
-        rel_id = created["id"]
-
-        updated = json.loads(
-            relation_tools._update_character_relation_sync(
-                rel_id,
-                relation_type="生死之交",
-                label="第三卷决裂前",
-            )
-        )
-        assert updated["success"] is True
-        listed = client.get(f"/api/works/{work.id}/character-relations").json()
-        assert listed["relations"][0]["relation_type"] == "生死之交"
-        assert listed["relations"][0]["label"] == "第三卷决裂前"
-
-        deleted = client.delete(f"/api/character-relations/{rel_id}")
-        assert deleted.status_code == 204
-        assert client.get(f"/api/works/{work.id}/character-relations").json()["total"] == 0
-    finally:
-        db.close()
-
-
-def test_restore_canvas_includes_character_relations(mock_auth):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(db, mock_auth.id)
-        a = _make_character(db, work.id, "A")
-        b = _make_character(db, work.id, "B")
-        rel_id = str(uuid.uuid4())
-
-        resp = client.post(f"/api/works/{work.id}/canvas/restore", json={
-            "nodes": [
-                {
-                    "id": a.id, "type": "character", "title": "A",
-                    "scope": "minor", "layer": 0, "position_x": 0, "position_y": 0,
-                },
-                {
-                    "id": b.id, "type": "character", "title": "B",
-                    "scope": "minor", "layer": 0, "position_x": 100, "position_y": 0,
-                },
-            ],
-            "edges": [],
-            "character_relations": [{
-                "id": rel_id,
-                "source_id": a.id,
-                "target_id": b.id,
-                "relation_type": "恋人",
-                "label": "",
-            }],
-        })
-        assert resp.status_code == 200
-        assert resp.json()["relation_count"] == 1
-        db.expire_all()
-        rel = db.query(CharacterRelation).filter(CharacterRelation.id == rel_id).first()
-        assert rel is not None
-        assert rel.relation_type == "恋人"
-    finally:
-        db.close()
-
-
-def test_create_edge_rejects_character_pair(monkeypatch):
-    import importlib
-    nt = importlib.import_module("services.agents.tools.node_tools")
-    db = database.SessionLocal()
-    try:
-        user = User(username="x", email="x@x.x", password_hash="x")
-        db.add(user)
-        db.commit()
-        work = CanvasWork(user_id=user.id, title="w")
-        db.add(work)
-        db.commit()
-        monkeypatch.setattr(nt, "_get_current_work_id", lambda: work.id)
-        a = _make_character(db, work.id, "A")
-        b = _make_character(db, work.id, "B")
-        r = json.loads(nt._create_edge_sync(a.id, b.id, edge_type="恋人"))
-        assert "error" in r
-    finally:
-        db.close()
+    database._drop_character_relation_storage()
+    with database.engine.connect() as conn:
+        assert conn.execute(text("SELECT to_regclass('public.character_relations')")).scalar() is None
+        assert conn.execute(text("SELECT to_regclass('public.canvas_checkpoint_relations')")).scalar() is None
+        column = conn.execute(text(
+            "SELECT 1 FROM information_schema.columns "
+            "WHERE table_schema = 'public' AND table_name = 'canvas_checkpoints' "
+            "AND column_name = 'relation_count'"
+        )).scalar()
+        assert column is None

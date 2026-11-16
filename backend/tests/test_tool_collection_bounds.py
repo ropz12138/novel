@@ -1,7 +1,6 @@
 import pytest
 from pydantic import ValidationError
 
-from services.agents.tools.character_relation_tools import QueryCharacterRelationsInput
 from services.agents.tools.node_tools import BatchCreateEdgesInput, BatchCreateNodesInput
 from services.agents.tools.node_reference_tools import CreateNodeReferencesInput
 from services.agents.tools.query_tools import (
@@ -24,12 +23,11 @@ from services.agents.tools.research_tools import (
         (CanvasIndexInput, {"node_limit": 51}),
         (CanvasIndexInput, {"edge_limit": 51}),
         (ListUserCanvasActionsInput, {"limit": 51}),
-        (QueryCharacterRelationsInput, {"limit": 51}),
         (ListResearchArtifactsInput, {"limit": 51}),
         (ReadResearchArtifactsInput, {"artifact_ids": [str(i) for i in range(6)]}),
         (BatchCreateNodesInput, {"nodes_data": []}),
         (BatchCreateEdgesInput, {"edges_data": [{} for _ in range(21)]}),
-        (CreateNodeReferencesInput, {"references": [{"node_id": str(i), "quote": "x"} for i in range(11)]}),
+        (CreateNodeReferencesInput, {"references": [{"node_id": str(i), "part": "content", "start_paragraph": 1, "end_paragraph": 1} for i in range(11)]}),
     ],
 )
 def test_collection_tools_reject_requests_outside_declared_bounds(schema, payload):

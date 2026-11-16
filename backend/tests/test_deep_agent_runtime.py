@@ -1,4 +1,5 @@
 import asyncio
+import pytest
 
 from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage
@@ -335,3 +336,61 @@ def test_supervisor_does_not_emit_internal_summarization_stream(monkeypatch):
     )
     assert "SESSION INTENT" not in streamed
     assert result["message"] == "正式回复"
+
+
+@pytest.mark.parametrize('scope_kind', ['session', 'research'])
+def test_real_graph_restores_successful_compaction_on_next_invocation(monkeypatch, tmp_path, scope_kind):
+    import services.agents.deep_agent_runtime as runtime
+    monkeypatch.setattr(runtime, 'DEEP_AGENT_CONTEXT_ROOT', tmp_path)
+
+    class RecordingProvider(FakeProvider):
+        def __init__(self):
+            super().__init__()
+            self.requests = []
+
+        async def stream_chat(self, messages, **kwargs):
+            self.requests.append(messages)
+            async for event in super().stream_chat(messages, **kwargs):
+                yield event
+
+    def make_agent(provider):
+        model = DeepAgentChatModel(provider=provider, model_name='test-model')
+        model.profile = {'max_input_tokens': 50_000}
+        return build_deep_agent(model=model, tools=[allowed_tool], system_prompt='system',
+                                scope_kind=scope_kind, scope_id='persisted', atomic_tools=False)
+
+    first = RecordingProvider()
+    history = [HumanMessage(content='OLD_HISTORY_SENTINEL ' + 'old history ' * 18000),
+               HumanMessage(content='RECENT_MESSAGE')]
+    result = asyncio.run(make_agent(first).ainvoke({'messages': history}))
+    saved = load_summarization_state(scope_kind, 'persisted')
+    assert saved['_summarization_event']['cutoff_index'] > 0
+    assert len(first.requests) == 2  # Summary generation, then the main request.
+
+    second = RecordingProvider()
+    next_input = {'messages': [*result['messages'], HumanMessage(content='NEXT_TURN')]}
+    if scope_kind == 'session':
+        async def stream_next_turn():
+            async for state in make_agent(second).astream(next_input, stream_mode='values'):
+                latest = state
+            return latest
+        next_result = asyncio.run(stream_next_turn())
+    else:
+        next_result = asyncio.run(make_agent(second).ainvoke(next_input))
+    assert len(second.requests) == 1  # Restored summary avoids repeating summarization.
+    sent = str(second.requests[0])
+    assert 'OLD_HISTORY_SENTINEL' not in sent
+    assert 'RECENT_MESSAGE' in sent and 'NEXT_TURN' in sent
+    assert saved['_summarization_event']['summary_message'].content in [m['content'] for m in second.requests[0]]
+
+    # Subsequent compaction advances the original cutoff and appends to the same history file.
+    third = RecordingProvider()
+    asyncio.run(make_agent(third).ainvoke({'messages': [
+        *next_result['messages'], HumanMessage(content='NEW_HISTORY ' + 'new history ' * 18000),
+        HumanMessage(content='LATEST_MESSAGE'),
+    ]}))
+    updated = load_summarization_state(scope_kind, 'persisted')
+    assert updated['_summarization_session_id'] == saved['_summarization_session_id']
+    assert updated['_summarization_event']['cutoff_index'] > saved['_summarization_event']['cutoff_index']
+    assert len(third.requests) == 2
+    assert 'OLD_HISTORY_SENTINEL' not in str(third.requests)

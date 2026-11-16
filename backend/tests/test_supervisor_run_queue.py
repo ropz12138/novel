@@ -44,3 +44,26 @@ def test_stop_cancels_active_run_and_discards_waiting_messages():
         assert queue.pending("s") == []
         assert not queue.running("s")
     asyncio.run(run())
+
+
+def test_claimed_messages_enter_active_run_once_and_wake_it():
+    async def run():
+        queue = SupervisorRunQueue()
+        gate = asyncio.Event()
+        started, injected, wakes = [], [], []
+        async def execute(item):
+            started.append(item['content'])
+            queue.attach('s', lambda: wakes.append(True))
+            await gate.wait()
+            injected.extend(queue.take_pending('s'))
+        queue.submit('s', {'content': '原任务'}, execute)
+        await asyncio.sleep(0)
+        queue.submit('s', {'content': '补充一'}, execute)
+        queue.submit('s', {'content': '补充二'}, execute)
+        assert len(wakes) == 2
+        gate.set()
+        await queue.tasks['s']
+        assert started == ['原任务']
+        assert [item['content'] for item in injected] == ['补充一', '补充二']
+        assert queue.take_pending('s') == []
+    asyncio.run(run())

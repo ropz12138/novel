@@ -213,8 +213,10 @@ def test_restore_content_keeps_grouped_diff_state_consistent(mock_auth):
         work = _make_work(db, mock_auth.id)
         node = _make_node(db, work.id)
         node.content = "甲新。\n\n乙新。"
-        record_change(db, node, "甲旧。\n\n乙旧。", build_replacement_diff("甲旧。\n\n乙旧。", [
-            {"old": "甲旧", "new": "甲新"}, {"old": "乙旧", "new": "乙新"}]))
+        source = "甲旧。\n\n乙旧。"
+        record_change(db, node, source, build_replacement_diff(source, [
+            {"start": 0, "end": len("甲旧"), "new": "甲新"},
+            {"start": source.index("乙旧"), "end": source.index("乙旧") + len("乙旧"), "new": "乙新"}]))
         db.commit()
         response = client.post(f"/api/works/{work.id}/canvas/restore", json={
             "nodes": [{**_node_payload(node), "content": "甲旧。\n\n乙新。"}], "edges": [],

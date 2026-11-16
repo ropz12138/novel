@@ -4,7 +4,6 @@ import {
   viewStateStorageKey,
   loadViewState,
   saveViewState,
-  clearViewState,
   pruneExpandedIds,
 } from "./canvasViewState";
 
@@ -124,15 +123,6 @@ describe("saveViewState / loadViewState", () => {
     expect(() =>
       saveViewState("w1", { expandedNodeIds: new Set(["a"]), viewport: null }, failing),
     ).not.toThrow();
-  });
-});
-
-describe("clearViewState", () => {
-  it("删除指定作品的记录", () => {
-    const storage = memoryStorage();
-    saveViewState("w1", { expandedNodeIds: new Set(["a"]), viewport: null }, storage);
-    clearViewState("w1", storage);
-    expect(loadViewState("w1", storage)).toBeNull();
   });
 });
 

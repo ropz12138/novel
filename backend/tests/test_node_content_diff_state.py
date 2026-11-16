@@ -3,18 +3,20 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from database import Base
+from models.chapter import Chapter
 from models.node import Node
 from models.node_content_diff_state import NodeContentDiffState
 from models.node_agent_diff import NodeAgentDiffState, NodeAgentDiffGroup
 from services.node_content_diff_state import record_agent_change, record_manual_change, save_decision
 from services.node_agent_diff import record_change, get_snapshot
+from services.agent_paragraphs import apply_paragraph_replacements
 from services.chapter_edit_service import build_replacement_diff
 
 
 @pytest.fixture
 def db_session():
     engine = create_engine("sqlite:///:memory:")
-    Base.metadata.create_all(engine, tables=[Node.__table__, NodeContentDiffState.__table__,
+    Base.metadata.create_all(engine, tables=[Node.__table__, Chapter.__table__, NodeContentDiffState.__table__,
                                            NodeAgentDiffState.__table__, NodeAgentDiffGroup.__table__])
     with sessionmaker(bind=engine)() as db:
         yield db
@@ -38,8 +40,10 @@ def test_grouped_state_survives_reload_and_review_of_one_group(db_session):
     node = Node(id="grouped", work_id="work-1", type="plot", title="分组", content=new, sort_order=1)
     db_session.add(node)
     db_session.flush()
-    diff = build_replacement_diff(old, [{"old": "甲旧。", "new": "新增。\n\n甲新。"},
-                                         {"old": "乙旧。", "new": "乙新。"}])
+    diff = build_replacement_diff(old, [
+        {"start": 0, "end": len("甲旧。"), "new": "新增。\n\n甲新。"},
+        {"start": len("甲旧。\n\n"), "end": len(old), "new": "乙新。"},
+    ])
     record_change(db_session, node, old, diff)
     db_session.commit()
     db_session.expire_all()
@@ -63,7 +67,9 @@ def test_manual_edit_commits_touched_group_and_keeps_other_group(db_session):
     db_session.add(node)
     db_session.flush()
     record_change(db_session, node, old, build_replacement_diff(old, [
-        {"old": "甲旧", "new": "甲新"}, {"old": "乙旧", "new": "乙新"}]))
+        {"start": 0, "end": len("甲旧"), "new": "甲新"},
+        {"start": old.index("乙旧"), "end": old.index("乙旧") + len("乙旧"), "new": "乙新"},
+    ]))
     db_session.commit()
     node.content = "甲手改。\n\n乙新。"
     record_manual_change(db_session, node, new)
@@ -71,6 +77,51 @@ def test_manual_edit_commits_touched_group_and_keeps_other_group(db_session):
     assert snapshot["original_content"] == "甲手改。\n\n乙旧。"
     assert len(snapshot["hunks"]) == 1
     assert snapshot["hunks"][0]["old_text"] == "乙旧"
+
+
+def test_duplicate_plot_list_items_restore_with_markdown_numbers(db_session):
+    old = "- 同样\n- 同样"
+    updated, resolved = apply_paragraph_replacements(old, [{
+        "start_paragraph": 2, "end_paragraph": 2, "new": "- 改后",
+    }], "markdown")
+    node = Node(id="plot-list", work_id="work-1", type="plot", title="情节", sort_order=1, content=updated)
+    db_session.add(node)
+    db_session.commit()
+    diff = build_replacement_diff(old, resolved, "markdown")
+    record_change(db_session, node, old, diff)
+    snapshot = get_snapshot(db_session, node)
+    assert snapshot["hunks"][0]["paragraph_index"] == 2
+    assert snapshot["hunks"][0]["old_text"] == "- 同样"
+    assert node.content[snapshot["hunks"][0]["start_offset"]:].startswith("- 改后")
+    save_decision(db_session, node, expected_content=updated, expected_baseline=old,
+                  baseline_content=old, current_content=old, groups=[])
+    assert node.content == old
+    assert get_snapshot(db_session, node)["hunks"] == []
+
+
+def test_restored_diff_numbers_the_baseline_and_each_hunk_can_be_decided(db_session):
+    old = "甲\n\n\n\n乙"
+    updated, resolved = apply_paragraph_replacements(old, [
+        {"start_paragraph": 1, "end_paragraph": 1, "new": "甲改"},
+        {"start_paragraph": 2, "end_paragraph": 2, "new": "乙改"},
+    ])
+    node = Node(id="node-span", work_id="work-1", type="chapter", title="分段", sort_order=6, content=updated)
+    db_session.add(node)
+    db_session.commit()
+    diff = build_replacement_diff(old, resolved)
+    assert [hunk["paragraph_index"] for hunk in diff["hunks"]] == [1, 2]
+    record_change(db_session, node, old, diff)
+    snapshot = get_snapshot(db_session, node)
+    assert [hunk["paragraph_index"] for hunk in snapshot["hunks"]] == [1, 2]
+    kept = snapshot["hunks"][1]
+    save_decision(db_session, node, expected_content=updated, expected_baseline=old,
+                  baseline_content=old, current_content="甲\n\n\n\n乙改", groups=[kept])
+    assert node.content == "甲\n\n\n\n乙改"
+    rejected = get_snapshot(db_session, node)
+    assert rejected["hunks"][0]["paragraph_index"] == 2
+    save_decision(db_session, node, expected_content=node.content, expected_baseline=old,
+                  baseline_content=old, current_content=old, groups=[])
+    assert node.content == old
 
 
 def test_decision_updates_baseline_and_content_without_user_action(db_session):

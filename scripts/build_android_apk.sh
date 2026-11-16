@@ -117,6 +117,7 @@ printf 'sdk.dir=%s\n' "$ANDROID_SDK_ROOT" > "$FRONTEND_DIR/android/local.propert
 python3 "$ROOT_DIR/scripts/configure_android_version.py"
 python3 "$ROOT_DIR/scripts/generate_android_icons.py"
 npx cap sync android
+python3 "$ROOT_DIR/scripts/configure_android_audiobook.py"
 python3 "$ROOT_DIR/scripts/configure_android_app_name.py"
 python3 "$ROOT_DIR/scripts/configure_android_system_bars.py"
 

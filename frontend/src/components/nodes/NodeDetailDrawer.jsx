@@ -1,12 +1,16 @@
-import { Children, cloneElement, createContext, useContext, memo, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Copy, Undo2, ChevronLeft, ChevronRight } from "lucide-react";
+import { quoteTextFromRange } from "../../lib/selectionQuote";
+import { Children, cloneElement, createContext, useContext, memo, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useId } from "react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Copy, Undo2, ChevronLeft, ChevronRight, Play, Square, Volume2 } from "lucide-react";
 import {
   buildStackedInlineDiffBlocks,
   contentAfterBatches,
   buildContentDiffFromContents,
   commitUserParagraphEdit,
   commitUserTextEdit,
+  resolveLocalHunkInBatches,
   hydrateDiffBatches,
+  hydrateParagraphReview,
+  agentReviewSnapshot,
   joinParagraphs,
   pendingHunksFromBatches,
   setAllHunkStatusInBatches,
@@ -21,6 +25,14 @@ import { remarkHtmlBreaks } from "../../lib/markdown";
 import InlineTextDiff from "../InlineTextDiff";
 import { agentDiffBlocks, decideAgentGroup } from "../../lib/agentContentDiff";
 import { editorScrollDelta, useKeyboardInset } from "../../lib/keyboardInset";
+import { playChapterParagraphs, lineIsSpeakable, lineSpeechText, paragraphAudiobookLines, playChapterLines, splitAudiobookLines } from "../../lib/audiobook";
+import { fetchAudiobookStart, fetchAudiobookLine, playPcmStream, prepareAudioPlayback } from "../../lib/audiobookPlayback";
+import { clearAudiobookPosition, readAudiobookPosition, saveAudiobookPosition } from "../../lib/audiobookPosition";
+import { Capacitor, registerPlugin } from "@capacitor/core";
+import { useInRouterContext, useNavigate } from "react-router-dom";
+import { chapterDramaPath } from "../../lib/shortDrama";
+
+const AudiobookMedia = registerPlugin("AudiobookMedia");
 
 const HIGHLIGHT_TOKEN_PREFIX = "%%NODE_HIGHLIGHT_";
 const HIGHLIGHT_TOKEN_SUFFIX = "%%";
@@ -106,23 +118,72 @@ function renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix = 
 
 const SourceReferenceContext = createContext(null);
 
+function referenceForField(sourceReference, field) {
+  if (!sourceReference) return null;
+  if (typeof sourceReference === "string") return field === "content" ? sourceReference : null;
+  const part = sourceReference.part === "notes" ? "notes" : "content";
+  return part === field ? sourceReference : null;
+}
+
+function referenceRange(reference, content) {
+  if (typeof reference === "string" && reference) {
+    const start = (content || "").indexOf(reference);
+    return start < 0 ? null : { start, end: start + reference.length };
+  }
+  if (reference && Number.isInteger(reference.start) && Number.isInteger(reference.end)) return reference;
+  return null;
+}
+
+function displayParagraphRanges(content) {
+  const parts = (content || "").split("\n\n");
+  let offset = 0;
+  return parts.map((text) => {
+    const start = offset;
+    const end = start + text.length;
+    offset = end + 2;
+    return { start, end };
+  });
+}
+const DiffNavigationContext = createContext(null);
+const AudiobookPlaybackContext = createContext({
+  activeLineIndex: null,
+  onPlayFromLine: () => {},
+});
+
 const MarkdownRenderer = memo(function MarkdownRenderer({ content }) {
-  const quote = useContext(SourceReferenceContext);
+  const reference = useContext(SourceReferenceContext);
   const rootRef = useRef(null);
+  const quote = typeof reference === "string" ? reference : "";
   const { masked, highlights } = quote ? { masked: content || "", highlights: [] } : maskPlotHighlights(content || "");
-  const start = quote ? masked.indexOf(quote) : -1;
+  const range = referenceRange(reference, masked);
+  const start = range ? range.start : -1;
+  const rangeEnd = range ? range.end : -1;
   const markComponents = (components) => Object.fromEntries(Object.entries(components).map(([tag, render]) => [tag, (props) => {
     const element = render(props);
     const position = props.node?.position;
-    if (start < 0 || !position || !["p", "h1", "h2", "h3", "h4", "li", "blockquote", "td", "th", "code"].includes(tag)) return element;
-    if (position.start.offset >= start + quote.length || position.end.offset <= start) return element;
-    return cloneElement(element, { "data-node-reference-hit": true, style: { backgroundColor: "#fef3c7", borderRadius: "4px" } });
+    if (start < 0 || !position || !["p", "h1", "h2", "h3", "h4", "li", "blockquote", "td", "th", "code", "hr", "table"].includes(tag)) return element;
+    return cloneElement(element, { "data-md-start": position.start.offset, "data-md-end": position.end.offset });
   }]));
   useEffect(() => {
-    if (!quote) return;
-    const frame = requestAnimationFrame(() => rootRef.current?.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" }));
-    return () => cancelAnimationFrame(frame);
-  }, [quote, content]);
+    const root = rootRef.current;
+    if (!root || start < 0) return undefined;
+    const nodes = [...root.querySelectorAll("[data-md-start]")];
+    const contains = nodes.filter((element) => Number(element.dataset.mdStart) <= start && Number(element.dataset.mdEnd) >= rangeEnd);
+    const overlaps = nodes.filter((element) => Number(element.dataset.mdStart) < rangeEnd && Number(element.dataset.mdEnd) > start);
+    const pool = contains.length ? contains : overlaps;
+    if (!pool.length) return undefined;
+    const hit = pool.reduce((best, element) => (
+      Number(element.dataset.mdEnd) - Number(element.dataset.mdStart) < Number(best.dataset.mdEnd) - Number(best.dataset.mdStart) ? element : best
+    ));
+    hit.setAttribute("data-node-reference-hit", "true");
+    hit.style.backgroundColor = "#fef3c7";
+    hit.style.borderRadius = "4px";
+    const frame = requestAnimationFrame(() => hit.scrollIntoView?.({ block: "center" }));
+    return () => {
+      cancelAnimationFrame(frame);
+      hit.removeAttribute("data-node-reference-hit");
+    };
+  }, [reference, content, start, rangeEnd]);
   const renderChildren = (children, keyPrefix) => renderMarkdownChildrenWithHighlights(children, highlights, keyPrefix);
 
   return (
@@ -182,14 +243,12 @@ const MarkdownRenderer = memo(function MarkdownRenderer({ content }) {
   );
 });
 
-const PlainTextRenderer = memo(function PlainTextRenderer({ content }) {
-  const quote = useContext(SourceReferenceContext);
+function plainTextChildren(content, quote) {
   const value = content || "";
-  let children;
-
   if (quote) {
     const start = value.indexOf(quote);
-    children = start < 0 ? value : (
+    if (start < 0) return value;
+    return (
       <>
         {value.slice(0, start)}
         <span data-node-reference-hit style={{ backgroundColor: "#fef3c7", borderRadius: "4px" }}>
@@ -198,17 +257,93 @@ const PlainTextRenderer = memo(function PlainTextRenderer({ content }) {
         {value.slice(start + quote.length)}
       </>
     );
-  } else {
-    const { masked, highlights } = maskPlotHighlights(value);
-    children = renderHighlightTokens(masked, highlights, "plain");
   }
+  const { masked, highlights } = maskPlotHighlights(value);
+  return renderHighlightTokens(masked, highlights, "plain");
+}
 
+const PlainTextRenderer = memo(function PlainTextRenderer({ content }) {
+  const quote = useContext(SourceReferenceContext);
   return (
-    <p className="my-0 whitespace-pre-wrap break-words leading-8 tracking-wider text-gray-700">
-      {children}
+    <p className="my-0 whitespace-pre-wrap break-words leading-[2.4] tracking-wider text-gray-700">
+      {plainTextChildren(content, quote)}
     </p>
   );
 });
+
+function ChapterParagraph({ lines, appMode = false }) {
+  const quote = useContext(SourceReferenceContext);
+  const { activeLineIndex, onPlayFromLine } = useContext(AudiobookPlaybackContext);
+  return (
+    <p className="my-0 whitespace-pre-wrap break-words leading-[2.4] tracking-wider text-gray-700">
+      {lines.map((line, lineOffset) => (
+        <span key={line.index}>
+          {lineOffset > 0 ? "\n" : null}
+          <span
+            data-audiobook-line={line.index}
+            data-audiobook-active={activeLineIndex === line.index ? "true" : "false"}
+            className={activeLineIndex === line.index ? "rounded bg-amber-200/80" : ""}
+          >
+            {plainTextChildren(line.display, quote)}
+          </span>
+          {lineIsSpeakable(lineSpeechText(line.raw)) ? (
+            <button
+              type="button"
+              aria-label={`播放第${line.index + 1}行`}
+              className={`ml-1 inline-flex align-middle text-amber-700 hover:text-amber-900 ${appMode ? "" : "opacity-0 transition-opacity group-hover:opacity-100"}`}
+              onMouseDown={(event) => event.stopPropagation()}
+              onClick={(event) => {
+                event.stopPropagation();
+                event.preventDefault();
+                onPlayFromLine(line.index);
+              }}
+            >
+              <Volume2 className="h-4 w-4" />
+            </button>
+          ) : null}
+        </span>
+      ))}
+    </p>
+  );
+}
+
+function ChapterParagraphStack({ content, onEditParagraph, onEditingChange, activeEditorKey, setActiveEditorKey, appMode = false }) {
+  const reference = useContext(SourceReferenceContext);
+  const groups = paragraphAudiobookLines(content || "");
+  const ranges = displayParagraphRanges(content || "");
+  return (
+    <div data-testid="chapter-paragraphs" className="flex flex-col gap-8">
+      {groups.map((group, groupIndex) => {
+        const paragraph = <ChapterParagraph lines={group} appMode={appMode} />;
+        const place = ranges[groupIndex];
+        const hit = place && reference && typeof reference !== "string" && place.start < reference.end && place.end > reference.start;
+        const hitProps = hit ? { "data-node-reference-hit": true, style: { backgroundColor: "#fef3c7", borderRadius: "4px" } } : {};
+        if (!onEditParagraph) return <div key={group[0]?.index ?? groupIndex} className="group" {...hitProps}>{paragraph}</div>;
+        const editorKey = `paragraph-${groupIndex}`;
+        return (
+          <div key={editorKey} {...hitProps}>
+            <EditableParagraph
+              text={group.map((line) => line.display).join("\n")}
+              onSave={(nextText) => onEditParagraph(groupIndex + 1, nextText)}
+              onEditingChange={onEditingChange}
+              editing={activeEditorKey === editorKey}
+              onStartEditing={() => setActiveEditorKey(editorKey)}
+              onStopEditing={() => setActiveEditorKey(null)}
+              plainText
+              appMode={appMode}
+            >
+              {paragraph}
+            </EditableParagraph>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function ChapterPlainParagraphs({ content, appMode }) {
+  return <ChapterParagraphStack content={content} appMode={appMode} />;
+}
 
 const NODE_TYPE_CONFIG = {
   outline: { icon: FileText, label: "大纲", bg: "bg-blue-100", text: "text-blue-600", badge: "text-blue-700" },
@@ -218,6 +353,7 @@ const NODE_TYPE_CONFIG = {
   character: { icon: User, label: "角色", bg: "bg-pink-100", text: "text-pink-600", badge: "text-pink-700" },
   worldbuilding: { icon: MapIcon, label: "世界观", bg: "bg-purple-100", text: "text-purple-600", badge: "text-purple-700" },
   note: { icon: StickyNote, label: "笔记", bg: "bg-fuchsia-100", text: "text-fuchsia-600", badge: "text-fuchsia-700" },
+  reviewer_note: { icon: StickyNote, label: "评审笔记", bg: "bg-amber-100", text: "text-amber-600", badge: "text-amber-700" },
 };
 
 const DEFAULT_NODE_TYPE_CONFIG = { icon: FileText, label: "节点", bg: "bg-slate-100", text: "text-slate-600", badge: "text-slate-700" };
@@ -231,7 +367,7 @@ function selectionQuoteFromContainer(container) {
   const range = selection.getRangeAt(0);
   const ancestor = range.commonAncestorContainer;
   if (ancestor !== container && !container.contains(ancestor)) return null;
-  const selectedText = selection.toString().trim();
+  const selectedText = quoteTextFromRange(range);
   if (!selectedText) return null;
   const rect = range.getBoundingClientRect?.() || { left: 0, top: 0, bottom: 0 };
   return {
@@ -418,7 +554,7 @@ function InlineTextEditor({ initialText, label, saveLabel, onSave, onCancel, onE
   );
 }
 
-function EditableParagraph({ text, onSave, onEditingChange, editing, onStartEditing, onStopEditing, plainText = false, appMode = false }) {
+function EditableParagraph({ text, children, onSave, onEditingChange, editing, onStartEditing, onStopEditing, plainText = false, appMode = false }) {
   if (editing) {
     return (
       <InlineTextEditor
@@ -440,6 +576,7 @@ function EditableParagraph({ text, onSave, onEditingChange, editing, onStartEdit
         tabIndex={0}
         aria-label="编辑段落"
         onClick={(event) => {
+          if (event.target.closest("button")) return;
           if (!hasTextSelectionInside(event.currentTarget)) onStartEditing();
         }}
         onKeyDown={(event) => {
@@ -450,14 +587,36 @@ function EditableParagraph({ text, onSave, onEditingChange, editing, onStartEdit
         }}
         className="cursor-text rounded-md outline-none focus:ring-2 focus:ring-blue-200"
       >
-        {plainText ? <PlainTextRenderer content={text} /> : <MarkdownRenderer content={text} />}
+        {children || (plainText ? <PlainTextRenderer content={text} /> : <MarkdownRenderer content={text} />)}
       </div>
       <Pencil className="pointer-events-none absolute right-1 top-1 h-3.5 w-3.5 text-blue-400 opacity-0 transition-opacity group-hover:opacity-100" />
     </div>
   );
 }
 
-function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, editingNew, onStartEditing, onStopEditing, readOnly = false, appMode = false }) {
+function audiobookLineGroupsFor(newText, startLine) {
+  if (!newText) return null;
+  const groups = paragraphAudiobookLines(newText).map((group) => group.map((line) => ({
+    ...line,
+    index: line.index + startLine,
+  })));
+  return groups.some((group) => group.length) ? groups : null;
+}
+
+function paragraphAudiobookStart(content, paragraphIndex) {
+  if (paragraphIndex <= 0) return 0;
+  const prefix = (content || "").split("\n\n").slice(0, paragraphIndex).join("\n\n");
+  return prefix ? splitAudiobookLines(`${prefix}\n\n`).length : 0;
+}
+
+function audiobookLineIndexAt(content, codePointOffset) {
+  const prefix = Array.from(content || "").slice(0, codePointOffset).join("");
+  if (!prefix) return 0;
+  return splitAudiobookLines(prefix).length - (prefix.endsWith("\n") ? 0 : 1);
+}
+
+function InlineDiffHunk({ hunk, onResolveChange, onAccept, onReject, onEditNew, onEditingChange, editingNew, onStartEditing, onStopEditing, readOnly = false, appMode = false, audiobookLineGroups = null }) {
+  const { activeLineIndex } = useContext(AudiobookPlaybackContext);
   const type = hunk.type || "replace";
   const headerActions = !readOnly ? (
     <>
@@ -482,7 +641,7 @@ function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, 
     </>
   ) : null;
   return (
-    <section data-testid="inline-diff-hunk" className="my-2 overflow-visible">
+    <section data-testid="inline-diff-hunk" data-agent-offset={Number.isInteger(hunk.start_offset) ? hunk.start_offset : undefined} className="my-2 overflow-visible">
       <div className="space-y-1">
         {editingNew ? (
           <>
@@ -505,7 +664,7 @@ function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, 
             className={onEditNew && !readOnly && type !== "delete" ? "cursor-text" : ""}
             onClick={(event) => {
               if (!onEditNew || readOnly || type === "delete") return;
-              if (event.target.closest('button, [role="button"]')) return;
+              if (event.target.closest('button, [role="button"], [data-inline-change-trigger="true"]')) return;
               if (!event.target.closest('[data-testid="inline-diff-new"]')) return;
               if (!hasTextSelectionInside(event.currentTarget)) onStartEditing();
             }}
@@ -516,6 +675,9 @@ function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, 
               showOld={type !== "insert_after"}
               showNew={type !== "delete"}
               headerActions={headerActions}
+              onResolveChange={!readOnly ? onResolveChange : undefined}
+              audiobookLineGroups={audiobookLineGroups}
+              activeAudiobookLine={activeLineIndex}
             />
           </div>
         )}
@@ -524,12 +686,65 @@ function InlineDiffHunk({ hunk, onAccept, onReject, onEditNew, onEditingChange, 
   );
 }
 
-function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onEditingChange, closeEditorOnOutside = false, readOnly = false, plainText = false, appMode = false }) {
-  const quote = useContext(SourceReferenceContext);
+function contentReviewBatches(nodeType, content, diff) {
+  if (nodeType !== "chapter" && diff?.grouping === "agent_replacements") {
+    return hydrateDiffBatches(content || "", diff).batches;
+  }
+  return hydrateParagraphReview(content || "", diff).batches;
+}
+
+function NodeContentBody({ field = "content", ...props }) {
+  const target = useContext(DiffNavigationContext);
+  const rootRef = useRef(null);
+  useEffect(() => {
+    if (!target || target.field !== field) return;
+    const frame = requestAnimationFrame(() => {
+      const root = rootRef.current;
+      if (!root) return;
+      const details = root.closest("details");
+      if (details) details.open = true;
+      const { hunk } = target;
+      if (Number.isInteger(hunk.start_offset)) {
+        const located = [...root.querySelectorAll("[data-agent-offset]")].find((element) => Number(element.dataset.agentOffset) === hunk.start_offset);
+        if (located) {
+          located.setAttribute("data-diff-navigation-hit", "true");
+          located.scrollIntoView?.({ block: "center", behavior: "smooth" });
+          return;
+        }
+      }
+      const paragraphs = [...root.querySelectorAll("p, li, h1, h2, h3, h4, pre, td, th")];
+      // Search the rendered revision first; pending deletions can still display the original.
+      let matches = [];
+      for (const text of [hunk.new_text, hunk.old_text]) {
+        if (!text) continue;
+        matches = paragraphs.filter((element) => element.textContent.includes(text));
+        if (matches.length) break;
+      }
+      const index = Math.max(0, (hunk.paragraph_index || 1) - 1);
+      const hit = matches.length === 1 ? matches[0]
+        : matches.length > 1 ? matches.reduce((nearest, element) =>
+          Math.abs(paragraphs.indexOf(element) - index) < Math.abs(paragraphs.indexOf(nearest) - index) ? element : nearest)
+        : paragraphs[Math.min(index, paragraphs.length - 1)] || root;
+      hit.setAttribute("data-diff-navigation-hit", "true");
+      hit.scrollIntoView?.({ block: "center", behavior: "smooth" });
+    });
+    return () => {
+      cancelAnimationFrame(frame);
+      rootRef.current?.querySelectorAll("[data-diff-navigation-hit]").forEach((element) => {
+        element.removeAttribute("data-diff-navigation-hit");
+      });
+    };
+  }, [target, field, props.content, props.batches]);
+  return <div ref={rootRef}><NodeContentBodyInner {...props} /></div>;
+}
+
+function NodeContentBodyInner({ content, batches, onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onResolveHunk, onEditingChange, closeEditorOnOutside = false, readOnly = false, plainText = false, appMode = false }) {
+  const sourceReference = useContext(SourceReferenceContext);
   const [activeEditorKey, setActiveEditorKey] = useState(null);
   const pending = useMemo(() => pendingHunksFromBatches(batches), [batches]);
   const grouped = batches[0]?.grouping === "agent_replacements";
   const blocks = useMemo(() => grouped ? agentDiffBlocks(batches[0]) : buildStackedInlineDiffBlocks(batches), [batches, grouped]);
+  const audiobookParagraphs = useMemo(() => plainText ? paragraphAudiobookLines(content || "") : [], [content, plainText]);
   useEffect(() => {
     if (!closeEditorOnOutside || !activeEditorKey) return undefined;
     const closeOnOutside = (event) => {
@@ -539,25 +754,52 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditP
     document.addEventListener("pointerdown", closeOnOutside);
     return () => document.removeEventListener("pointerdown", closeOnOutside);
   }, [activeEditorKey, closeEditorOnOutside]);
-  if (quote) return plainText ? <PlainTextRenderer content={content} /> : <MarkdownRenderer content={content} />;
   if (!pending.length) {
     if (!content) return <p className="whitespace-pre-wrap">暂无内容</p>;
-    if (!onEditParagraph || readOnly) return plainText ? <PlainTextRenderer content={content} /> : <MarkdownRenderer content={content} />;
+    if (!onEditParagraph || readOnly) return plainText ? <ChapterPlainParagraphs content={content} appMode={appMode} /> : <MarkdownRenderer content={content} />;
+    if (plainText) {
+      return (
+        <ChapterParagraphStack
+          content={content}
+          onEditParagraph={onEditParagraph}
+          onEditingChange={onEditingChange}
+          activeEditorKey={activeEditorKey}
+          setActiveEditorKey={setActiveEditorKey}
+          appMode={appMode}
+        />
+      );
+    }
+    let chunkOffset = 0;
+    const chunks = splitParagraphs(content).map((text) => {
+      const start = chunkOffset;
+      chunkOffset += text.length + 2;
+      return { text, start, end: start + text.length };
+    });
     return (
-      <div className="space-y-1">
-        {splitParagraphs(content).map((paragraph, index) => (
-          <EditableParagraph
-            key={`editable-${index}`}
-            text={paragraph}
-            onSave={(nextText) => onEditParagraph(index + 1, nextText)}
-            onEditingChange={onEditingChange}
-            editing={activeEditorKey === `paragraph-${index}`}
-            onStartEditing={() => setActiveEditorKey(`paragraph-${index}`)}
-            onStopEditing={() => setActiveEditorKey(null)}
-            plainText={plainText}
-            appMode={appMode}
-          />
-        ))}
+      <div data-testid={plainText ? "chapter-paragraphs" : undefined} className={plainText ? "flex flex-col gap-8" : "space-y-1"}>
+        {chunks.map((chunk, index) => {
+          const localReference = !sourceReference || typeof sourceReference === "string" || chunk.end <= sourceReference.start || chunk.start >= sourceReference.end
+            ? (typeof sourceReference === "string" ? sourceReference : null)
+            : {
+              ...sourceReference,
+              start: Math.max(0, sourceReference.start - chunk.start),
+              end: Math.min(chunk.text.length, sourceReference.end - chunk.start),
+            };
+          return (
+            <SourceReferenceContext.Provider key={`editable-${index}`} value={localReference}>
+              <EditableParagraph
+                text={chunk.text}
+                onSave={(nextText) => onEditParagraph(index + 1, nextText)}
+                onEditingChange={onEditingChange}
+                editing={activeEditorKey === `paragraph-${index}`}
+                onStartEditing={() => setActiveEditorKey(`paragraph-${index}`)}
+                onStopEditing={() => setActiveEditorKey(null)}
+                plainText={plainText}
+                appMode={appMode}
+              />
+            </SourceReferenceContext.Provider>
+          );
+        })}
       </div>
     );
   }
@@ -575,44 +817,60 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditP
           && (end === currentCharacters.length || currentCharacters.slice(end, end + 2).join("") === "\n\n");
         const key = `unchanged-${blockIndex}-${index}`;
         const paragraphIndex = currentCharacters.slice(0, start).join("").split("\n\n").length;
-        return <span key={key}>
-          {index > 0 ? "\n\n" : null}
-          {text && wholeParagraph ? (onEditParagraph && !readOnly
-            ? <EditableParagraph text={text} plainText={plainText} appMode={appMode}
-              onSave={(nextText) => onEditParagraph(paragraphIndex, nextText)}
-              onEditingChange={onEditingChange} editing={activeEditorKey === key}
-              onStartEditing={() => setActiveEditorKey(key)} onStopEditing={() => setActiveEditorKey(null)} />
-            : plainText ? <PlainTextRenderer content={text} /> : <MarkdownRenderer content={text} />)
-            : text}
-        </span>;
+        const spokenParagraph = plainText && wholeParagraph
+          ? <ChapterParagraph lines={audiobookParagraphs[paragraphIndex - 1]} appMode={appMode} />
+          : null;
+        const body = text && wholeParagraph ? (onEditParagraph && !readOnly
+          ? <EditableParagraph text={text} plainText={plainText} appMode={appMode}
+            onSave={(nextText) => onEditParagraph(paragraphIndex, nextText)}
+            onEditingChange={onEditingChange} editing={activeEditorKey === key}
+            onStartEditing={() => setActiveEditorKey(key)} onStopEditing={() => setActiveEditorKey(null)}>{spokenParagraph}</EditableParagraph>
+          : plainText ? <div className="group">{spokenParagraph}</div> : <MarkdownRenderer content={text} />)
+          : text;
+        return plainText
+          ? <div key={key}>{body}</div>
+          : <span key={key}>{index > 0 ? "\n\n" : null}{body}</span>;
       });
     };
-    return <div className="whitespace-pre-wrap leading-relaxed">
-      {blocks.map((block, index) => block.kind === "text"
-        ? <span key={`text-${index}`}>{renderUnchanged(block, index)}</span>
-        : <InlineDiffHunk
+    return <div data-testid={plainText ? "chapter-paragraphs" : undefined} className={plainText ? "flex flex-col gap-8" : "whitespace-pre-wrap leading-relaxed"}>
+      {blocks.flatMap((block, index) => (block.kind === "text"
+        ? (plainText ? renderUnchanged(block, index) : [<span key={`text-${index}`}>{renderUnchanged(block, index)}</span>])
+        : [<InlineDiffHunk
           key={`group-${block.index}`} hunk={block.hunk} readOnly={readOnly}
+          audiobookLineGroups={plainText ? audiobookLineGroupsFor(block.hunk.new_text || "", audiobookLineIndexAt(content, block.currentStart)) : null}
           onAccept={() => onAcceptHunk(0, block.index)}
           onReject={() => onRejectHunk(0, block.index)}
+          onResolveChange={onResolveHunk ? (resolved) => onResolveHunk(0, block.index, resolved) : undefined}
           onEditNew={onEditHunkNew ? (text) => onEditHunkNew(block.index, text, true) : undefined}
           onEditingChange={onEditingChange}
           editingNew={activeEditorKey === `group-${block.index}`}
           onStartEditing={() => setActiveEditorKey(`group-${block.index}`)}
           onStopEditing={() => setActiveEditorKey(null)} appMode={appMode}
-        />)}
+        />]))}
     </div>;
   }
 
+  const referenceRanges = displayParagraphRanges(content || "");
+  const referenceHit = (paragraphIndex, count) => {
+    if (!sourceReference || typeof sourceReference === "string" || !Number.isInteger(sourceReference.start) || !Number.isInteger(sourceReference.end)) return false;
+    const covered = referenceRanges.slice(paragraphIndex, paragraphIndex + count);
+    if (!covered.length) return false;
+    return covered[0].start < sourceReference.end && covered[covered.length - 1].end > sourceReference.start;
+  };
+  const hitProps = { "data-node-reference-hit": true, style: { backgroundColor: "#fef3c7", borderRadius: "4px" } };
   let currentParagraphIndex = 0;
   return (
-    <div className="space-y-1">
+    <div data-testid={plainText ? "chapter-paragraphs" : undefined} className={plainText ? "flex flex-col gap-8" : "space-y-1"}>
       {blocks.map((block, index) => {
         if (block.kind === "paragraph") {
           currentParagraphIndex += 1;
           const paragraphIndex = currentParagraphIndex;
-          return onEditParagraph && !readOnly ? (
+          const spokenParagraph = plainText
+            ? <ChapterParagraph lines={audiobookParagraphs[paragraphIndex - 1]} appMode={appMode} />
+            : null;
+          const marked = referenceHit(paragraphIndex - 1, 1);
+          const paragraph = onEditParagraph && !readOnly ? (
             <EditableParagraph
-              key={`p-${index}`}
               text={block.text}
               onSave={(nextText) => onEditParagraph(paragraphIndex, nextText)}
               onEditingChange={onEditingChange}
@@ -621,22 +879,28 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditP
               onStopEditing={() => setActiveEditorKey(null)}
               plainText={plainText}
               appMode={appMode}
-            />
+            >
+              {spokenParagraph}
+            </EditableParagraph>
           ) : plainText
-            ? <PlainTextRenderer key={`p-${index}`} content={block.text} />
-            : <MarkdownRenderer key={`p-${index}`} content={block.text} />;
+            ? <div className="group">{spokenParagraph}</div>
+            : <MarkdownRenderer content={block.text} />;
+          return <div key={`p-${index}`} {...(marked ? hitProps : {})}>{paragraph}</div>;
         }
-        if ((block.hunk.type || "replace") !== "delete") {
-          currentParagraphIndex += Math.max(1, splitParagraphs(block.hunk.new_text || "").length);
-        }
+        const spokenGroups = plainText ? audiobookLineGroupsFor(block.hunk.new_text || "", paragraphAudiobookStart(content, currentParagraphIndex)) : null;
+        const occupiesCurrent = (block.hunk.type || "replace") !== "delete";
+        const occupiedCount = occupiesCurrent ? Math.max(1, splitParagraphs(block.hunk.new_text || "").length) : 0;
+        const marked = occupiedCount > 0 && referenceHit(currentParagraphIndex, occupiedCount);
+        if (occupiesCurrent) currentParagraphIndex += occupiedCount;
         const displayedParagraphIndex = currentParagraphIndex;
-        return (
+        const hunk = (
           <InlineDiffHunk
-            key={`h-${block.batchIndex}-${block.hunkIndex}`}
             hunk={block.hunk}
+            audiobookLineGroups={spokenGroups}
             readOnly={readOnly}
             onAccept={() => onAcceptHunk(block.batchIndex, block.hunkIndex)}
             onReject={() => onRejectHunk(block.batchIndex, block.hunkIndex)}
+            onResolveChange={onResolveHunk ? (resolved) => onResolveHunk(block.batchIndex, block.hunkIndex, resolved) : undefined}
             onEditNew={onEditHunkNew ? (nextText) => onEditHunkNew(displayedParagraphIndex, nextText) : undefined}
             onEditingChange={onEditingChange}
             editingNew={activeEditorKey === `hunk-${block.batchIndex}-${block.hunkIndex}`}
@@ -645,12 +909,13 @@ function NodeContentBody({ content, batches, onAcceptHunk, onRejectHunk, onEditP
             appMode={appMode}
           />
         );
+        return <div key={`h-${block.batchIndex}-${block.hunkIndex}`} {...(marked ? hitProps : {})}>{hunk}</div>;
       })}
     </div>
   );
 }
 
-function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = false, onTextSelect, batches = [], notesBatches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onInlineEditingChange, onAcceptNotesHunk, onRejectNotesHunk, readOnlyDiff = false, previousChapter, nextChapter, onChapterNavigate }) {
+function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = false, onTextSelect, batches = [], notesBatches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onResolveHunk, onInlineEditingChange, onAcceptNotesHunk, onRejectNotesHunk, readOnlyDiff = false, previousChapter, nextChapter, onChapterNavigate, audiobookLineIndex = null, onPlayFromLine }) {
   const generation = node.extra_data?.last_generation;
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
@@ -658,7 +923,13 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
   const chapterElements = node.extra_data?.chapter_elements || [];
   const chapterCharacters = node.extra_data?.characters || [];
   const characterOccurrenceRef = useRef({ nodeId: node.id, nextIndexByName: new Map() });
+  const characterHighlightId = `chapter-character-${useId().replace(/:/g, "")}`;
   const swipeStartRef = useRef(null);
+
+  useEffect(() => {
+    characterOccurrenceRef.current = { nodeId: node.id, nextIndexByName: new Map() };
+    return () => globalThis.CSS?.highlights?.delete(characterHighlightId);
+  }, [node.id, node.content, batches, characterHighlightId]);
 
   const [metaExpanded, setMetaExpanded] = useState(false);
   const hasChapterMeta = chapterCharacters.length > 0 || chapterElements.length > 0;
@@ -686,7 +957,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
 
   const handleCharacterClick = (name) => {
     const scrollContainer = scrollRef.current;
-    const ranges = textRangesIn(scrollContainer, name);
+    const ranges = textRangesIn(scrollContainer?.querySelector('[data-testid="chapter-prose"]'), name);
     if (!ranges.length) return;
 
     if (characterOccurrenceRef.current.nodeId !== node.id) {
@@ -696,9 +967,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
     const range = ranges[nextIndex % ranges.length];
     characterOccurrenceRef.current.nextIndexByName.set(name, (nextIndex + 1) % ranges.length);
 
-    const selection = window.getSelection?.();
-    selection?.removeAllRanges?.();
-    selection?.addRange?.(range);
+    CSS.highlights.set(characterHighlightId, new Highlight(range));
 
     const rangeRect = range.getBoundingClientRect?.();
     const containerRect = scrollContainer.getBoundingClientRect?.();
@@ -714,6 +983,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
 
   return (
     <>
+      <style>{`::highlight(${characterHighlightId}) { background-color: #fbbf24; color: #451a03; }`}</style>
       <div data-testid="chapter-detail-header" className="shrink-0 border-b border-amber-200 bg-amber-50 text-left">
         {appMode ? (
           <div className="mx-auto flex max-w-6xl flex-col gap-1 px-6 py-2">
@@ -829,19 +1099,24 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
           )}
           <div data-testid="chapter-notes" className="mt-3 break-words text-sm leading-relaxed text-gray-700">
             {(node.notes || pendingNotesCount > 0) ? (
+              <SourceReferenceContext.Provider value={referenceForField(node.sourceReference, "notes")}>
               <NodeContentBody
+                field="notes"
                 content={node.notes}
                 batches={notesBatches}
                 onAcceptHunk={onAcceptNotesHunk}
                 onRejectHunk={onRejectNotesHunk}
                 readOnly={readOnlyDiff}
               />
+              </SourceReferenceContext.Provider>
             ) : "暂无章节笔记"}
           </div>
         </details>
         <div data-testid="chapter-body" className={`${isFullscreen ? "max-w-5xl px-6 py-10 sm:px-12 sm:py-16" : "max-w-3xl px-8 py-12"} mx-auto`}>
           <div className={`${isFullscreen ? "prose-xl" : "prose-lg"} prose max-w-none`}>
-            <div className={`${isFullscreen ? "text-xl leading-loose" : "text-lg leading-relaxed"} text-gray-800`}>
+            <div data-testid="chapter-prose" className={`${isFullscreen ? "text-xl" : "text-lg"} leading-[2.4] text-gray-800`}>
+              <AudiobookPlaybackContext.Provider value={{ activeLineIndex: audiobookLineIndex, onPlayFromLine }}>
+              <SourceReferenceContext.Provider value={referenceForField(node.sourceReference, "content")}>
               <NodeContentBody
                 key={`chapter-body-${node.id}`}
                 content={node.content}
@@ -850,12 +1125,15 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
                 onRejectHunk={onRejectHunk}
                 onEditParagraph={onEditParagraph}
                 onEditHunkNew={onEditHunkNew}
+                onResolveHunk={onResolveHunk}
                 onEditingChange={onInlineEditingChange}
                 closeEditorOnOutside
                 readOnly={readOnlyDiff}
                 plainText
                 appMode={appMode}
               />
+              </SourceReferenceContext.Provider>
+              </AudiobookPlaybackContext.Provider>
             </div>
           </div>
 
@@ -945,7 +1223,7 @@ function StorylinesPanel({ storylines }) {
   );
 }
 
-function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onInlineEditingChange, readOnlyDiff = false, appMode = false, previousNode, nextNode, onNavigate }) {
+function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAcceptHunk, onRejectHunk, onEditParagraph, onEditHunkNew, onResolveHunk, onInlineEditingChange, readOnlyDiff = false, appMode = false, previousNode, nextNode, onNavigate }) {
   const config = NODE_TYPE_CONFIG[node.type] || DEFAULT_NODE_TYPE_CONFIG;
   const Icon = config.icon;
   const swipeStartRef = useRef(null);
@@ -997,6 +1275,7 @@ function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAccept
                 onRejectHunk={onRejectHunk}
                 onEditParagraph={onEditParagraph}
                 onEditHunkNew={onEditHunkNew}
+                onResolveHunk={onResolveHunk}
                 onEditingChange={onInlineEditingChange}
                 closeEditorOnOutside
                 readOnly={readOnlyDiff}
@@ -1190,9 +1469,49 @@ function EditView({
   );
 }
 
-function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes, navigationNodes, onChapterNavigate, onEditingChange }) {
+function dramaWorkbenchHref(workId, chapterId) {
+  return `${Capacitor.isNativePlatform() ? "/" : import.meta.env.BASE_URL}${chapterDramaPath(workId, chapterId).slice(1)}`;
+}
+
+function ChapterDramaLink({ workId, chapterId }) {
+  if (!useInRouterContext()) {
+    return (
+      <a href={dramaWorkbenchHref(workId, chapterId)} className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50">
+        <Layers className="h-4 w-4" />
+        <span>生成短剧</span>
+      </a>
+    );
+  }
+  return <ChapterDramaRouterLink workId={workId} chapterId={chapterId} />;
+}
+
+function ChapterDramaRouterLink({ workId, chapterId }) {
+  const navigate = useNavigate();
+  return (
+    <a
+      href={dramaWorkbenchHref(workId, chapterId)}
+      className="flex shrink-0 items-center gap-1 whitespace-nowrap rounded-md px-2 py-1.5 text-xs text-indigo-600 hover:bg-indigo-50"
+      onClick={(event) => {
+        if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+        event.preventDefault();
+        navigate(chapterDramaPath(workId, chapterId));
+      }}
+    >
+      <Layers className="h-4 w-4" />
+      <span>生成短剧</span>
+    </a>
+  );
+}
+
+function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes, navigationNodes, onChapterNavigate, onEditingChange }) {
+  const [savedContent, setSavedContent] = useState(null);
+  const node = useMemo(() => (
+    savedContent?.nodeId === sourceNode.id && savedContent.sourceContent === sourceNode.content
+      ? { ...sourceNode, content: savedContent.content }
+      : sourceNode
+  ), [sourceNode, savedContent]);
   const orderedChapterNodes = useMemo(
-    () => [...chapterNodes].sort((left, right) => compareSiblings(
+    () => chapterNodes.filter((chapter) => chapter.type === "chapter").sort((left, right) => compareSiblings(
       { id: left.id, data: left },
       { id: right.id, data: right },
     )),
@@ -1201,6 +1520,28 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
   const isChapter = node.type === "chapter";
   const isCharacter = node.type === "character";
   const [isEditing, setIsEditing] = useState(false);
+  const [audiobookLine, setAudiobookLine] = useState(null);
+  const [audiobookPlaying, setAudiobookPlaying] = useState(false);
+  const [audiobookError, setAudiobookError] = useState("");
+  const audiobookAbortRef = useRef(null);
+  const audiobookContextRef = useRef(null);
+  const audiobookNextChapterRef = useRef(null);
+  const [audiobookRate, setAudiobookRate] = useState(() => {
+    try {
+      const saved = Number(localStorage.getItem("novel:audiobookRate"));
+      return [0.75, 1, 1.25, 1.5, 1.75, 2].includes(saved) ? saved : 1;
+    } catch { return 1; }
+  });
+  const audiobookRateRef = useRef(audiobookRate);
+  const audiobookAudioRef = useRef(null);
+
+  const handleAudiobookRateChange = (event) => {
+    const rate = Number(event.target.value);
+    audiobookRateRef.current = rate;
+    setAudiobookRate(rate);
+    if (audiobookAudioRef.current) audiobookAudioRef.current.playbackRate = rate;
+    try { localStorage.setItem("novel:audiobookRate", String(rate)); } catch { /* Playback works without storage. */ }
+  };
   const [inlineEditingCount, setInlineEditingCount] = useState(0);
   const [editContentScrollRatio, setEditContentScrollRatio] = useState(0);
   const returnToReadingPositionRef = useRef(false);
@@ -1224,7 +1565,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
   const [copyStatus, setCopyStatus] = useState("idle");
   const [isFullscreen, setIsFullscreen] = useState(appMode);
   const [selectionAction, setSelectionAction] = useState(null);
-  const [diffBatches, setDiffBatches] = useState(() => hydrateDiffBatches(node.content || "", contentDiff).batches);
+  const [diffBatches, setDiffBatches] = useState(() => contentReviewBatches(sourceNode.type, node.content, contentDiff));
   const [notesDiffBatches, setNotesDiffBatches] = useState(() => hydrateDiffBatches(node.notes || "", notesDiff).batches);
   const operationHistoryRef = useRef({ undo: [], redo: [], running: false });
   const detailScrollRef = useRememberedDetailScroll(isEditing ? null : node.id);
@@ -1302,7 +1643,17 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
   useEffect(() => () => onEditingChange?.(false), [onEditingChange]);
   useEffect(() => {
     if (appMode || !node.sourceReference || isEditing) return;
-    const frame = requestAnimationFrame(() => detailScrollRef.current?.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" }));
+    const frame = requestAnimationFrame(() => {
+      const root = detailScrollRef.current;
+      if (!root) return;
+      const part = node.sourceReference?.part === "notes" ? "notes" : "content";
+      const scope = root.querySelector(part === "notes" ? "[data-testid=chapter-notes]" : "[data-testid=chapter-body]") || root;
+      if (part === "notes") {
+        const details = scope.closest("details");
+        if (details) details.open = true;
+      }
+      scope.querySelector("[data-node-reference-hit]")?.scrollIntoView?.({ block: "center" });
+    });
     return () => cancelAnimationFrame(frame);
   }, [node, appMode, isEditing, detailScrollRef]);
 
@@ -1355,7 +1706,149 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
   }, [node.content]);
 
   useEffect(() => {
-    setDiffBatches(hydrateDiffBatches(node.content || "", contentDiff).batches);
+    setAudiobookPlaying(false);
+    setAudiobookLine(null);
+    setAudiobookError("");
+    return () => {
+      audiobookAbortRef.current?.abort();
+      audiobookAbortRef.current = null;
+      audiobookContextRef.current = null;
+    };
+  }, [workId, node.id]);
+
+  useEffect(() => {
+    if (audiobookNextChapterRef.current === node.id) {
+      audiobookNextChapterRef.current = null;
+      startAudiobook(0);
+    } else {
+      audiobookNextChapterRef.current = null;
+    }
+  }, [workId, node.id]);
+
+  const startAudiobook = (startIndex) => {
+    const previous = audiobookAbortRef.current;
+    const controller = new AbortController();
+    audiobookAbortRef.current = controller;
+    previous?.abort();
+    setAudiobookPlaying(true);
+    setAudiobookError("");
+    setAudiobookLine(null);
+    let audioContext;
+    prepareAudioPlayback().then(async (context) => {
+      audioContext = context;
+      if (controller.signal.aborted) throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      audiobookContextRef.current = context;
+      const lines = splitAudiobookLines(node.content || "");
+      const firstIndex = lines.findIndex((line, index) => index >= startIndex && lineIsSpeakable(lineSpeechText(line)));
+      if (firstIndex < 0) throw new Error("没有可朗读的正文");
+      const first = await fetchAudiobookStart({ workId, nodeId: node.id, lineIndex: firstIndex, signal: controller.signal });
+      if (controller.signal.aborted) {
+        await first.pcm.cancel();
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+      const onLine = (lineIndex) => {
+        if (controller.signal.aborted) return;
+        saveAudiobookPosition(workId, node.id, lineIndex, lines[lineIndex]);
+        setAudiobookLine(lineIndex);
+      };
+      const play = (pcm, sampleRate, onProgress) => playPcmStream(pcm, sampleRate, controller.signal, {
+        audioContext,
+        playbackRate: audiobookRateRef.current,
+        onAudio: (audio) => { audiobookAudioRef.current = audio; },
+        onProgress,
+      });
+      if (first.scope === "paragraph") {
+        return playChapterParagraphs({
+          first,
+          onLine, playPcm: play, signal: controller.signal,
+          fetchChunk: (chunkIndex, { signal }) => fetchAudiobookStart({
+            workId, nodeId: node.id, lineIndex: firstIndex, chunkIndex,
+            contentSha256: first.chunk.content_sha256, signal,
+          }),
+        });
+      }
+      return playChapterLines({
+        lines,
+        startIndex: firstIndex,
+        signal: controller.signal,
+        onLine,
+        fetchLine: (lineIndex, { signal }) => lineIndex === firstIndex
+          ? first
+          : fetchAudiobookLine({ workId, nodeId: node.id, lineIndex, signal }),
+        playPcm: (pcm, sampleRate) => play(pcm, sampleRate),
+      });
+    }).then(() => {
+      if (audiobookAbortRef.current === controller && !controller.signal.aborted) {
+        clearAudiobookPosition(workId, node.id);
+        const index = orderedChapterNodes.findIndex((chapter) => chapter.id === node.id);
+        const next = index >= 0 ? orderedChapterNodes[index + 1] : null;
+        if (next && onChapterNavigate) {
+          audiobookNextChapterRef.current = next.id;
+          onChapterNavigate(next);
+        }
+      }
+    }).catch((error) => {
+      if (audiobookAbortRef.current === controller && error?.name !== "AbortError") setAudiobookError(error.message);
+    }).finally(() => {
+      void audioContext?.close();
+      if (audiobookAbortRef.current === controller) {
+        audiobookAbortRef.current = null;
+        audiobookContextRef.current = null;
+        setAudiobookPlaying(false);
+        setAudiobookLine(null);
+      }
+    });
+  };
+
+  const handleToggleAudiobook = () => {
+    if (audiobookPlaying) {
+      audiobookAbortRef.current?.abort();
+      audiobookAbortRef.current = null;
+      audiobookContextRef.current = null;
+      setAudiobookPlaying(false);
+      setAudiobookLine(null);
+      return;
+    }
+    if (audiobookAbortRef.current && audiobookContextRef.current) {
+      void audiobookContextRef.current.resume();
+      setAudiobookPlaying(true);
+      return;
+    }
+    startAudiobook(readAudiobookPosition(workId, node.id, node.content));
+  };
+
+  const audiobookToggleRef = useRef(null);
+  audiobookToggleRef.current = () => {
+    if (!audiobookContextRef.current) return;
+    if (audiobookPlaying) {
+      void audiobookContextRef.current.suspend();
+      setAudiobookPlaying(false);
+    } else {
+      void audiobookContextRef.current.resume();
+      setAudiobookPlaying(true);
+    }
+  };
+  useEffect(() => {
+    if (!appMode || Capacitor.getPlatform() !== "android") return undefined;
+    let listener;
+    let disposed = false;
+    AudiobookMedia.addListener("toggle", () => audiobookToggleRef.current()).then((value) => {
+      if (disposed) void value.remove();
+      else listener = value;
+    });
+    return () => { disposed = true; if (listener) void listener.remove(); void AudiobookMedia.clear(); };
+  }, [appMode]);
+  useEffect(() => {
+    if (!appMode || Capacitor.getPlatform() !== "android") return;
+    if (audiobookPlaying || audiobookAbortRef.current) {
+      void AudiobookMedia.update({ title: node.label, playing: audiobookPlaying });
+    } else {
+      void AudiobookMedia.clear();
+    }
+  }, [appMode, audiobookPlaying, node.id, node.label]);
+
+  useEffect(() => {
+    setDiffBatches(contentReviewBatches(sourceNode.type, node.content, contentDiff));
   }, [contentDiff]);
 
   useEffect(() => {
@@ -1439,11 +1932,11 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
 
   const publishContentDiff = useCallback((baselineContent, currentContent, groupedDiff) => {
     if (groupedDiff) {
-      setDiffBatches(hydrateDiffBatches(currentContent, groupedDiff).batches);
+      setDiffBatches(contentReviewBatches(sourceNode.type, currentContent, groupedDiff));
       onContentDiffChange?.(groupedDiff.hunks.length ? groupedDiff : null);
       return;
     }
-    const hunks = buildContentDiffFromContents(baselineContent, currentContent);
+    const hunks = buildContentDiffFromContents(baselineContent, currentContent, { paragraphReview: true });
     const batches = hunks.length ? [{ original_content: baselineContent, hunks }] : [];
     setDiffBatches(batches);
     if (hunks.length) {
@@ -1456,7 +1949,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
     } else {
       onContentDiffChange?.(null);
     }
-  }, [onContentDiffChange]);
+  }, [onContentDiffChange, sourceNode.type]);
 
   const writeContentDiffState = useCallback(async ({ expectedContent, expectedBaseline, nextBaseline, nextContent, nextDiff }) => {
     await onContentDiffDecision?.(node.id, {
@@ -1466,11 +1959,16 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
       current_content: nextContent,
       ...(nextDiff ? { groups: nextDiff.hunks.map(({ start_offset, old_text, new_text }) => ({ start_offset, old_text, new_text })) } : {}),
     });
+    setSavedContent({ nodeId: sourceNode.id, sourceContent: sourceNode.content, content: nextContent });
     publishContentDiff(nextBaseline, nextContent, nextDiff);
-  }, [node.id, onContentDiffDecision, publishContentDiff]);
+  }, [sourceNode.id, sourceNode.content, onContentDiffDecision, publishContentDiff]);
 
   const persistContentDiff = async ({ expectedContent, expectedBaseline, nextBaseline, nextContent, nextDiff }) => {
-    const previousDiff = diffBatches[0]?.grouping === "agent_replacements" ? {
+    const paragraphReview = diffBatches[0]?.grouping === "paragraph_review";
+    if (paragraphReview && !nextDiff) nextDiff = agentReviewSnapshot(nextBaseline, nextContent);
+    const previousDiff = paragraphReview
+      ? agentReviewSnapshot(expectedBaseline, expectedContent)
+      : diffBatches[0]?.grouping === "agent_replacements" ? {
       ...diffBatches[0], current_content: expectedContent,
     } : undefined;
     try {
@@ -1500,10 +1998,18 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
 
   const applyHunkDecisions = async (nextBatches) => {
     if (diffBatches[0]?.grouping === "agent_replacements") {
+      const marked = nextBatches[0].hunks;
+      const statuses = marked.map((hunk) => hunk.status);
+      const active = statuses.filter(Boolean);
+      const uniform = active.length > 0 && active.length === marked.length && active.every((status) => status === active[0]);
       let nextDiff = diffBatches[0];
-      for (let index = nextBatches[0].hunks.length - 1; index >= 0; index -= 1) {
-        const status = nextBatches[0].hunks[index].status;
-        if (status) nextDiff = decideAgentGroup(nextDiff, index, status === "accepted" ? "accept" : "reject");
+      if (uniform) {
+        nextDiff = decideAgentGroup(nextDiff, "all", active[0] === "accepted" ? "accept" : "reject");
+      } else {
+        for (let index = marked.length - 1; index >= 0; index -= 1) {
+          const status = statuses[index];
+          if (status) nextDiff = decideAgentGroup(nextDiff, index, status === "accepted" ? "accept" : "reject");
+        }
       }
       return persistGroupedDiff(nextDiff);
     }
@@ -1533,7 +2039,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
     const nextContent = joinParagraphs(paragraphs);
     if (nextContent === currentContent) return true;
 
-    if (hasPendingDiff && diffBatches[0]?.grouping !== "agent_replacements") {
+    if (hasPendingDiff && !["agent_replacements", "paragraph_review"].includes(diffBatches[0]?.grouping)) {
       const expectedBaseline = diffBatches[0]?.original_content ?? contentDiff?.original_content ?? "";
       const baselineContent = contentAfterBatches(setAllHunkStatusInBatches(diffBatches, "rejected"));
       const committed = commitUserParagraphEdit(baselineContent, currentContent, paragraphIndex, nextText);
@@ -1555,6 +2061,19 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
     } catch {
       return false;
     }
+  };
+
+  const handleResolveHunk = (batchIndex, hunkIndex, resolved) => {
+    if (diffBatches[0]?.grouping === "agent_replacements") {
+      return persistGroupedDiff(decideAgentGroup(diffBatches[0], hunkIndex, "update", resolved));
+    }
+    const next = resolveLocalHunkInBatches(diffBatches, batchIndex, hunkIndex, resolved);
+    return persistContentDiff({
+      expectedContent: contentAfterBatches(diffBatches),
+      expectedBaseline: diffBatches[0].original_content,
+      nextBaseline: next.baselineContent,
+      nextContent: next.currentContent,
+    });
   };
 
   const handleEditHunkNew = (paragraphIndex, nextText, grouped = false) => {
@@ -1713,7 +2232,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
             {isEditing ? "编辑节点" : isChapter ? "章节阅读" : "节点详情"}
           </span>
         </div>
-        <div className="flex items-center gap-1">
+        <div className="flex min-w-0 items-center gap-1 overflow-x-auto">
           {!isEditing && pendingDiffCount > 0 && !isDiffPreview && (
             <div className="mr-1 flex items-center gap-1">
               <button
@@ -1757,6 +2276,36 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
             </>
           ) : (
             <>
+              {isChapter && !isEditing && workId && (
+                <ChapterDramaLink workId={workId} chapterId={node.id} />
+              )}
+              {isChapter && !isEditing && (
+                <button
+                  type="button"
+                  onClick={handleToggleAudiobook}
+                  className="flex items-center gap-1 rounded-md px-2 py-1.5 text-xs text-gray-500 hover:bg-amber-100 hover:text-amber-700"
+                  aria-label={audiobookPlaying ? "停止" : "播放"}
+                >
+                  {audiobookPlaying ? <Square className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                  <span>{audiobookPlaying ? "停止" : "播放"}</span>
+                </button>
+              )}
+              {isChapter && !isEditing && (
+                <select
+                  aria-label="朗读倍速"
+                  title="朗读倍速"
+                  value={audiobookRate}
+                  onChange={handleAudiobookRateChange}
+                  className="rounded-md border border-gray-200 bg-white px-1 py-1.5 text-xs text-gray-600 focus:border-amber-400 focus:outline-none"
+                >
+                  {[0.75, 1, 1.25, 1.5, 1.75, 2].map((rate) => (
+                    <option key={rate} value={rate}>{rate}×</option>
+                  ))}
+                </select>
+              )}
+              {audiobookError && (
+                <span role="alert" className="max-w-40 truncate text-xs text-red-600">{audiobookError}</span>
+              )}
               {isChapter && (
                 <button
                   type="button"
@@ -1835,6 +2384,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
           onRejectHunk={handleRejectHunk}
           onEditParagraph={onUpdate ? handleEditParagraph : undefined}
           onEditHunkNew={onContentDiffDecision ? handleEditHunkNew : undefined}
+          onResolveHunk={onContentDiffDecision ? handleResolveHunk : undefined}
           onInlineEditingChange={handleInlineEditingChange}
           onAcceptNotesHunk={handleAcceptNotesHunk}
           onRejectNotesHunk={handleRejectNotesHunk}
@@ -1842,6 +2392,8 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
           previousChapter={navigationNodes ? previousNode : previousChapter}
           nextChapter={navigationNodes ? nextNode : nextChapter}
           onChapterNavigate={onChapterNavigate}
+          audiobookLineIndex={audiobookLine}
+          onPlayFromLine={startAudiobook}
         />
       ) : (
         <DefaultNodeView
@@ -1853,6 +2405,7 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
           onRejectHunk={handleRejectHunk}
           onEditParagraph={onUpdate ? handleEditParagraph : undefined}
           onEditHunkNew={onContentDiffDecision ? handleEditHunkNew : undefined}
+          onResolveHunk={onContentDiffDecision ? handleResolveHunk : undefined}
           onInlineEditingChange={handleInlineEditingChange}
           readOnlyDiff={isDiffPreview}
           appMode={appMode}
@@ -1871,16 +2424,18 @@ function NodeDetailDrawerInner({ appMode, node, contentDiff, notesDiff, agentRun
   );
 }
 
-export default function NodeDetailDrawer({ appMode = false, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate, onEditingChange }) {
+export default function NodeDetailDrawer({ appMode = false, workId, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate, onEditingChange }) {
   if (!node) return null;
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
 
+      <DiffNavigationContext.Provider value={node.diffTarget}>
       <SourceReferenceContext.Provider value={appMode ? null : node.sourceReference}>
-        <NodeDetailDrawerInner appMode={appMode} node={node} contentDiff={contentDiff} notesDiff={notesDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onNotesDiffDecision={onNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} onNotesDiffChange={onNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} onEditingChange={onEditingChange} />
+        <NodeDetailDrawerInner appMode={appMode} workId={workId} node={node} contentDiff={contentDiff} notesDiff={notesDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onNotesDiffDecision={onNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} onNotesDiffChange={onNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} onEditingChange={onEditingChange} />
       </SourceReferenceContext.Provider>
+      </DiffNavigationContext.Provider>
     </div>
   );
 }

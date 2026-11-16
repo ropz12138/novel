@@ -31,22 +31,12 @@ class SnapshotEdge(BaseModel):
     extra_data: dict = Field(default_factory=dict)
 
 
-class SnapshotCharacterRelation(BaseModel):
-    id: str
-    source_id: str
-    target_id: str
-    relation_type: str
-    label: str = ""
-
-
 class CanvasSnapshot(BaseModel):
     nodes: list[SnapshotNode] = Field(default_factory=list)
     edges: list[SnapshotEdge] = Field(default_factory=list)
-    character_relations: list[SnapshotCharacterRelation] = Field(default_factory=list)
 
 
 class CanvasRestoreResponse(BaseModel):
     success: bool
     node_count: int
     edge_count: int
-    relation_count: int = 0

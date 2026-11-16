@@ -1,4 +1,4 @@
-"""节点类型枚举测试 — 类型收紧为 7 种。
+"""节点类型枚举测试 — 包含专用评审笔记，共 8 种。
 
 层级链：outline(大纲) → volume(卷) → plot(情节) → chapter(章节)
 全局节点：worldbuilding(世界观)、note(笔记)
@@ -8,10 +8,10 @@
 from services.agents.tools.node_tools import VALID_NODE_TYPES
 
 
-def test_valid_node_types_exactly_seven():
+def test_valid_node_types_include_dedicated_reviewer_note():
     assert set(VALID_NODE_TYPES) == {
         "character", "outline", "volume", "plot",
-        "chapter", "worldbuilding", "note",
+        "chapter", "worldbuilding", "note", "reviewer_note",
     }
 
 

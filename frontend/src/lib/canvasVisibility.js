@@ -7,15 +7,11 @@
  *
  * character / worldbuilding / note 不上画布主干；角色完整信息在右侧「角色与设定」侧栏。
  */
-import { hierarchyRootIds, ancestorChain, childIdsOf, hasHierarchyChildren } from "./canvasGraph";
+import { hierarchyRootIds, ancestorChain, childIdsOf } from "./canvasGraph";
 import { isHierarchyEdge } from "./canvasRelation";
 
 /** 默认从根节点向下展开的层数：0 只显示根，1 额外显示第一层子节点。 */
 export const DEFAULT_EXPAND_DEPTH = 1;
-
-export function isNodeExpandable(index, nodeId) {
-  return hasHierarchyChildren(index, nodeId);
-}
 
 export function toggleExpanded(expandedNodeIds, nodeId) {
   const next = new Set(expandedNodeIds);

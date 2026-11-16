@@ -1,7 +1,15 @@
 """章节正文局部编辑：段落级校验、apply 与 diff 生成。"""
 from __future__ import annotations
 
-from services.chapter_illustration_service import split_paragraphs
+from services.agent_paragraphs import paragraph_index_for_span
+
+
+def split_paragraphs(content: str) -> list[str]:
+    """旧手工编辑按去掉首尾空白后的双换行分段。"""
+    text = (content or "").strip()
+    if not text:
+        return []
+    return text.split("\n\n")
 
 
 def validate_edits(edits: list[dict], paragraphs: list[str]) -> list[str]:
@@ -154,27 +162,32 @@ def build_chapter_edit_diff(old_content: str, new_content: str, edits: list[dict
     }
 
 
-def build_replacement_diff(old_content: str, replacements) -> dict:
-    """每个工具替换项就是一个分组；位置基于依次执行替换时的正文。"""
-    current = old_content
-    hunks = []
+def build_replacement_diff(old_content: str, replacements, mode: str = "blank") -> dict:
+    """每个替换项使用已解析的原文区间；偏移按从左到右的长度变化换算。"""
+    spans = []
     for item in replacements:
-        old = item.old if hasattr(item, "old") else item["old"]
-        new = item.new if hasattr(item, "new") else item["new"]
-        if not old or current.count(old) != 1:
-            raise ValueError("old 需要在当前正文中唯一匹配")
-        start = current.index(old)
+        if isinstance(item, dict):
+            start, end = item["start"], item["end"]
+            new = item["new"] if "new" in item else item["new_text"]
+        else:
+            start, end, new = item.start, item.end, item.new
+        spans.append((start, end, new))
+    spans.sort(key=lambda span: span[0])
+    hunks = []
+    shift = 0
+    for start, end, new in spans:
+        old = old_content[start:end]
         hunks.append({
-            "type": "replace" if new else "delete",
-            "paragraph_index": current[:start].count("\n\n") + 1,
-            "start_offset": start, "old_text": old, "new_text": new,
+            "type": "replace" if old and new else "delete" if old else "insert_after",
+            "paragraph_index": paragraph_index_for_span(old_content, start, old, mode),
+            "start_offset": start + shift, "old_text": old, "new_text": new,
         })
-        current = current[:start] + new + current[start + len(old):]
+        shift += len(new) - len(old)
     return {"grouping": "agent_replacements", "hunks": hunks, "summary": {
         "paragraphs_changed": len(hunks),
-        "chars_added": sum(len(h["new_text"]) for h in hunks),
-        "chars_removed": sum(len(h["old_text"]) for h in hunks),
-        "content_changed": old_content != current,
+        "chars_added": sum(len(hunk["new_text"]) for hunk in hunks),
+        "chars_removed": sum(len(hunk["old_text"]) for hunk in hunks),
+        "content_changed": any(hunk["old_text"] != hunk["new_text"] for hunk in hunks),
     }}
 
 

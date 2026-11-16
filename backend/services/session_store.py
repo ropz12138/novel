@@ -12,19 +12,13 @@ from models.session import SupervisorSession, SupervisorMessage
 class SessionStore:
     """PostgreSQL Session 存储"""
 
-    def __init__(self):
-        self._db_factory = None
-
     def _get_db(self):
-        if self._db_factory:
-            return self._db_factory()
-        from database import SessionLocal
-        return SessionLocal()
+        from database import open_db
+        return open_db()
 
     def create_session(self, user_id: str, work_id: Optional[str] = None, **kwargs) -> dict:
         """创建新会话"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             session = SupervisorSession(
                 user_id=user_id,
                 work_id=work_id,
@@ -36,11 +30,6 @@ class SessionStore:
             db.commit()
             db.refresh(session)
             return self._session_to_dict(session)
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def get_session(self, session_id: str) -> Optional[dict]:
         """获取会话"""
@@ -83,8 +72,7 @@ class SessionStore:
 
     def mark_session_interrupted(self, session_id: str) -> bool:
         """将会话标记为 interrupted（仅当 status=running 时生效）。"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
             if not session or session.status != "running":
                 return False
@@ -93,16 +81,10 @@ class SessionStore:
             session.updated_at = datetime.now(timezone.utc)
             db.commit()
             return True
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def recover_stale_running_sessions(self) -> int:
         """将仍为 running 的会话标记为 interrupted（进程崩溃后的僵尸 session）。"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             rows = db.query(SupervisorSession).filter(SupervisorSession.status == "running").all()
             if not rows:
                 return 0
@@ -113,16 +95,10 @@ class SessionStore:
                 session.updated_at = now
             db.commit()
             return len(rows)
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def update_session(self, session_id: str, **kwargs) -> Optional[dict]:
         """更新会话"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
             if not session:
                 return None
@@ -133,32 +109,20 @@ class SessionStore:
             db.commit()
             db.refresh(session)
             return self._session_to_dict(session)
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def delete_session(self, session_id: str) -> bool:
         """删除会话"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             session = db.query(SupervisorSession).filter(SupervisorSession.id == session_id).first()
             if not session:
                 return False
             db.delete(session)
             db.commit()
             return True
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def add_message(self, session_id: str, role: str, content: str, meta: Optional[dict] = None, work_id: Optional[str] = None, *, before_message_id: str | None = None) -> Optional[dict]:
         """添加消息"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             # 获取当前最大 sort_order
             max_order = db.query(SupervisorMessage.sort_order).filter(
                 SupervisorMessage.session_id == session_id
@@ -198,11 +162,6 @@ class SessionStore:
             db.commit()
             db.refresh(message)
             return self._message_to_dict(message)
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def get_messages(self, session_id: str) -> list[dict]:
         """获取会话消息（Todolist 从 todo_items 同步最新状态）"""
@@ -246,8 +205,7 @@ class SessionStore:
         """更新最近一次匹配的 tool_call 成功状态。"""
         from sqlalchemy.orm.attributes import flag_modified
 
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             rows = (
                 db.query(SupervisorMessage)
                 .filter_by(session_id=session_id, role="tool_call")
@@ -271,16 +229,10 @@ class SessionStore:
                     db.commit()
                     return True
             return False
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def discard_unpaired_tool_calls(self, session_id: str) -> None:
         """删除没有对应 tool_result 的 tool_call，避免中断后历史消息对不齐。"""
-        db = self._get_db()
-        try:
+        with self._get_db() as db:
             messages = (
                 db.query(SupervisorMessage)
                 .filter_by(session_id=session_id)
@@ -310,11 +262,6 @@ class SessionStore:
                 if not call_id or call_id not in result_ids:
                     db.delete(message)
             db.commit()
-        except Exception as e:
-            db.rollback()
-            raise e
-        finally:
-            db.close()
 
     def _session_to_dict(self, session: SupervisorSession) -> dict:
         """Session 对象转字典"""

@@ -4,6 +4,8 @@
 """
 from __future__ import annotations
 
+import database
+
 import difflib
 import hashlib
 import json
@@ -27,9 +29,6 @@ MAX_WORKSPACE_WRITE_CHARS = 500_000
 MAX_WORKSPACE_FILES = 5_000
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _sha256(data: bytes) -> str:
@@ -135,7 +134,7 @@ def create_job_files(user_id: str, filename: str, data: bytes) -> dict:
     raw_path.write_bytes(data)
     encoding, confidence = _detect_encoding(data)
 
-    db = _get_db()
+    db = database.open_db()
     try:
         job = ResearchJob(
             id=job_id,
@@ -265,7 +264,7 @@ def inspect_novel_text(
     count: int = 10,
     start: int | None = None,
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         _, row = _get_job_version(db, job_id, version)
         data = Path(row.file_path).read_bytes()
@@ -331,7 +330,7 @@ def grep_novel_text(
         raise ValueError("搜索内容不能为空")
     if len(query) > MAX_REGEX_LENGTH:
         raise ValueError("搜索表达式过长")
-    db = _get_db()
+    db = database.open_db()
     try:
         _, row = _get_job_version(db, job_id, version)
         text, _ = _read_version_text(row, encoding)
@@ -371,7 +370,7 @@ def create_cleaned_copy(
     normalize_newlines: bool = True,
     strip_bom: bool = True,
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         job, source = _get_job_version(db, job_id, source_version)
         text, selected = _read_version_text(source, source_encoding)
@@ -493,7 +492,7 @@ def transform_novel_text(
         raise ValueError("至少需要一条转换规则")
     if len(rules) > 100:
         raise ValueError("单次最多执行100条转换规则")
-    db = _get_db()
+    db = database.open_db()
     try:
         job, source = _get_job_version(db, job_id, source_version)
         text, _ = _read_version_text(source)
@@ -657,7 +656,7 @@ def get_book_profile(
     classifiers: list[dict],
     version: str = "active",
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         _, row = _get_job_version(db, job_id, version)
         text, _ = _read_version_text(row)
@@ -677,7 +676,7 @@ def normalize_novel_sections(
     blank_lines_after: int = 1,
 ) -> dict:
     """按 Agent 给出的分类器规范标题换行，并创建稳定章节索引。"""
-    db = _get_db()
+    db = database.open_db()
     try:
         job, source = _get_job_version(db, job_id, source_version)
         text, _ = _read_version_text(source)
@@ -774,7 +773,7 @@ def edit_novel_text(
 ) -> dict:
     if not operations:
         raise ValueError("operations 不能为空")
-    db = _get_db()
+    db = database.open_db()
     try:
         job, source = _get_job_version(db, job_id, source_version)
         text, _ = _read_version_text(source)
@@ -840,7 +839,7 @@ def edit_novel_text(
 
 
 def diff_novel_versions(job_id: str, old_version: str, new_version: str) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         _, old = _get_job_version(db, job_id, old_version)
         _, new = _get_job_version(db, job_id, new_version)
@@ -890,7 +889,7 @@ def read_novel_sections(
     per_section_chars: int = 3000,
     max_chars: int = 40_000,
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         _, row = _get_job_version(db, job_id, version)
         if not row.index_path or not Path(row.index_path).is_file():
@@ -1221,7 +1220,7 @@ def split_novel_sections_to_files(
     overwrite: bool = False,
 ) -> dict:
     """按版本索引将分段确定性地拆成工作区内的独立 UTF-8 文件。"""
-    db = _get_db()
+    db = database.open_db()
     try:
         _, row = _get_job_version(db, job_id, version)
         if not row.index_path or not Path(row.index_path).is_file():

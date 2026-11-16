@@ -67,7 +67,7 @@ def test_chapter_body_read_is_complete_and_limited_to_five(structured_work):
     catalog = invoke(list_chapters, limit=20)
     result = invoke(read_chapter_context, chapter_numbers=[1, 2, 3, 4, 5],
                     catalog_revision=catalog["catalog_revision"])
-    assert [item["content"] for item in result["chapters"]] == [f"正文{i}尾部-{i}" for i in range(1, 6)]
+    assert [item["content_paragraphs"][0]["text"] for item in result["chapters"]] == [f"正文{i}尾部-{i}" for i in range(1, 6)]
     assert all("notes" not in item for item in result["chapters"])
     with pytest.raises(ValidationError):
         ReadChapterContextInput(chapter_numbers=[1, 2, 3, 4, 5, 6],
@@ -79,7 +79,7 @@ def test_chapter_notes_read_is_complete_and_limited_to_twenty(structured_work):
     catalog = invoke(list_chapters, limit=20)
     result = invoke(read_chapter_notes, chapter_numbers=[6, 1],
                     catalog_revision=catalog["catalog_revision"])
-    assert [item["notes"] for item in result["chapters"]] == ["笔记6尾部-6", "笔记1尾部-1"]
+    assert [item["notes_paragraphs"][0]["text"] for item in result["chapters"]] == ["笔记6尾部-6", "笔记1尾部-1"]
     assert all("content" not in item for item in result["chapters"])
     assert result["chapters"][0]["notes_sha256"] == hashlib.sha256("笔记6尾部-6".encode()).hexdigest()
     with pytest.raises(ValidationError):

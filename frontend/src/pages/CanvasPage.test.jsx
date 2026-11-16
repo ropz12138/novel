@@ -1,6 +1,6 @@
 import { forwardRef, useEffect, useImperativeHandle, useState } from "react";
 import { describe, expect, it, vi, beforeEach } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 
 const apiMocks = vi.hoisted(() => ({
@@ -58,11 +58,13 @@ vi.mock("../lib/canvasApi", () => ({
 }));
 
 vi.mock("../components/Canvas", () => ({
-  default: forwardRef(function CanvasMock({ workId, nodeContentDiffs, appMode, charactersPanelOpen, onAddContext, onNodeEditingChange }, _ref) {
+  default: forwardRef(function CanvasMock({ workId, works, nodeContentDiffs, nodeNotesDiffs, appMode, charactersPanelOpen, onAddContext, onNodeEditingChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh }, _ref) {
     useImperativeHandle(_ref, () => canvasRefMocks);
     return (
-      <div data-testid="canvas-mock" data-work-id={workId}
+      <div data-testid="canvas-mock" data-work-id={workId} data-works-count={works?.length ?? 0}
         data-diff-count={Object.keys(nodeContentDiffs).length} data-app-mode={String(appMode)}
+        data-content-diff-ids={Object.keys(nodeContentDiffs).join(",")}
+        data-notes-diff-ids={Object.keys(nodeNotesDiffs).join(",")}
         data-characters-open={String(charactersPanelOpen)}>
         <button type="button" onClick={() => onAddContext?.({ id: "chapter-1", type: "chapter", label: "第一章" })}>
           引用此节点
@@ -72,6 +74,7 @@ vi.mock("../components/Canvas", () => ({
         </button>
         <button type="button" onClick={() => onNodeEditingChange?.(true)}>进入节点编辑</button>
         <button type="button" onClick={() => onNodeEditingChange?.(false)}>退出节点编辑</button>
+        <button type="button" onClick={() => { onNodeContentDiffsRefresh?.(); onNodeNotesDiffsRefresh?.(); }}>刷新修改</button>
       </div>
     );
   }),
@@ -116,6 +119,10 @@ vi.mock("../components/AgentChat", () => ({
 
 vi.mock("../components/ModelConfigDialog", () => ({
   default: () => null,
+}));
+
+vi.mock("../components/TtsConfigDialog", () => ({
+  default: ({ open }) => open ? <div role="dialog" aria-label="朗读设置">朗读设置面板</div> : null,
 }));
 
 vi.mock("../components/AppUpdateButton", () => ({
@@ -184,6 +191,7 @@ describe("CanvasPage delete work", () => {
 
     const canvas = await screen.findByTestId("canvas-mock");
     expect(canvas.dataset.workId).toBe("w2");
+    expect(canvas.dataset.worksCount).toBe("2");
     expect(screen.getByText("作品二")).toBeDefined();
   });
 
@@ -208,6 +216,68 @@ describe("CanvasPage delete work", () => {
       </MemoryRouter>,
     );
     await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset.diffCount).toBe("1"));
+  });
+
+  it.each(["content", "notes"])("ignores late %s diffs after switching works", async (kind) => {
+    let resolveOld;
+    const pendingOld = new Promise((resolve) => { resolveOld = resolve; });
+    const rows = (id) => [{
+      node_id: id, original_notes: "旧笔记", current_notes: "新笔记",
+      original_content: "旧正文", current_content: "新正文",
+      hunks: [{ type: "replace", start_offset: 0, old_text: "旧正文", new_text: "新正文" }],
+    }];
+    const mock = kind === "content" ? apiMocks.fetchContentDiffs : apiMocks.fetchNotesDiffs;
+    mock.mockImplementation((workId) => workId === "w1" ? pendingOld : Promise.resolve(rows("b-node")));
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await waitFor(() => expect(mock).toHaveBeenCalledWith("w1"));
+    fireEvent.click(screen.getByText("作品:"));
+    fireEvent.click(screen.getByText("作品二"));
+    const attribute = kind === "content" ? "contentDiffIds" : "notesDiffIds";
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("b-node"));
+    await act(async () => { resolveOld(rows("a-node")); });
+    expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("b-node");
+  });
+
+  it.each(["content", "notes"])("keeps the latest %s refresh when an earlier request finishes later", async (kind) => {
+    let resolveOld;
+    const pendingOld = new Promise((resolve) => { resolveOld = resolve; });
+    const row = (id) => [{
+      node_id: id, original_notes: "旧笔记", current_notes: "新笔记",
+      original_content: "旧正文", current_content: "新正文",
+      hunks: [{ type: "replace", start_offset: 0, old_text: "旧正文", new_text: "新正文" }],
+    }];
+    const mock = kind === "content" ? apiMocks.fetchContentDiffs : apiMocks.fetchNotesDiffs;
+    mock.mockImplementationOnce(() => pendingOld).mockResolvedValue(row("latest"));
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await waitFor(() => expect(mock).toHaveBeenCalledWith("w1"));
+    fireEvent.click(screen.getByText("刷新修改"));
+    const attribute = kind === "content" ? "contentDiffIds" : "notesDiffIds";
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("latest"));
+    await act(async () => { resolveOld(row("outdated")); });
+    expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("latest");
+  });
+
+  it.each(["content", "notes"])("ignores original %s request after switching away and back", async (kind) => {
+    let resolveOld;
+    const pendingOld = new Promise((resolve) => { resolveOld = resolve; });
+    const row = (id) => [{
+      node_id: id, original_notes: "旧笔记", current_notes: "新笔记",
+      original_content: "旧正文", current_content: "新正文",
+      hunks: [{ type: "replace", start_offset: 0, old_text: "旧正文", new_text: "新正文" }],
+    }];
+    const mock = kind === "content" ? apiMocks.fetchContentDiffs : apiMocks.fetchNotesDiffs;
+    mock.mockImplementationOnce(() => pendingOld).mockImplementation((workId) => Promise.resolve(row(workId)));
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await waitFor(() => expect(mock).toHaveBeenCalledWith("w1"));
+    fireEvent.click(screen.getByText("作品:"));
+    fireEvent.click(screen.getByText("作品二"));
+    const attribute = kind === "content" ? "contentDiffIds" : "notesDiffIds";
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("w2"));
+    fireEvent.click(screen.getByText("作品:"));
+    fireEvent.click(screen.getByText("作品一"));
+    await waitFor(() => expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("w1"));
+    await act(async () => { resolveOld(row("outdated")); });
+    expect(screen.getByTestId("canvas-mock").dataset[attribute]).toBe("w1");
   });
 
   it("shows an agent body diff as soon as the live event arrives", async () => {
@@ -582,4 +652,22 @@ describe("CanvasPage delete work", () => {
     fireEvent.click(screen.getByRole("button", { name: "Token 用量" }));
     expect(await screen.findByText("用量页")).toBeTruthy();
   });
+
+  it("opens global TTS settings for an admin", async () => {
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await screen.findByText("作品一");
+    fireEvent.click(screen.getByTitle("账户"));
+    fireEvent.click(screen.getByRole("button", { name: "朗读设置" }));
+    expect(screen.getByRole("dialog", { name: "朗读设置" })).toBeTruthy();
+  });
+
+  it("hides TTS settings from ordinary users", async () => {
+    localStorage.setItem("novel_role", "user");
+    render(<MemoryRouter><CanvasPage /></MemoryRouter>);
+    await screen.findByText("作品一");
+    fireEvent.click(screen.getByTitle("账户"));
+    expect(screen.queryByRole("button", { name: "朗读设置" })).toBeNull();
+    expect(screen.queryByRole("dialog", { name: "朗读设置" })).toBeNull();
+  });
+
 });

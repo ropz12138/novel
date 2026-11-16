@@ -75,6 +75,13 @@ export async function deleteNode(id) {
   }, "删除节点失败");
 }
 
+export async function copyNodeToWork(nodeId, targetWorkId) {
+  return authJson(`${API_BASE}/nodes/${nodeId}/copy`, {
+    method: "POST",
+    body: JSON.stringify({ target_work_id: targetWorkId }),
+  }, "复制节点失败");
+}
+
 // ========== 连线API ==========
 
 export async function fetchEdges(workId) {
@@ -88,36 +95,10 @@ export async function createEdge(workId, data) {
   }, "创建连线失败");
 }
 
-export async function updateEdge(id, data) {
-  return authJson(`${API_BASE}/edges/${id}`, {
-    method: "PUT",
-    body: JSON.stringify(data),
-  }, "更新连线失败");
-}
-
 export async function deleteEdge(id) {
   return authJson(`${API_BASE}/edges/${id}`, {
     method: "DELETE",
   }, "删除连线失败");
-}
-
-// ========== 角色关系线 API ==========
-
-export async function fetchCharacterRelations(workId) {
-  return authJson(`${API_BASE}/works/${workId}/character-relations`, {}, "加载角色关系失败");
-}
-
-export async function createCharacterRelation(workId, data) {
-  return authJson(`${API_BASE}/works/${workId}/character-relations`, {
-    method: "POST",
-    body: JSON.stringify(data),
-  }, "创建角色关系失败");
-}
-
-export async function deleteCharacterRelation(id) {
-  return authJson(`${API_BASE}/character-relations/${id}`, {
-    method: "DELETE",
-  }, "删除角色关系失败");
 }
 
 // ========== 模型配置API ==========

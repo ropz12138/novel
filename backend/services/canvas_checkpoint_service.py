@@ -5,7 +5,6 @@ from sqlalchemy.orm import Session
 
 from models.node import Node
 from models.edge import Edge
-from models.character_relation import CharacterRelation
 from models.session import SupervisorMessage
 from models.user_canvas_action import UserCanvasAction
 from models.todo_item import TodoItem
@@ -13,14 +12,12 @@ from models.canvas_checkpoint import (
     CanvasCheckpoint,
     CanvasCheckpointNode,
     CanvasCheckpointEdge,
-    CanvasCheckpointRelation,
     CanvasCheckpointTodoItem,
 )
 from schemas.canvas_snapshot import (
     CanvasSnapshot,
     SnapshotNode,
     SnapshotEdge,
-    SnapshotCharacterRelation,
 )
 from services.canvas_restore_service import apply_canvas_snapshot
 
@@ -28,7 +25,6 @@ from services.canvas_restore_service import apply_canvas_snapshot
 def _work_to_snapshot(db: Session, work_id: str) -> CanvasSnapshot:
     nodes = db.query(Node).filter(Node.work_id == work_id).all()
     edges = db.query(Edge).filter(Edge.work_id == work_id).all()
-    relations = db.query(CharacterRelation).filter(CharacterRelation.work_id == work_id).all()
     return CanvasSnapshot(
         nodes=[
             SnapshotNode(
@@ -57,16 +53,6 @@ def _work_to_snapshot(db: Session, work_id: str) -> CanvasSnapshot:
             )
             for e in edges
         ],
-        character_relations=[
-            SnapshotCharacterRelation(
-                id=r.id,
-                source_id=r.source_id,
-                target_id=r.target_id,
-                relation_type=r.relation_type,
-                label=r.label or "",
-            )
-            for r in relations
-        ],
     )
 
 
@@ -88,7 +74,6 @@ def capture_canvas_checkpoint(
         sort_order=sort_order,
         node_count=len(snapshot.nodes),
         edge_count=len(snapshot.edges),
-        relation_count=len(snapshot.character_relations),
     )
     db.add(checkpoint)
     db.flush()
@@ -117,16 +102,6 @@ def capture_canvas_checkpoint(
             edge_type=e.edge_type,
             label=e.label,
             extra_data=e.extra_data,
-        ))
-
-    for r in snapshot.character_relations:
-        db.add(CanvasCheckpointRelation(
-            checkpoint_id=checkpoint.id,
-            relation_id=r.id,
-            source_id=r.source_id,
-            target_id=r.target_id,
-            relation_type=r.relation_type,
-            label=r.label,
         ))
 
     todo_items = (
@@ -181,16 +156,6 @@ def checkpoint_to_snapshot(db: Session, checkpoint_id: str) -> CanvasSnapshot:
                 extra_data=e.extra_data or {},
             )
             for e in cp.edges
-        ],
-        character_relations=[
-            SnapshotCharacterRelation(
-                id=r.relation_id,
-                source_id=r.source_id,
-                target_id=r.target_id,
-                relation_type=r.relation_type,
-                label=r.label or "",
-            )
-            for r in cp.character_relations
         ],
     )
 
@@ -331,6 +296,17 @@ def prepare_edit_resend(
         trigger_message_id=new_msg.id,
         sort_order=new_msg.sort_order,
     )
+    from services.agents.deep_agent_runtime import discard_summarization_state_beyond_history
+    from services.agents.supervisor import SupervisorAgent
+    message_count = len(SupervisorAgent()._initial_messages(
+        session_id=session_id,
+        work_id=work_id,
+        user_message="",
+        context_node_ids=None,
+        chapter_review_intensity="medium",
+        persist_system_updates=False,
+    ))
+    discard_summarization_state_beyond_history("session", session_id, message_count)
 
     return {
         "id": new_msg.id,

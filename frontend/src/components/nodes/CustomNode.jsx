@@ -1,7 +1,52 @@
 import { memo, useCallback, useRef } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { Lock } from "lucide-react";
+import { BookMarked, BookOpen, ChevronDown, ChevronRight, Globe, Library, Lock, Search, StickyNote, User, Zap } from "lucide-react";
+import Markdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { BOUNDARY_HANDLE_STYLES, ELEMENT_SIZE } from "../../lib/nodeDimensions";
+import { remarkHtmlBreaks } from "../../lib/markdown";
+
+/** Compact markdown for canvas card previews (keeps line-clamp usable). */
+const previewMdComponents = {
+  h1: ({ children }) => <span className="font-semibold">{children}{" "}</span>,
+  h2: ({ children }) => <span className="font-semibold">{children}{" "}</span>,
+  h3: ({ children }) => <span className="font-semibold">{children}{" "}</span>,
+  h4: ({ children }) => <span className="font-semibold">{children}{" "}</span>,
+  p: ({ children }) => <span>{children}{" "}</span>,
+  ul: ({ children }) => <span>{children}</span>,
+  ol: ({ children }) => <span>{children}</span>,
+  li: ({ children }) => <span>{"· "}{children}{" "}</span>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  em: ({ children }) => <em>{children}</em>,
+  code: ({ inline, children, ...props }) => (
+    <code className="text-[10px] font-mono" {...props}>{children}</code>
+  ),
+  blockquote: ({ children }) => <span>{children}{" "}</span>,
+  hr: () => null,
+  a: ({ children }) => <span>{children}</span>,
+  img: () => null,
+  table: () => null,
+  thead: () => null,
+  tbody: ({ children }) => <span>{children}</span>,
+  tr: ({ children }) => <span>{children}{" "}</span>,
+  th: ({ children }) => <span className="font-semibold">{children}{" "}</span>,
+  td: ({ children }) => <span>{children}{" "}</span>,
+  pre: ({ children }) => <span>{children}</span>,
+};
+
+function NodePreviewMarkdown({ content }) {
+  const preview = content.length > 240 ? `${content.slice(0, 240)}` : content;
+  return (
+    <div
+      data-testid="node-preview-markdown"
+      className="text-xs text-gray-600 mt-1 line-clamp-2 break-words"
+    >
+      <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={previewMdComponents}>
+        {preview}
+      </Markdown>
+    </div>
+  );
+}
 
 const ELEMENT_SIDES = ["top", "right", "bottom", "left"];
 const ELEMENT_POSITIONS = {
@@ -12,19 +57,20 @@ const ELEMENT_POSITIONS = {
 };
 
 const nodeStyles = {
-  outline: { bg: "#dbeafe", border: "#3b82f6", icon: "📋", label: "大纲" },
-  volume: { bg: "#e0e7ff", border: "#6366f1", icon: "📚", label: "卷" },
-  plot: { bg: "#ffedd5", border: "#f97316", icon: "⚡", label: "情节" },
-  chapter: { bg: "#dcfce7", border: "#22c55e", icon: "📖", label: "章节" },
-  character: { bg: "#fce7f3", border: "#ec4899", icon: "👤", label: "角色" },
-  worldbuilding: { bg: "#ede9fe", border: "#8b5cf6", icon: "🌍", label: "世界观" },
-  note: { bg: "#f3e8ff", border: "#a855f7", icon: "📝", label: "笔记" },
+  outline: { bg: "#dbeafe", border: "#7aa7f7", ink: "#1d4ed8", icon: Library, label: "大纲" },
+  volume: { bg: "#e0e7ff", border: "#8b90f5", ink: "#4338ca", icon: BookMarked, label: "卷" },
+  plot: { bg: "#ffedd5", border: "#f6a15d", ink: "#c2410c", icon: Zap, label: "情节" },
+  chapter: { bg: "#dcfce7", border: "#62d28b", ink: "#15803d", icon: BookOpen, label: "章节" },
+  character: { bg: "#fce7f3", border: "#ec4899", icon: User, label: "角色" },
+  worldbuilding: { bg: "#ede9fe", border: "#8b5cf6", icon: Globe, label: "世界观" },
+  note: { bg: "#f3e8ff", border: "#a855f7", icon: StickyNote, label: "笔记" },
+  reviewer_note: { bg: "#fef3c7", border: "#d97706", icon: Search, label: "评审笔记" },
   element: { bg: "#fef3c7", border: "#d97706", icon: "🔹", label: "元素" },
 };
 
 const DEFAULT_STYLE = { bg: "#f1f5f9", border: "#94a3b8", icon: "📄", label: "节点" };
 export const NODE_LONG_PRESS_MS = 500;
-const NODE_LONG_PRESS_MOVE_PX = 8;
+export const NODE_LONG_PRESS_MOVE_PX = 8;
 
 // character 按 scope 做视觉区分：边框色 + 角色徽章（temp 用虚线弱化）
 const CHARACTER_SCOPE_STYLE = {
@@ -48,6 +94,7 @@ const CustomNode = memo(({
   appMode = false,
 }) => {
   const style = nodeStyles[data.type] || DEFAULT_STYLE;
+  const NodeIcon = style.icon;
   const isCharacter = data.type === "character";
   const charScope = isCharacter ? CHARACTER_SCOPE_STYLE[data.scope] : null;
   const isChapter = data.type === "chapter";
@@ -192,12 +239,15 @@ const CustomNode = memo(({
 
   return (
     <div
-      className={`box-border relative h-[120px] w-[250px] overflow-hidden px-4 py-3 rounded-lg shadow-md border-2 cursor-pointer hover:shadow-lg transition-all group ${
+      className={`box-border relative h-[120px] w-[250px] overflow-hidden rounded-xl border-[1.5px] px-3.5 py-3 cursor-pointer transition-shadow group ${
         charScope?.dashed ? "border-dashed" : ""
-      } ${selected ? "ring-2 ring-blue-500" : ""} ${isLocked ? "ring-2 ring-sky-500" : ""}`}
+      } ${isLocked ? "ring-2 ring-sky-500" : ""}`}
       style={{
         backgroundColor: style.bg,
         borderColor: isLocked ? "#0ea5e9" : (charScope ? charScope.border : style.border),
+        boxShadow: selected
+          ? "0 0 0 3px #fff, 0 0 0 5.5px #2563eb, 0 10px 20px -10px rgba(37,99,235,.5)"
+          : "0 1px 2px rgba(16,24,40,.06), 0 8px 16px -10px rgba(16,24,40,.22)",
       }}
       onClick={handleClick}
       {...longPressProps}
@@ -217,11 +267,8 @@ const CustomNode = memo(({
       <Handle id="target-left" type="target" position={Position.Left} className="w-3 h-3" />
 
       <div className="flex items-center gap-2 mb-1">
-        <span className="text-lg">{style.icon}</span>
-        <span
-          className="font-semibold text-sm truncate"
-          style={{ color: style.border }}
-        >
+        {typeof NodeIcon === "string" ? <span className="text-lg">{NodeIcon}</span> : <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-[7px] bg-white/70"><NodeIcon className="h-3.5 w-3.5" strokeWidth={1.75} style={{ color: style.ink || style.border }} /></span>}
+        <span className="min-w-0 truncate text-[15px] font-semibold" style={{ color: style.ink || "#131a26" }}>
           {data.label}
         </span>
         {hasChildren && (
@@ -232,16 +279,13 @@ const CustomNode = memo(({
             className="nodrag ml-auto rounded px-1.5 py-0.5 text-xs bg-white/70 text-slate-500 hover:bg-white transition-colors"
             onClick={handleCollapseToggle}
           >
-            {isExpanded ? "▾" : "▸"}
+            {isExpanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
           </button>
         )}
       </div>
 
       {data.content && !(isCharacter && (data.extra_data?.storylines || []).length) && (
-        <p className="text-xs text-gray-600 mt-1 line-clamp-2">
-          {data.content.substring(0, 60)}
-          {data.content.length > 60 ? "..." : ""}
-        </p>
+        <NodePreviewMarkdown content={data.content} />
       )}
 
       {chapterCharacters.length > 0 && (
@@ -264,28 +308,16 @@ const CustomNode = memo(({
       <div className="mt-2">
         <div className="flex flex-wrap items-center gap-1.5">
           {isCharacter && charScope ? (
-            <span
-              className="text-xs px-2 py-0.5 rounded-full"
-              style={{
-                backgroundColor: charScope.border + "20",
-                color: charScope.border,
-              }}
-            >
+            <span className="rounded-full bg-white/60 px-2 py-0.5 text-xs text-[#5b6676]">
               {charScope.label}
             </span>
           ) : (
-            <span
-              className="text-xs px-2 py-0.5 rounded-full"
-              style={{
-                backgroundColor: style.border + "20",
-                color: style.border,
-              }}
-            >
+            <span className="rounded-full bg-white/60 px-2 py-0.5 text-xs text-[#5b6676]">
               {style.label}
             </span>
           )}
           {isChapter && (
-            <span className="text-[10px] text-gray-500">
+            <span className="font-mono text-[11px] text-[#5b6676]">
               {wordCount > 0 ? `${wordCount} 字` : "未写"}
             </span>
           )}
@@ -323,67 +355,6 @@ const CustomNode = memo(({
       <Handle id="source-right" type="source" position={Position.Right} className="w-3 h-3" />
       <Handle id="source-bottom" type="source" position={Position.Bottom} className="w-3 h-3" />
       <Handle id="source-left" type="source" position={Position.Left} className="w-3 h-3" />
-
-      {isCharacter && (
-        <>
-          <Handle
-            id="rel-target-top"
-            type="target"
-            position={Position.Top}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ top: 8 }}
-          />
-          <Handle
-            id="rel-target-right"
-            type="target"
-            position={Position.Right}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ right: 8 }}
-          />
-          <Handle
-            id="rel-target-bottom"
-            type="target"
-            position={Position.Bottom}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ bottom: 8 }}
-          />
-          <Handle
-            id="rel-target-left"
-            type="target"
-            position={Position.Left}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ left: 8 }}
-          />
-          <Handle
-            id="rel-source-top"
-            type="source"
-            position={Position.Top}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ top: 16 }}
-          />
-          <Handle
-            id="rel-source-right"
-            type="source"
-            position={Position.Right}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ right: 16 }}
-          />
-          <Handle
-            id="rel-source-bottom"
-            type="source"
-            position={Position.Bottom}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ bottom: 16 }}
-          />
-          <Handle
-            id="rel-source-left"
-            type="source"
-            position={Position.Left}
-            className="!w-2.5 !h-2.5 !bg-amber-400 !border-2 !border-amber-600 opacity-0 group-hover:opacity-100 transition-opacity"
-            style={{ left: 16 }}
-          />
-        </>
-      )}
     </div>
   );
 });

@@ -1,4 +1,5 @@
 """写作 Agent 读取小说研究 Agent 产出的只读工具。"""
+import database
 import asyncio
 import json
 from functools import partial
@@ -11,9 +12,6 @@ from sqlalchemy import or_
 from models.research import ResearchArtifact, ResearchJob
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _get_current_user_id() -> str | None:
@@ -80,7 +78,7 @@ def _list_research_artifacts_sync(
             "total": 0,
         }, ensure_ascii=False)
 
-    db = _get_db()
+    db = database.open_db()
     try:
         query = (
             db.query(ResearchArtifact, ResearchJob)
@@ -150,7 +148,7 @@ def _read_research_artifacts_sync(
         }, ensure_ascii=False)
 
     requested_ids = list(dict.fromkeys(artifact_ids))
-    db = _get_db()
+    db = database.open_db()
     try:
         rows = (
             db.query(ResearchArtifact, ResearchJob)

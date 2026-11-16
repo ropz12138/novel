@@ -24,14 +24,11 @@ export function getDeletableSelectedNodeIds(nodes) {
     .filter(Boolean);
 }
 
-/** 从本地图状态移除节点及其关联边/角色关系。 */
-export function filterGraphAfterNodeRemoval(nodeIds, nodes, edges, characterRelations = []) {
+/** 从本地图状态移除节点及其关联边。 */
+export function filterGraphAfterNodeRemoval(nodeIds, nodes, edges) {
   const idSet = new Set(nodeIds || []);
   return {
     nodes: (nodes || []).filter((n) => !idSet.has(n.id)),
     edges: (edges || []).filter((e) => !idSet.has(e.source) && !idSet.has(e.target)),
-    characterRelations: (characterRelations || []).filter(
-      (r) => !idSet.has(r.source) && !idSet.has(r.target),
-    ),
   };
 }

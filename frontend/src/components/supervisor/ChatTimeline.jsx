@@ -1,11 +1,10 @@
 import { useRef, Fragment, useState, useEffect, useLayoutEffect } from "react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { remarkHtmlBreaks } from "../../lib/markdown";
+import { remarkHtmlBreaks, renderLiteralNewlines } from "../../lib/markdown";
 import { Check, Loader2, X, Bot, PenLine, ChevronDown, ChevronRight, Pencil } from "lucide-react";
 import { Button } from "../ui/button";
 import { ChapterContentDiffViewer } from "./ChapterContentDiffViewer";
-import { RequirementsTodoCard } from "../agent/RequirementsTodoCard";
 
 const NODE_PILL_COLORS = {
   outline: "#3b82f6",
@@ -15,6 +14,7 @@ const NODE_PILL_COLORS = {
   character: "#ec4899",
   worldbuilding: "#8b5cf6",
   note: "#a855f7",
+  reviewer_note: "#d97706",
   element: "#d97706",
 };
 
@@ -27,7 +27,6 @@ function isPlaceholderEllipsisContent(content) {
 
 function shouldHideAssistantEllipsisBubble(item) {
   if (item?.kind !== "message" || item.role !== "assistant") return false;
-  if (item.type === "requirements_todolist" && item.todoCard) return false;
   if (item.type === "chapter_content_diff_card" && item.chapterContentDiffCard) return false;
   if (item.type === "chapter_notes_diff_card" && item.chapterNotesDiffCard) return false;
   if (item.type === "error") return false;
@@ -56,7 +55,7 @@ function renderContextualContent(text) {
       return (
         <span
           key={i}
-          className="inline-flex items-center rounded-full px-2 py-0.5 text-xs text-white mx-0.5 align-middle"
+          className="inline-flex max-w-full min-w-0 items-center break-words rounded-full px-2 py-0.5 text-xs text-white mx-0.5 align-middle [overflow-wrap:anywhere]"
           style={{ backgroundColor: NODE_PILL_COLORS[type] || "#6b7280" }}
         >
           {title}
@@ -74,13 +73,16 @@ const mdComponents = {
   ul: ({ node, ...props }) => <ul className="list-disc pl-5 my-1.5 space-y-0.5" {...props} />,
   ol: ({ node, ...props }) => <ol className="list-decimal pl-5 my-1.5 space-y-0.5" {...props} />,
   li: ({ node, ...props }) => <li className="text-sm" {...props} />,
-  p: ({ node, ...props }) => <p className="my-1.5" {...props} />,
+  p: ({ node, ...props }) => <p className="my-1.5 min-w-0 break-words [overflow-wrap:anywhere]" {...props} />,
   strong: ({ node, ...props }) => <strong className="font-semibold text-slate-800" {...props} />,
+  pre: ({ node, ...props }) => (
+    <pre className="my-2 max-w-full min-w-0 overflow-x-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere]" {...props} />
+  ),
   code: ({ node, inline, ...props }) =>
     inline ? (
-      <code className="rounded bg-slate-100 px-1 py-0.5 text-xs text-violet-700" {...props} />
+      <code className="break-words rounded bg-slate-100 px-1 py-0.5 text-xs text-violet-700 [overflow-wrap:anywhere]" {...props} />
     ) : (
-      <code className="block rounded bg-slate-50 p-2.5 text-xs text-slate-600 overflow-x-auto my-2" {...props} />
+      <code className="my-2 block max-w-full min-w-0 overflow-x-auto whitespace-pre-wrap break-words rounded bg-slate-50 p-2.5 text-xs text-slate-600 [overflow-wrap:anywhere]" {...props} />
     ),
   hr: ({ node, ...props }) => <hr className="my-3 border-slate-200" {...props} />,
   blockquote: ({ node, ...props }) => (
@@ -110,7 +112,7 @@ function CollapsibleReasoning({
       <button
         type="button"
         onClick={onToggle}
-        className="mb-1 flex items-center gap-1 text-[10px] font-medium text-slate-400 hover:text-slate-500"
+        className="mb-1 flex items-center gap-1 text-xs font-medium text-slate-400 hover:text-slate-500"
       >
         {collapsed ? (
           <ChevronRight className="h-3 w-3 shrink-0" />
@@ -152,11 +154,11 @@ function ExecStepRow({ item, onToggleStep }) {
   const hasContentStream = Boolean(item.stream?.trim());
   const reasoningAutoCollapsed = hasContentStream;
   const { collapsed: reasoningCollapsed, toggle: toggleReasoning } = useReasoningCollapse(reasoningAutoCollapsed);
-  const showContent = item.status === "running" || (item.status === "done" && item.panelOpen);
+  const showContent = item.status === "running" || item.panelOpen;
   const showStepStream = showContent && item.stream?.trim();
 
   return (
-    <div className="flex gap-2 justify-start pl-1">
+    <div className="flex gap-2 justify-start pl-9 text-xs text-[#748093]">
       <div className="mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center text-slate-300">
         {item.status === "running" ? (
           <Loader2 className="h-3 w-3 animate-spin text-slate-400" />
@@ -168,13 +170,13 @@ function ExecStepRow({ item, onToggleStep }) {
       </div>
       <div className="max-w-[min(100%,42rem)] flex-1 min-w-0 py-0.5">
         <div
-          className={`text-[11px] font-normal leading-snug text-slate-400 select-none ${hasStream ? "cursor-pointer hover:text-slate-600" : ""}`}
+          className={`text-xs font-normal leading-snug text-slate-500 select-none ${hasStream ? "cursor-pointer hover:text-slate-700" : ""}`}
           onClick={() => hasStream && onToggleStep(item.id)}
         >
           {item.label}
         </div>
         {showContent && hasStream && (
-          <div className="mt-1 whitespace-pre-wrap break-words text-[10px] font-normal leading-relaxed text-slate-400">
+          <div className="mt-1 whitespace-pre-wrap break-words text-xs font-normal leading-relaxed text-slate-400">
             {item.reasoningStream?.trim() && (
               <CollapsibleReasoning
                 content={item.reasoningStream}
@@ -215,9 +217,28 @@ function ReferenceLink({ href, children, onOpenDiffNode }) {
   if (href?.startsWith("/node-reference?")) {
     const params = new URLSearchParams(href.split("?")[1]);
     const nodeId = params.get("node_id");
+    const startParagraph = Number(params.get("start_paragraph"));
+    const endParagraph = Number(params.get("end_paragraph"));
     const quote = params.get("quote");
-    return onOpenDiffNode && nodeId && quote
-      ? <button type="button" className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-600 hover:bg-blue-100" title={quote} onClick={() => onOpenDiffNode(nodeId, quote)}>{children}</button>
+    const part = params.get("part") === "notes" ? "notes" : "content";
+    const segmentation = params.get("segmentation");
+    const startText = params.get("start");
+    const endText = params.get("end");
+    const start = Number(startText);
+    const end = Number(endText);
+    const paragraphReference = Number.isInteger(startParagraph) && startParagraph >= 1 && Number.isInteger(endParagraph) && endParagraph >= startParagraph
+      ? { startParagraph, endParagraph, part }
+      : null;
+    const reference = segmentation === "markdown-v1"
+      ? (startText !== null && endText !== null && Number.isInteger(start) && Number.isInteger(end) && start >= 0 && end >= start
+        ? { segmentation, start, end, part, startParagraph, endParagraph }
+        : null)
+      : (segmentation ? null : (paragraphReference || quote));
+    const title = reference && typeof reference === "object"
+      ? `${part === "notes" ? "笔记" : "正文"}段落 ${startParagraph}${endParagraph === startParagraph ? "" : `–${endParagraph}`}`
+      : quote;
+    return onOpenDiffNode && nodeId && reference
+      ? <button type="button" className="inline-flex rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-600 hover:bg-blue-100" title={title} onClick={() => onOpenDiffNode(nodeId, reference)}>{children}</button>
       : <span>{children}</span>;
   }
   return <a href={href} target="_blank" rel="noopener noreferrer">{children}</a>;
@@ -229,10 +250,13 @@ function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running,
 
   return (
     <div className="flex gap-3 justify-start">
-      <div className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-blue-100 text-blue-500">
+      <div className="mt-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full bg-[#e9f0fe] text-[#2563eb]">
         <Bot className="h-3.5 w-3.5" />
       </div>
-      <div className="max-w-[85%] rounded-xl bg-slate-100 px-4 py-2.5 text-sm leading-relaxed text-slate-800">
+      <div
+        data-testid="streaming-message-bubble"
+        className="min-w-0 max-w-[85%] break-words rounded-[14px_14px_14px_4px] bg-[#f1f4f8] px-3.5 py-2.5 text-sm leading-[1.75] text-[#131a26] [overflow-wrap:anywhere]"
+      >
         {assistantReasoningDraft && (
           <CollapsibleReasoning
             content={assistantReasoningDraft}
@@ -248,7 +272,7 @@ function StreamingDraftBlock({ assistantReasoningDraft, assistantDraft, running,
           />
         )}
         {assistantDraft && (
-          <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={{ a: (props) => <ReferenceLink {...props} onOpenDiffNode={onOpenDiffNode} /> }}>{assistantDraft}</Markdown>
+          <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={{ a: (props) => <ReferenceLink {...props} onOpenDiffNode={onOpenDiffNode} /> }}>{renderLiteralNewlines(assistantDraft)}</Markdown>
         )}
         {running && assistantDraft && (
           <span className="inline-block h-2.5 w-px animate-pulse bg-slate-400 align-text-bottom ml-0.5" />
@@ -280,7 +304,7 @@ function AssistantTextMessage({ msg, onOpenDiffNode }) {
         <Markdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]} components={{ ...mdComponents,
           a: (props) => <ReferenceLink {...props} onOpenDiffNode={onOpenDiffNode} />,
         }}>
-          {msg.content}
+          {renderLiteralNewlines(msg.content)}
         </Markdown>
       )}
     </>
@@ -380,11 +404,11 @@ function UserMessageBubble({ msg, running, onEditMessage }) {
   }
 
   return (
-    <div className="group relative rounded-xl bg-blue-600 px-4 py-2.5 text-sm leading-relaxed text-white">
+    <div className="group relative min-w-0 max-w-full break-words rounded-[14px_14px_4px_14px] bg-[#2563eb] px-3.5 py-2.5 text-sm leading-[1.65] text-white [overflow-wrap:anywhere]">
       <div
         ref={bodyRef}
         data-testid="user-message-body"
-        className={`whitespace-pre-wrap break-words pr-6 ${expanded ? "" : "line-clamp-5"}`}
+        className={`min-w-0 whitespace-pre-wrap break-words pr-6 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-5"}`}
       >
         {renderContextualContent(msg.content || "")}
       </div>
@@ -429,7 +453,7 @@ export function ChatTimeline({
   onOpenDiffNode,
 }) {
   const bottomRef = useRef(null);
-  const visibleTimeline = (timeline || []).filter((item) => !shouldHideAssistantEllipsisBubble(item));
+  const visibleTimeline = (timeline || []).filter((item) => item.type !== "requirements_todolist" && !shouldHideAssistantEllipsisBubble(item));
   const visibleDraft = isPlaceholderEllipsisContent(assistantDraft) ? "" : (assistantDraft || "");
 
   const hasContent = visibleTimeline.length > 0 || assistantReasoningDraft || visibleDraft;
@@ -438,6 +462,17 @@ export function ChatTimeline({
   return (
     <>
       {visibleTimeline.map((item) => {
+        if (item.kind === "draft") {
+          return (assistantReasoningDraft || visibleDraft) ? (
+            <StreamingDraftBlock
+              key={`d-${item.id}`}
+              assistantReasoningDraft={assistantReasoningDraft}
+              assistantDraft={visibleDraft}
+              onOpenDiffNode={onOpenDiffNode}
+              running={running}
+            />
+          ) : null;
+        }
         // ── Execution step ──
         if (item.kind === "step") {
           return <ExecStepRow key={`s-${item.id}`} item={item} onToggleStep={onToggleStep} />;
@@ -454,17 +489,17 @@ export function ChatTimeline({
           if (canOpenDiffNode) onOpenDiffNode(diffNodeId);
         };
         return (
-          <div key={`m-${item.id}`} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
+          <div key={`m-${item.id}`} data-message-id={item.id} className={`flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
             {msg.role !== "user" && (
               <div
-                className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full ${
-                  msg.type === "error" ? "bg-red-100 text-red-500" : "bg-blue-100 text-blue-500"
+                className={`mt-0.5 flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-full ${
+                  msg.type === "error" ? "bg-red-100 text-red-500" : "bg-[#e9f0fe] text-[#2563eb]"
                 }`}
               >
                 {msg.type === "error" ? "!" : <Bot className="h-3.5 w-3.5" />}
               </div>
             )}
-            <div className="relative max-w-[80%]">
+            <div data-testid="chat-message-shell" className="relative min-w-0 max-w-[80%]">
               {msg.role === "user" ? (
                 <UserMessageBubble msg={msg} running={running} onEditMessage={onEditMessage} />
               ) : (
@@ -481,12 +516,13 @@ export function ChatTimeline({
                       openDiffNode();
                     }
                   } : undefined}
-                  className={`relative rounded-xl px-4 py-2.5 text-sm leading-relaxed ${
+                  data-testid="assistant-message-bubble"
+                  className={`relative min-w-0 max-w-full break-words rounded-[14px_14px_14px_4px] px-3.5 py-2.5 text-sm leading-[1.75] [overflow-wrap:anywhere] ${
                     msg.type === "error"
                       ? "bg-red-50 text-red-700 border border-red-200"
                       : msg.type === "agent_phase"
                         ? "bg-slate-50 text-slate-800 border border-slate-200"
-                        : "bg-slate-100 text-slate-800"
+                        : "bg-[#f1f4f8] text-[#131a26]"
                   } ${canOpenDiffNode ? "cursor-pointer hover:ring-2 hover:ring-blue-200 focus:outline-none focus:ring-2 focus:ring-blue-300" : ""}`}
                 >
                   {renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNode })}
@@ -504,16 +540,6 @@ export function ChatTimeline({
           </div>
         );
       })}
-      {/* Streaming draft */}
-      {(assistantReasoningDraft || visibleDraft) && (
-        <StreamingDraftBlock
-          assistantReasoningDraft={assistantReasoningDraft}
-          assistantDraft={visibleDraft}
-          onOpenDiffNode={onOpenDiffNode}
-          running={running}
-        />
-      )}
-
       <div ref={bottomRef} data-chat-bottom />
     </>
   );
@@ -539,7 +565,7 @@ function DiffSummary({ card }) {
   );
 }
 
-function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff, cardKey = "chapterContentDiffCard", label = "" }) {
+function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff, onOpenDiffNode, cardKey = "chapterContentDiffCard", label = "" }) {
   const card = msg[cardKey] || {};
   const [open, setOpen] = useState(false);
 
@@ -582,6 +608,10 @@ function HistoryDiffCard({ msg, onExpandDiff, onCollapseDiff, cardKey = "chapter
           textCountDelta={card.text_count_delta}
           wordCount={card.word_count}
           wordCountDelta={card.word_count_delta}
+          onExpandHunk={(hunk) => onOpenDiffNode?.(card.node_id || card.chapter_node_id, undefined, {
+            field: cardKey === "chapterNotesDiffCard" ? "notes" : "content", hunk,
+          })}
+          markdown={cardKey === "chapterNotesDiffCard"}
         />
       )}
     </div>
@@ -596,6 +626,7 @@ function renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNod
           msg={msg}
           onExpandDiff={onExpandDiff}
           onCollapseDiff={onCollapseDiff}
+          onOpenDiffNode={onOpenDiffNode}
         />
       );
 
@@ -607,11 +638,9 @@ function renderMessageContent(msg, { onExpandDiff, onCollapseDiff, onOpenDiffNod
           label="章节笔记"
           onExpandDiff={onExpandDiff}
           onCollapseDiff={onCollapseDiff}
+          onOpenDiffNode={onOpenDiffNode}
         />
       );
-
-    case "requirements_todolist":
-      return <RequirementsTodoCard todoCard={msg.todoCard} />;
 
     default:
       // User message or plain assistant text

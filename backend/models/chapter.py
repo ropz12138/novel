@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Text, DateTime, JSON, ForeignKey
+from sqlalchemy import Column, String, Text, DateTime, ForeignKey
 from sqlalchemy.orm import synonym
 from datetime import datetime
 import uuid
@@ -20,6 +20,3 @@ class Chapter(Base):
     summary = synonym("notes")
     outline_binding_id = Column(String(36), nullable=True)
     node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True, index=True)
-    new_facts = Column(JSON, default=list)
-    foreshadows = Column(JSON, default=list)
-    generation_context = Column(JSON, default=dict)

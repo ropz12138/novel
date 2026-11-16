@@ -60,5 +60,37 @@
     "langsmith_project": "Novel",
     "langsmith_endpoint": "https://api.smith.langchain.com",
     "langsmith_tracing_v2": true
+  },
+  "tts": {
+    "provider": "mimo_tts",
+    "mimo_tts": {
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "api_key": "your_mimo_api_key",
+      "model": "mimo-v2.5-tts",
+      "voice": "茉莉",
+      "style": "用温柔自然的语气讲述故事，语速舒缓，咬字清晰，情绪随正文自然变化。",
+      "timeout_seconds": 180,
+      "audio_format": "pcm",
+      "sample_rate": 24000
+    },
+    "mimo_voicedesign": {
+      "base_url": "https://api.xiaomimimo.com/v1",
+      "api_key": "your_mimo_api_key",
+      "model": "mimo-v2.5-tts-voicedesign",
+      "voice_description": "一位二十多岁的年轻女性，声线温柔清澈，带着细腻柔和的气息，普通话清晰自然。用温柔自然的语气讲述故事，语速舒缓，咬字清晰，情绪随正文自然变化。",
+      "timeout_seconds": 180,
+      "audio_format": "pcm",
+      "sample_rate": 24000
+    },
+    "iflytek_xtts": {
+      "sdk_dir": "backend/vendor/iflytek_xtts",
+      "app_id": "your_iflytek_app_id",
+      "api_key": "your_iflytek_api_key",
+      "api_secret": "your_iflytek_api_secret",
+      "vcn": "xiaoyan",
+      "language": 1,
+      "audio_format": "pcm",
+      "sample_rate": 16000
+    }
   }
 }

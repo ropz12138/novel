@@ -7,9 +7,6 @@ const mocks = vi.hoisted(() => ({
   setNodes: vi.fn(),
   edges: [],
   setEdges: vi.fn(),
-  relationEdges: [],
-  setRelationEdges: vi.fn(),
-  edgesStateCall: 0,
   lastReactFlowProps: null,
   customNodeProps: [],
   fitView: vi.fn(),
@@ -32,13 +29,7 @@ vi.mock("@xyflow/react", async () => {
     MiniMap: () => <div data-testid="flow-minimap" />,
     addEdge: (edge, edges) => [...edges, edge],
     useNodesState: () => [mocks.nodes, mocks.setNodes, vi.fn()],
-    useEdgesState: () => {
-      mocks.edgesStateCall += 1;
-      if (mocks.edgesStateCall % 2 === 1) {
-        return [mocks.edges, mocks.setEdges, vi.fn()];
-      }
-      return [mocks.relationEdges, mocks.setRelationEdges, vi.fn()];
-    },
+    useEdgesState: () => [mocks.edges, mocks.setEdges, vi.fn()],
     MarkerType: { ArrowClosed: "arrowclosed" },
     useReactFlow: () => ({ fitView: mocks.fitView }),
   };
@@ -58,26 +49,22 @@ vi.mock("./nodes/NodeDetailDrawer", () => ({
 vi.mock("../lib/canvasApi", () => ({
   fetchNodes: vi.fn(),
   fetchEdges: vi.fn(),
-  fetchCharacterRelations: vi.fn(),
   createNode: vi.fn(),
   updateNode: vi.fn(),
   createEdge: vi.fn(),
-  updateEdge: vi.fn(),
   deleteEdge: vi.fn(),
   deleteNode: vi.fn(),
+  copyNodeToWork: vi.fn(),
   restoreCanvasSnapshot: vi.fn(),
-  createCharacterRelation: vi.fn(),
-  deleteCharacterRelation: vi.fn(),
 }));
 
 import { Canvas, mergeRefreshedNodes, toCanvasSnapshot, applyNodeUpdateToData } from "./Canvas";
 import {
   fetchNodes,
   fetchEdges,
-  fetchCharacterRelations,
   deleteNode,
+  copyNodeToWork,
   restoreCanvasSnapshot,
-  updateEdge,
   updateNode,
 } from "../lib/canvasApi";
 import { CANVAS_MARQUEE_KEY_CODE } from "../lib/canvasDrag";
@@ -129,7 +116,6 @@ describe("toCanvasSnapshot", () => {
         label: "推进",
         extra_data: { b: 2 },
       }],
-      character_relations: [],
     });
   });
 
@@ -143,23 +129,6 @@ describe("toCanvasSnapshot", () => {
       []
     );
     expect(snap.nodes[0].scope).toBe("local");
-    expect(snap.character_relations).toEqual([]);
-  });
-
-  it("serializes character relations", () => {
-    const snap = toCanvasSnapshot([], [], [{
-      id: "r1",
-      source: "c1",
-      target: "c2",
-      data: { relation_type: "暗恋", label: "秘密" },
-    }]);
-    expect(snap.character_relations).toEqual([{
-      id: "r1",
-      source_id: "c1",
-      target_id: "c2",
-      relation_type: "暗恋",
-      label: "秘密",
-    }]);
   });
 });
 
@@ -485,10 +454,7 @@ describe("Canvas forwardRef", () => {
     vi.clearAllMocks();
     mocks.nodes = [];
     mocks.edges = [];
-    mocks.relationEdges = [];
-    mocks.edgesStateCall = 0;
     mocks.lastReactFlowProps = null;
-    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
   });
 
   it("opens a node detail by node id through the imperative handle", async () => {
@@ -496,7 +462,7 @@ describe("Canvas forwardRef", () => {
       id: "chapter-1",
       type: "custom",
       position: { x: 0, y: 0 },
-      data: { type: "chapter", label: "第一章", content: "正文", extra_data: {} },
+      data: { type: "chapter", label: "第一章", content: "正文", notes: "笔记段", extra_data: {} },
     }];
     fetchNodes.mockResolvedValue({
       nodes: [{
@@ -504,6 +470,7 @@ describe("Canvas forwardRef", () => {
         type: "chapter",
         title: "第一章",
         content: "正文",
+        notes: "笔记段",
         extra_data: {},
         position_x: 0,
         position_y: 0,
@@ -524,9 +491,46 @@ describe("Canvas forwardRef", () => {
     act(() => {
       expect(ref.current.openNodeDetail("chapter-1", "正文")).toBe(true);
     });
+    act(() => {
+      expect(ref.current.openNodeDetail("chapter-1", undefined, {
+        field: "content", hunk: { type: "replace", paragraph_index: 1, new_text: "正文" },
+      })).toBe(true);
+    });
     const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
     expect(ref.current.openNodeDetail("chapter-1", "已删除的文字")).toBe(false);
     expect(alert).toHaveBeenCalledWith("引用原文已变化或存在多处匹配，请让 AI 重新生成引用。");
+    expect(ref.current.openNodeDetail("chapter-1", { startParagraph: 1, endParagraph: 1, part: "content" })).toBe(true);
+    expect(ref.current.openNodeDetail("chapter-1", { startParagraph: 1, endParagraph: 1, part: "notes" })).toBe(true);
+    expect(ref.current.openNodeDetail("chapter-1", { startParagraph: 2, endParagraph: 2, part: "notes" })).toBe(false);
+    expect(alert).toHaveBeenCalledWith("引用段落已不存在，请让 AI 重新生成引用。");
+    alert.mockRestore();
+  });
+
+  it("resolves markdown references from backend offsets and keeps unmarked links on blank lines", async () => {
+    const content = "# 情节一\n\n- 甲\n- 乙";
+    const start = content.lastIndexOf("- 乙");
+    fetchNodes.mockResolvedValue({
+      nodes: [{
+        id: "plot-1", type: "plot", title: "情节一", content, extra_data: {},
+        position_x: 0, position_y: 0,
+      }],
+    });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    const ref = createRef();
+    render(<Canvas ref={ref} workId="w-md-ref" />);
+    await waitFor(() => expect(ref.current).not.toBeNull());
+    const alert = vi.spyOn(window, "alert").mockImplementation(() => {});
+    act(() => {
+      expect(ref.current.openNodeDetail("plot-1", {
+        segmentation: "markdown-v1", start, end: start + "- 乙".length, part: "content",
+        startParagraph: 3, endParagraph: 3,
+      })).toBe(true);
+    });
+    expect(ref.current.openNodeDetail("plot-1", {
+      segmentation: "markdown-v1", part: "content", startParagraph: 3, endParagraph: 3,
+    })).toBe(false);
+    expect(ref.current.openNodeDetail("plot-1", { startParagraph: 2, endParagraph: 2, part: "content" })).toBe(true);
+    expect(ref.current.openNodeDetail("plot-1", { startParagraph: 3, endParagraph: 3, part: "content" })).toBe(false);
     alert.mockRestore();
   });
 
@@ -581,7 +585,7 @@ describe("Canvas forwardRef", () => {
     expect(typeof mocks.lastReactFlowProps.onSelectionDragStop).toBe("function");
   });
 
-  it("hides flow controls, the global minimap, and the structural-edge toggle in App mode", async () => {
+  it("hides flow controls and the global minimap in App mode", async () => {
     fetchNodes.mockResolvedValue({ nodes: [] });
     fetchEdges.mockResolvedValue({ edges: [] });
 
@@ -590,7 +594,6 @@ describe("Canvas forwardRef", () => {
 
     expect(document.querySelector('[data-testid="flow-controls"]')).toBeNull();
     expect(document.querySelector('[data-testid="flow-minimap"]')).toBeNull();
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(false);
     expect(mocks.lastReactFlowProps.proOptions).toEqual({ hideAttribution: true });
     expect(mocks.lastReactFlowProps.onlyRenderVisibleElements).toBe(true);
   });
@@ -639,14 +642,20 @@ describe("Canvas forwardRef", () => {
     expect(onCharactersPanelOpenChange).not.toHaveBeenCalled();
   });
 
-  it("shows the structural-edge toggle on the web canvas", async () => {
+  it("draws hierarchy edges without a structural-edge toggle", async () => {
+    mocks.nodes = [
+      { id: "o", position: { x: 0, y: 0 }, data: { type: "outline", label: "总纲" } },
+      { id: "v", position: { x: 0, y: 200 }, data: { type: "volume", label: "第一卷" } },
+    ];
+    mocks.edges = [{ id: "e-ov", source: "o", target: "v", data: { edge_type: "contains" } }];
     fetchNodes.mockResolvedValue({ nodes: [] });
     fetchEdges.mockResolvedValue({ edges: [] });
 
     render(<Canvas ref={createRef()} workId="w-web" />);
     await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
 
-    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(true);
+    expect([...document.querySelectorAll("button")].some((button) => button.textContent === "结构线")).toBe(false);
+    expect(mocks.lastReactFlowProps.edges.some((edge) => edge.id === "e-ov")).toBe(true);
   });
 
   it("shows 引用此节点 when a node is right-clicked", async () => {
@@ -778,7 +787,6 @@ describe("Canvas forwardRef", () => {
     await waitFor(() => {
       expect(fetchNodes).toHaveBeenCalledTimes(2);
       expect(fetchEdges).toHaveBeenCalledTimes(2);
-      expect(fetchCharacterRelations).toHaveBeenCalledTimes(2);
     });
   });
 
@@ -973,13 +981,8 @@ describe("Canvas deleteNode", () => {
       { id: "e1", source: "n1", target: "n2", type: "smoothstep", style: {}, markerEnd: {}, data: { edge_type: "contains" } },
       { id: "e2", source: "n2", target: "n3", type: "smoothstep", style: {}, markerEnd: {}, data: { edge_type: "contains" } },
     ];
-    const initialRelations = [
-      { id: "r1", source: "n1", target: "n2", type: "characterRelation", data: { relation_type: "ally" } },
-    ];
-
     mocks.nodes = initialNodes;
     mocks.edges = initialEdges;
-    mocks.relationEdges = initialRelations;
     deleteNode.mockResolvedValue(undefined);
 
     render(<Canvas ref={createRef()} workId="w1" />);
@@ -994,7 +997,6 @@ describe("Canvas deleteNode", () => {
 
     mocks.setNodes.mockClear();
     mocks.setEdges.mockClear();
-    mocks.setRelationEdges.mockClear();
     deleteNode.mockClear();
 
     fireEvent.keyDown(window, { key: "Delete" });
@@ -1010,9 +1012,6 @@ describe("Canvas deleteNode", () => {
 
     const edgesUpdater = mocks.setEdges.mock.calls[0][0];
     expect(edgesUpdater(initialEdges).map((e) => e.id)).toEqual([]);
-
-    const relationsUpdater = mocks.setRelationEdges.mock.calls[0][0];
-    expect(relationsUpdater(initialRelations)).toEqual([]);
   });
 
   it("deletes selected nodes when Backspace key is pressed", async () => {
@@ -1070,12 +1069,9 @@ describe("Canvas 可见子图接入", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.edgesStateCall = 0;
     mocks.lastReactFlowProps = null;
-    mocks.relationEdges = [];
     fetchNodes.mockResolvedValue({ nodes: [] });
     fetchEdges.mockResolvedValue({ edges: [] });
-    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
 
     mocks.nodes = [
       flowNode("o1", "outline", "大纲"),
@@ -1212,9 +1208,7 @@ describe("Canvas 不再回写布局数据", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.edgesStateCall = 0;
     mocks.lastReactFlowProps = null;
-    mocks.relationEdges = [];
     mocks.nodes = [
       flowNode("o1", "outline", "大纲"),
       flowNode("v1", "volume", "第一卷"),
@@ -1229,18 +1223,6 @@ describe("Canvas 不再回写布局数据", () => {
     ];
     fetchNodes.mockResolvedValue({ nodes: [] });
     fetchEdges.mockResolvedValue({ edges: [] });
-    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
-  });
-
-  it("不再把连线布局诊断写回后端", async () => {
-    vi.useFakeTimers();
-    try {
-      render(<Canvas ref={createRef()} workId="w1" />);
-      await vi.advanceTimersByTimeAsync(2000);
-      expect(updateEdge).not.toHaveBeenCalled();
-    } finally {
-      vi.useRealTimers();
-    }
   });
 
   it("展开状态变化不会触发连线数据写入", async () => {
@@ -1248,8 +1230,6 @@ describe("Canvas 不再回写布局数据", () => {
     try {
       render(<Canvas ref={createRef()} workId="w1" />);
       await vi.advanceTimersByTimeAsync(2000);
-      // 布局现在每次展开都会变化，若仍回写诊断会产生大量无意义请求
-      expect(updateEdge).not.toHaveBeenCalled();
       expect(updateNode).not.toHaveBeenCalled();
     } finally {
       vi.useRealTimers();
@@ -1279,10 +1259,8 @@ describe("画布视图状态持久化", () => {
     cleanup();
     vi.clearAllMocks();
     window.localStorage.clear();
-    mocks.edgesStateCall = 0;
     mocks.lastReactFlowProps = null;
     mocks.customNodeProps = [];
-    mocks.relationEdges = [];
     mocks.nodes = [
       flowNode("o1", "outline", "大纲"),
       flowNode("v1", "volume", "第一卷"),
@@ -1303,7 +1281,6 @@ describe("画布视图状态持久化", () => {
       })),
     });
     fetchEdges.mockResolvedValue({ edges: [] });
-    fetchCharacterRelations.mockResolvedValue({ relations: [], total: 0 });
   });
 
   it("无记录时按默认深度显示，不展示更深层级", async () => {
@@ -1441,5 +1418,138 @@ describe("画布视图状态持久化", () => {
         zoom: 1.5,
       });
     });
+  });
+});
+
+describe("跨作品复制节点", () => {
+  const works = [
+    { id: "w-current", title: "当前小说" },
+    { id: "w-other", title: "另一部小说" },
+  ];
+  const volume = {
+    id: "vol",
+    data: { type: "volume", label: "第一卷", sort_order: 1, extra_data: {} },
+  };
+
+  beforeEach(() => {
+    cleanup();
+    vi.clearAllMocks();
+    mocks.nodes = [
+      volume,
+      { id: "plot", data: { type: "plot", label: "开端", sort_order: 1, extra_data: {} } },
+      {
+        id: "ch",
+        data: {
+          type: "chapter",
+          label: "第一章",
+          sort_order: 1,
+          extra_data: { characters: [{ id: "hero", name: "林舟" }] },
+        },
+      },
+      { id: "hero", data: { type: "character", label: "林舟", sort_order: 1, scope: "global", extra_data: {} } },
+      { id: "note", data: { type: "note", label: "写作要求", sort_order: 1, scope: "global", extra_data: {} } },
+      { id: "world", data: { type: "worldbuilding", label: "灵气体系", sort_order: 1, scope: "global", extra_data: {} } },
+    ];
+    mocks.edges = [
+      { id: "vol-plot", source: "vol", target: "plot" },
+      { id: "plot-ch", source: "plot", target: "ch" },
+    ];
+    mocks.lastReactFlowProps = null;
+    fetchNodes.mockResolvedValue({ nodes: [] });
+    fetchEdges.mockResolvedValue({ edges: [] });
+    copyNodeToWork.mockReset();
+  });
+
+  function renderCanvas(extraProps = {}) {
+    render(
+      <Canvas
+        ref={createRef()}
+        workId="w-current"
+        works={works}
+        {...extraProps}
+      />,
+    );
+  }
+
+  function openVolumeMenu() {
+    act(() => {
+      mocks.lastReactFlowProps.onNodeContextMenu({
+        preventDefault: vi.fn(),
+        clientX: 120,
+        clientY: 80,
+        target: document.querySelector('[data-testid="react-flow"]'),
+      }, volume);
+    });
+  }
+
+  it("copies a node and its descendants into another work", async () => {
+    copyNodeToWork.mockResolvedValue({ nodes: [], edges: [], omitted_character_refs: ["ghost"] });
+    renderCanvas();
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+    openVolumeMenu();
+
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+
+    expect(screen.getByRole("dialog", { name: "复制到其他作品" }).textContent).toContain(
+      "「第一卷」会连同下级 2 个节点、章节引用的 1 个角色，一起复制到所选作品，并作为独立结构放在那里。",
+    );
+    expect(screen.queryByRole("button", { name: "当前小说" })).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "另一部小说" }));
+
+    await waitFor(() => expect(copyNodeToWork).toHaveBeenCalledWith("vol", "w-other"));
+    expect(screen.getByText("已复制到「另一部小说」。有 1 条已失效的角色引用未复制。")).toBeDefined();
+  });
+
+  it("shows the request error and keeps the dialog open", async () => {
+    copyNodeToWork.mockRejectedValue(new Error("不能复制到当前作品"));
+    renderCanvas();
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+    openVolumeMenu();
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+    fireEvent.click(screen.getByRole("button", { name: "另一部小说" }));
+
+    expect(await screen.findByText("不能复制到当前作品")).toBeDefined();
+    expect(screen.getByRole("dialog", { name: "复制到其他作品" })).toBeDefined();
+  });
+
+  it("explains when the account has no other work", async () => {
+    renderCanvas({ workId: "w-only", works: [{ id: "w-only", title: "只有这部" }] });
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+    openVolumeMenu();
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+
+    expect(screen.getByText("还没有其他作品。先在左上角创建一部作品，再把节点复制过去。")).toBeDefined();
+  });
+
+  it("copies a side-panel character by itself", async () => {
+    copyNodeToWork.mockResolvedValue({ nodes: [], edges: [], omitted_character_refs: [] });
+    renderCanvas();
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "林舟" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+
+    expect(screen.getByRole("dialog", { name: "复制到其他作品" }).textContent).toContain(
+      "「林舟」会复制到所选作品，并作为独立结构放在那里。",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "另一部小说" }));
+    await waitFor(() => expect(copyNodeToWork).toHaveBeenCalledWith("hero", "w-other"));
+    expect(screen.getByText("已复制到「另一部小说」。")).toBeDefined();
+  });
+
+  it.each([
+    ["写作要求", "note", "「写作要求」会复制到所选作品，并作为独立结构放在那里。"],
+    ["灵气体系", "world", "「灵气体系」会复制到所选作品，并作为独立结构放在那里。"],
+  ])("右键「%s」后复制到其他作品", async (label, nodeId, description) => {
+    copyNodeToWork.mockResolvedValue({ nodes: [], edges: [], omitted_character_refs: [] });
+    renderCanvas();
+    await waitFor(() => expect(mocks.lastReactFlowProps).not.toBeNull());
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: label }));
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+
+    expect(screen.getByRole("dialog", { name: "复制到其他作品" }).textContent).toContain(description);
+    fireEvent.click(screen.getByRole("button", { name: "另一部小说" }));
+    await waitFor(() => expect(copyNodeToWork).toHaveBeenCalledWith(nodeId, "w-other"));
   });
 });

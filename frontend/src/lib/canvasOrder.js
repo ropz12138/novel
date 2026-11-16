@@ -28,10 +28,6 @@ export function compareSiblings(a, b) {
   return 0;
 }
 
-export function sortSiblings(nodes) {
-  return [...nodes].sort(compareSiblings);
-}
-
 /**
  * 用户手动新增节点时的 sort_order：排在同类型节点末尾。
  *

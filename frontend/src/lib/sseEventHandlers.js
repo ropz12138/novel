@@ -5,6 +5,7 @@ export function normalizeTodoItem(item = {}) {
     task: item.task || "",
     owner: item.owner || "supervisor",
     status: item.status || "pending",
+    waiting_for_decision: Boolean(item.waiting_for_decision),
     parent_id: item.parent_id || "",
     depth: Number(item.depth || 0),
     agent_scope: item.agent_scope || "",

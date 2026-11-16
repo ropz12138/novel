@@ -1,4 +1,5 @@
 """确定性章节字数统计工具。"""
+import database
 import json
 from typing import Optional
 
@@ -7,10 +8,6 @@ from pydantic import BaseModel, Field
 
 
 
-def _get_db():
-    from database import SessionLocal
-
-    return SessionLocal()
 
 
 def _get_current_work_id():
@@ -47,7 +44,7 @@ async def _count_chapter_words_coroutine(
         chapter_body_word_count,
     )
 
-    db = _get_db()
+    db = database.open_db()
     try:
         effective_work_id = work_id or _get_current_work_id()
         if not effective_work_id:

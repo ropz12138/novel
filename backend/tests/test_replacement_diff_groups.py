@@ -1,15 +1,18 @@
 """局部编辑以工具提交的替换项为分组，保留完整文本及字符位置。"""
-import pytest
-
 from services.chapter_edit_service import build_replacement_diff
 from services.agent_diff_groups import apply_groups, compose_groups
+
+
+def _span(content, old, new):
+    start = content.index(old)
+    return {"start": start, "end": start + len(old), "new": new}
 
 
 def test_inserted_dialogue_and_edited_tail_remain_one_agent_group():
     original = "前文。\n\n孙教授说。\n\n陆沉没有立即答应。\n\n后文。"
     old = "孙教授说。\n\n陆沉没有立即答应。"
     new = "孙教授说。\n\n新增对白一。\n\n新增对白二。\n\n陆沉没有接话。"
-    result = build_replacement_diff(original, [{"old": old, "new": new}])
+    result = build_replacement_diff(original, [_span(original, old, new)])
     assert result["grouping"] == "agent_replacements"
     assert result["hunks"] == [{
         "type": "replace", "paragraph_index": 2,
@@ -17,36 +20,41 @@ def test_inserted_dialogue_and_edited_tail_remain_one_agent_group():
     }]
 
 
-def test_each_submitted_item_is_a_group_in_execution_order():
-    result = build_replacement_diff("😀甲旧，乙旧。", [
-        {"old": "乙旧", "new": "乙新"},
-        {"old": "甲旧", "new": "甲新且更长"},
+def test_groups_are_ordered_by_original_position_with_stepwise_offsets():
+    content = "😀甲旧，乙旧。"
+    result = build_replacement_diff(content, [
+        _span(content, "乙旧", "乙新"),
+        _span(content, "甲旧", "甲新且更长"),
     ])
-    assert [h["old_text"] for h in result["hunks"]] == ["乙旧", "甲旧"]
-    assert [h["start_offset"] for h in result["hunks"]] == [4, 1]
+    assert [hunk["old_text"] for hunk in result["hunks"]] == ["甲旧", "乙旧"]
+    assert result["hunks"][0]["start_offset"] == 1
+    assert result["hunks"][1]["start_offset"] == 4 + len("甲新且更长") - len("甲旧")
 
 
 def test_deletion_preserves_exact_newlines():
-    result = build_replacement_diff("甲。\n\n乙。\n\n丙。", [{"old": "乙。\n\n", "new": ""}])
+    content = "甲。\n\n乙。\n\n丙。"
+    result = build_replacement_diff(content, [_span(content, "乙。\n\n", "")])
     assert result["hunks"][0]["old_text"] == "乙。\n\n"
     assert result["hunks"][0]["type"] == "delete"
 
 
-@pytest.mark.parametrize("old", ["不存在", "重复"])
-def test_invalid_old_is_rejected(old):
-    with pytest.raises(ValueError):
-        build_replacement_diff("重复重复", [{"old": old, "new": "新"}])
+def test_duplicate_text_uses_the_given_span_without_searching():
+    content = "重复重复"
+    result = build_replacement_diff(content, [{"start": 2, "end": 4, "new": "新"}])
+    assert result["hunks"][0]["old_text"] == "重复"
+    assert result["hunks"][0]["start_offset"] == 2
 
 
 def test_composition_keeps_disjoint_agent_groups_and_merges_exact_overlap():
     baseline = "甲旧。\n\n乙旧。"
-    first = build_replacement_diff(baseline, [{"old": "甲旧", "new": "甲新"}])
+    first = build_replacement_diff(baseline, [_span(baseline, "甲旧", "甲新")])
     groups = compose_groups(baseline, [], first["hunks"])
     current = apply_groups(baseline, groups)
-    second = build_replacement_diff(current, [{"old": "乙旧", "new": "乙新"}])
+    second = build_replacement_diff(current, [_span(current, "乙旧", "乙新")])
     groups = compose_groups(baseline, groups, second["hunks"])
     assert [(g["old_text"], g["new_text"]) for g in groups] == [("甲旧", "甲新"), ("乙旧", "乙新")]
-    third = build_replacement_diff(apply_groups(baseline, groups), [{"old": "甲新", "new": "甲再改"}])
+    revised = apply_groups(baseline, groups)
+    third = build_replacement_diff(revised, [_span(revised, "甲新", "甲再改")])
     groups = compose_groups(baseline, groups, third["hunks"])
     assert [(g["old_text"], g["new_text"]) for g in groups] == [("甲旧", "甲再改"), ("乙旧", "乙新")]
     assert apply_groups(baseline, groups) == "甲再改。\n\n乙新。"
@@ -54,9 +62,10 @@ def test_composition_keeps_disjoint_agent_groups_and_merges_exact_overlap():
 
 def test_composition_preserves_multiline_group_and_partial_change_inside_it():
     baseline = "前文。\n\nA\n\nB\n\n后文。"
-    first = build_replacement_diff(baseline, [{"old": "A\n\nB", "new": "X\n\nA′\n\nB′"}])
+    first = build_replacement_diff(baseline, [_span(baseline, "A\n\nB", "X\n\nA′\n\nB′")])
     groups = compose_groups(baseline, [], first["hunks"])
-    second = build_replacement_diff(apply_groups(baseline, groups), [{"old": "B′", "new": "B″"}])
+    current = apply_groups(baseline, groups)
+    second = build_replacement_diff(current, [_span(current, "B′", "B″")])
     groups = compose_groups(baseline, groups, second["hunks"])
     assert len(groups) == 1
     assert groups[0]["old_text"] == "A\n\nB"

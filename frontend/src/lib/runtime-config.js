@@ -1,6 +1,6 @@
 import { Capacitor } from "@capacitor/core";
 
-const DEV_API_BASE = "http://127.0.0.1:9001/api";
+const DEV_API_BASE = "/novel/api";
 const PROD_API_BASE = "/novel/api";
 
 export const APP_CONFIG = __NOVEL_APP_CONFIG__;

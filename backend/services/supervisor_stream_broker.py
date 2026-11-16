@@ -15,6 +15,7 @@ class _StoredEvent:
     end_seq: int
     event: str
     data: dict
+    chunk_ends: tuple[int, ...] = ()
 
 
 @dataclass
@@ -65,12 +66,19 @@ class SupervisorStreamBroker:
             stream.sealed.extend(stream.pending)
         else:
             data = dict(first.data)
-            data["chunk"] = "".join(str(item.data.get("chunk") or "") for item in stream.pending)
+            chunks = [str(item.data.get("chunk") or "") for item in stream.pending]
+            data["chunk"] = "".join(chunks)
+            offset = 0
+            chunk_ends = []
+            for chunk in chunks:
+                offset += len(chunk)
+                chunk_ends.append(offset)
             stream.sealed.append(_StoredEvent(
                 start_seq=first.start_seq,
                 end_seq=stream.pending[-1].end_seq,
                 event=first.event,
                 data=data,
+                chunk_ends=tuple(chunk_ends),
             ))
         stream.pending.clear()
 
@@ -126,7 +134,13 @@ class SupervisorStreamBroker:
 
         for stored in stream.sealed:
             if stored.end_seq > after_seq:
-                queue.put_nowait((stored.end_seq, stored.event, dict(stored.data)))
+                data = dict(stored.data)
+                if stored.start_seq <= after_seq:
+                    # Keep per-event character offsets so a cursor inside a batch
+                    # can resume without replaying its acknowledged prefix.
+                    offset = stored.chunk_ends[after_seq - stored.start_seq]
+                    data["chunk"] = data["chunk"][offset:]
+                queue.put_nowait((stored.end_seq, stored.event, data))
         pending = [item for item in stream.pending if item.end_seq > after_seq]
         if pending:
             first = pending[0]

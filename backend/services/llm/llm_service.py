@@ -5,10 +5,12 @@
 from __future__ import annotations
 
 import copy
+import base64
 import json
 import logging
 import time
 from abc import ABC, abstractmethod
+from contextlib import aclosing
 from collections.abc import AsyncIterator, Callable, Mapping, Sequence
 from typing import Any
 
@@ -35,6 +37,22 @@ LLM_USER_ERROR_MESSAGE = "AI额度不足，请稍后再试"
 
 class LLMUserFacingError(RuntimeError):
     pass
+
+
+def _user_facing_error(exc: Exception) -> LLMUserFacingError:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        try:
+            error = exc.response.json().get('error', {})
+        except (ValueError, httpx.ResponseNotRead):
+            error = {}
+        if status == 402 or (isinstance(error, dict) and error.get('code') in {'insufficient_quota', 'quota_exceeded'}):
+            return LLMUserFacingError(LLM_USER_ERROR_MESSAGE)
+        if status == 429:
+            return LLMUserFacingError('AI服务请求过于频繁，请稍后再试')
+        if status >= 500:
+            return LLMUserFacingError('AI服务繁忙或暂时不可用，请稍后再试')
+    return LLMUserFacingError('AI服务请求失败，请稍后再试')
 
 
 def resolve_openai_tool_choice(tool_choice):
@@ -76,6 +94,21 @@ class LLMProtocolClient(ABC):
     def __init__(self, config: LLMModelConfig) -> None:
         self.config = config
 
+    def _extra_headers(self) -> dict[str, str]:
+        """在请求时解析会话占位符，避免共享模型实例串用其他会话标识。"""
+        headers = dict(self.config.extra_headers)
+        if "{session_id}" in headers.values():
+            from services.agents.supervisor import get_context
+
+            session_id = get_context().get("session_id")
+            if not session_id:
+                raise ValueError("模型请求头中的 {session_id} 需要当前会话提供 session_id")
+            headers = {
+                name: str(session_id) if value == "{session_id}" else value
+                for name, value in headers.items()
+            }
+        return headers
+
     @abstractmethod
     async def stream_chat(
         self,
@@ -104,6 +137,10 @@ class LLMProtocolClient(ABC):
     def _normalize_messages(messages: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         return [dict(message) for message in messages]
 
+    def complete_response(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> dict[str, Any]:
+        """返回完整多模态响应；由支持该能力的协议实现。"""
+        raise NotImplementedError("当前协议不支持完整多模态响应")
+
     @staticmethod
     def _join_url(base_url: str, path: str) -> str:
         return f"{base_url.rstrip('/')}/{path.lstrip('/')}"
@@ -121,6 +158,7 @@ def _finalize_openai_pending(pending: dict[int, dict[str, Any]]) -> list[ToolStr
         events.append(
             ToolStreamEvent(
                 kind="tool_call",
+                index=slot.get("index", idx),
                 tool_call=ToolCallFinished(
                     tool_name=slot["name"] or "",
                     call_id=slot["id"] or "",
@@ -167,6 +205,7 @@ class OpenAILLMClient(LLMProtocolClient):
         return {
             "Authorization": f"Bearer {self.config.api_key}",
             "Content-Type": "application/json",
+            **self._extra_headers(),
         }
 
     def _handle_complete_response(self, response: httpx.Response, payload: dict[str, Any], raw_log: LLMRawLog, retry_post):
@@ -189,6 +228,13 @@ class OpenAILLMClient(LLMProtocolClient):
         return body
 
     def complete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
+        body = self.complete_response(
+            messages, temperature=temperature, timeout_seconds=timeout_seconds,
+            response_format_json=response_format_json, client=client,
+        )
+        return extract_openai_text(body)
+
+    def complete_response(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> dict[str, Any]:
         payload = self._openai_complete_payload(messages, temperature=temperature, response_format_json=response_format_json)
         url = self._join_url(self.config.base_url, "/chat/completions")
         owns = client is None
@@ -220,7 +266,7 @@ class OpenAILLMClient(LLMProtocolClient):
             body.get("usage"),
             request_duration_ms=round((request_finished_at - request_started_at) * 1000),
         )
-        return extract_openai_text(body)
+        return body
 
     async def stream_chat(
         self,
@@ -282,6 +328,11 @@ class OpenAILLMClient(LLMProtocolClient):
                     choice = choices[0]
                     delta = choice.get("delta", {})
                     finish_reason = choice.get("finish_reason") or delta.get("finish_reason")
+                    audio = delta.get("audio")
+                    if audio and audio.get("data"):
+                        if first_output_at is None:
+                            first_output_at = _monotonic()
+                        yield ToolStreamEvent(kind="audio", audio=base64.b64decode(audio["data"], validate=True))
                     text = delta.get("content")
                     if text:
                         if first_output_at is None:
@@ -297,7 +348,7 @@ class OpenAILLMClient(LLMProtocolClient):
                         first_output_at = _monotonic()
                     for tc in tool_call_deltas:
                         idx = tc.get("index", 0)
-                        slot = pending.setdefault(idx, {"id": None, "name": None, "arguments_parts": []})
+                        slot = pending.setdefault(idx, {"id": None, "name": None, "arguments_parts": [], "index": idx})
                         if tc.get("id"):
                             slot["id"] = tc["id"]
                         fn = tc.get("function", {})
@@ -305,6 +356,15 @@ class OpenAILLMClient(LLMProtocolClient):
                             slot["name"] = fn["name"]
                         if fn.get("arguments"):
                             slot["arguments_parts"].append(fn["arguments"])
+                            yield ToolStreamEvent(
+                                kind="tool_call_delta",
+                                text=fn["arguments"],
+                                index=idx,
+                                tool_call=ToolCallFinished(
+                                    tool_name=slot["name"] or "",
+                                    call_id=slot["id"] or "",
+                                ),
+                            )
                     if finish_reason == "tool_calls":
                         for event in _finalize_openai_pending(pending):
                             yield event
@@ -430,7 +490,7 @@ class AnthropicLLMClient(LLMProtocolClient):
         return system, anthropic_messages
 
     @staticmethod
-    def _finalize_tool_use(slot: dict[str, Any]) -> ToolStreamEvent:
+    def _finalize_tool_use(slot: dict[str, Any], index: int | None = None) -> ToolStreamEvent:
         arguments_raw = "".join(slot["input_parts"])
         try:
             arguments = json.loads(arguments_raw) if arguments_raw else {}
@@ -440,6 +500,7 @@ class AnthropicLLMClient(LLMProtocolClient):
             arguments = {"value": arguments}
         return ToolStreamEvent(
             kind="tool_call",
+            index=index,
             tool_call=ToolCallFinished(
                 tool_name=slot["name"] or "",
                 call_id=slot["id"] or "",
@@ -452,6 +513,7 @@ class AnthropicLLMClient(LLMProtocolClient):
             "x-api-key": self.config.api_key,
             "anthropic-version": "2023-06-01",
             "Content-Type": "application/json",
+            **self._extra_headers(),
         }
 
     def _anthropic_complete_payload(self, messages, *, temperature: float) -> dict[str, Any]:
@@ -533,20 +595,30 @@ class AnthropicLLMClient(LLMProtocolClient):
                         if delta_type == "text_delta" and delta.get("text"):
                             yield ToolStreamEvent(kind="text", text=delta["text"])
                         elif delta_type == "input_json_delta":
-                            slot = pending.get(int(event.get("index", 0)))
+                            idx = int(event.get("index", 0))
+                            slot = pending.get(idx)
                             if slot is not None and delta.get("partial_json"):
                                 slot["input_parts"].append(delta["partial_json"])
+                                yield ToolStreamEvent(
+                                    kind="tool_call_delta",
+                                    text=delta["partial_json"],
+                                    index=idx,
+                                    tool_call=ToolCallFinished(
+                                        tool_name=slot["name"] or "",
+                                        call_id=slot["id"] or "",
+                                    ),
+                                )
                         elif delta_type == "thinking_delta" and delta.get("thinking"):
                             yield ToolStreamEvent(kind="thinking", text=delta["thinking"])
                         continue
                     if event_type == "content_block_stop":
                         slot = pending.pop(int(event.get("index", 0)), None)
                         if slot is not None:
-                            yield self._finalize_tool_use(slot)
+                            yield self._finalize_tool_use(slot, int(event.get("index", 0)))
                         continue
                     if event_type == "message_stop":
                         for idx in sorted(list(pending.keys())):
-                            yield self._finalize_tool_use(pending.pop(idx))
+                            yield self._finalize_tool_use(pending.pop(idx), idx)
             raw_log.finish()
         except Exception as exc:
             raw_log.fail(exc)
@@ -580,6 +652,20 @@ class BaseLLMProvider(LLMProtocolClient):
             _create_protocol_client(fallback_config) if fallback_config is not None else None
         )
 
+    def complete_response(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> dict[str, Any]:
+        """完整多模态响应沿用协议层请求、日志与用量统计，失败直接上报。"""
+        return self.client.complete_response(
+            messages, temperature=temperature, timeout_seconds=timeout_seconds,
+            response_format_json=response_format_json, client=client,
+        )
+
+    async def stream_audio(self, messages, *, client=None) -> AsyncIterator[bytes]:
+        """逐块返回音频；消费者结束时立即关闭协议流，不切换其他模型。"""
+        async with aclosing(self.client.stream_chat(messages, client=client)) as events:
+            async for event in events:
+                if event.kind == "audio":
+                    yield event.audio
+
     async def _stream_and_log_thinking(self, protocol, model_name, messages, **kwargs):
         parts: list[str] = []
 
@@ -610,7 +696,7 @@ class BaseLLMProvider(LLMProtocolClient):
         except Exception as exc:
             if self.fallback_client is None:
                 logger.error("LLM 流式调用最终失败", exc_info=True)
-                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from exc
+                raise _user_facing_error(exc) from exc
             logger.warning(
                 "主模型 %s 流式对话失败，切换 fallback %s: %s",
                 self.config.name,
@@ -623,7 +709,7 @@ class BaseLLMProvider(LLMProtocolClient):
                     yield event
             except Exception as fallback_exc:
                 logger.error("LLM 主备模型流式调用均失败", exc_info=True)
-                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from fallback_exc
+                raise _user_facing_error(fallback_exc) from fallback_exc
 
     def complete(self, messages, *, temperature=0.2, timeout_seconds=120, response_format_json=False, client=None) -> str:
         kwargs = dict(temperature=temperature, timeout_seconds=timeout_seconds, response_format_json=response_format_json, client=client)
@@ -632,13 +718,13 @@ class BaseLLMProvider(LLMProtocolClient):
         except Exception as exc:
             if self.fallback_client is None:
                 logger.error("LLM complete 调用最终失败", exc_info=True)
-                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from exc
+                raise _user_facing_error(exc) from exc
             logger.warning("主模型 %s complete 失败，切换 fallback %s: %s", self.config.name, self.fallback_config.name if self.fallback_config else "fallback", exc)
             try:
                 return self.fallback_client.complete(messages, **kwargs)
             except Exception as fallback_exc:
                 logger.error("LLM 主备模型 complete 调用均失败", exc_info=True)
-                raise LLMUserFacingError(LLM_USER_ERROR_MESSAGE) from fallback_exc
+                raise _user_facing_error(fallback_exc) from fallback_exc
 
 
 def create_provider(config: LLMModelConfig, fallback_config: LLMModelConfig | None = None) -> BaseLLMProvider:

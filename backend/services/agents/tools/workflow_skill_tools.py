@@ -1,6 +1,8 @@
 """创作技能、完整参考规则与文本工作记录；规则读取工具不调用模型。"""
 from __future__ import annotations
 
+import database
+
 import hashlib
 import json
 from pathlib import Path
@@ -10,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 from models.chapter import Chapter
 from models.node import Node
 from models.work import CanvasWork
+from services.agent_paragraphs import content_reading_view, notes_reading_view
 
 SKILLS_ROOT = Path(__file__).resolve().parents[1] / "skills"
 REFERENCE_ROOT = SKILLS_ROOT / "references"
@@ -23,9 +26,9 @@ WORKFLOW_SKILLS = {
     "write-chapter": ("scene_plan.txt", "chapter_writer.txt", "chapter_length_advice.txt",
                       "chapter_revision_decision.txt", "chapter_local_edit.txt", "chapter_replan.txt",
                       "chapter_rewrite.txt", "summary.txt"),
-    "revise-chapter": ("existing_chapter_revision.txt", "chapter_revision_decision.txt",
+    "revise-chapter": ("chapter_writer.txt", "existing_chapter_revision.txt", "chapter_revision_decision.txt",
                        "chapter_local_edit.txt", "chapter_rewrite.txt", "revision.txt"),
-    "humanize-fiction": ("fiction_humanizer.txt", "humanizer_agent.txt"),
+    "humanize-fiction": ("chapter_writer.txt", "fiction_humanizer.txt", "humanizer_agent.txt"),
     "evaluate-fiction": (),  # 评审规则由独立 Reviewer 按视角加载；旧参考文件保留。
     "maintain-story-memory": ("summary.txt", "story_memory.txt"),
     "apply-research": ("research_application.txt",),
@@ -41,9 +44,6 @@ def _context():
     return get_context()
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 class LoadSkillInput(BaseModel):
@@ -67,13 +67,13 @@ async def _read_skill_reference(skill_name, reference_name, reason=None):
     if reference_name not in WORKFLOW_SKILLS.get(skill_name, ()):
         return _json(success=False, error="参考文件未在该技能中注册")
     return _json(success=True, skill_name=skill_name, reference_name=reference_name,
-                 usage="将完整参考规则作为当前阶段的质量标准。Supervisor 负责规划、评审决策和记忆，阅读评审通过 run_review_agent，正文通过 run_writing_agent 委派 Writer 独立生成并保存；章节笔记通过 save_chapter_notes 保存，最终回复通过 respond_to_user。",
+                 usage="将完整参考规则作为当前阶段的质量标准。Supervisor 负责规划、正文创作与修订、评审决策和记忆，阅读评审通过 run_review_agent，章节正文通过 update_node 保存；章节笔记通过 save_chapter_notes 保存，最终回复通过 respond_to_user。",
                  content=(REFERENCE_ROOT / reference_name).read_text(encoding="utf-8"))
 
 
 class SaveChapterNotesInput(BaseModel):
     chapter_node_id: str
-    notes: str = Field(description="完整章节笔记：事实摘要、作者要求、创作设计、连续性数据；合并已有条目后整体保存")
+    notes: str = Field(description="完整章节笔记：用简明条目表达关键事实、完整有效作者要求、可续写的创作设计和有用连续性数据；保留条件、关键因果及必要来源，同义条目合并后整体保存")
     expected_content_sha256: str = Field(description="read_node_content 返回的 content_sha256")
     expected_notes_sha256: str | None = Field(default=None, description="read_chapter_notes 返回的 notes_sha256；已有笔记时用于防止并发覆盖")
     reason: str | None = None
@@ -91,7 +91,7 @@ async def _save_chapter_notes(chapter_node_id, notes, expected_content_sha256, e
     work_id = _context().get("work_id")
     if not work_id:
         return _json(success=False, error="当前会话未绑定作品")
-    with _get_db() as db:
+    with database.open_db() as db:
         work = db.query(CanvasWork).filter_by(id=work_id).with_for_update().first()
         if work is None:
             return _json(success=False, error="作品不存在")
@@ -141,7 +141,7 @@ load_workflow_skill = StructuredTool.from_function(coroutine=_load_workflow_skil
 read_skill_reference = StructuredTool.from_function(coroutine=_read_skill_reference, name="read_skill_reference", args_schema=ReadReferenceInput,
     description="按技能和文件名完整读取一个阶段的参考规则。规则由 Supervisor 在当前对话中执行。")
 save_chapter_notes = StructuredTool.from_function(coroutine=_save_chapter_notes, name="save_chapter_notes", args_schema=SaveChapterNotesInput,
-    description="保存完整章节笔记。笔记包含事实摘要、作者要求、创作设计和连续性数据。正文编辑使用 run_writing_agent。")
+    description="保存完整章节笔记。事实摘要、作者要求、创作设计和连续性数据按用途简明记录，保留全部有效要求、关键因果及续写所需状态，有内容的类别才展开。章节正文使用 update_node。")
 workflow_skill_tools = [load_workflow_skill, read_skill_reference, save_chapter_notes]
 
 
@@ -184,7 +184,7 @@ async def _list_chapters(offset=0, limit=20, reason=None):
     work_id = _context().get("work_id")
     if not work_id:
         return _json(success=False, error="当前会话未绑定作品")
-    with _get_db() as db:
+    with database.open_db() as db:
         chapters, revision, issues = _catalog(db, work_id)
         rows = chapters[offset:offset + limit]
         records = {row.node_id: row for row in db.query(Chapter).filter(Chapter.node_id.in_([n.id for n in rows])).all()} if rows else {}
@@ -213,14 +213,13 @@ async def _read_chapter_context(chapter_numbers, catalog_revision, reason=None):
     work_id = _context().get("work_id")
     if not work_id:
         return _json(success=False, error="当前会话未绑定作品")
-    with _get_db() as db:
+    with database.open_db() as db:
         selected, error = _select_chapters(db, work_id, chapter_numbers, catalog_revision)
         if error:
             return error
         return _json(success=True, catalog_revision=catalog_revision, chapters=[{
             "chapter_number": number, "chapter_node_id": node.id, "title": node.title,
-            "content": node.content or "",
-            "content_sha256": hashlib.sha256((node.content or "").encode("utf-8")).hexdigest(),
+            **content_reading_view(node.content or ""),
         } for number, node in selected])
 
 
@@ -228,7 +227,7 @@ async def _read_chapter_notes(chapter_numbers, catalog_revision, reason=None):
     work_id = _context().get("work_id")
     if not work_id:
         return _json(success=False, error="当前会话未绑定作品")
-    with _get_db() as db:
+    with database.open_db() as db:
         selected, error = _select_chapters(db, work_id, chapter_numbers, catalog_revision)
         if error:
             return error
@@ -237,8 +236,8 @@ async def _read_chapter_notes(chapter_numbers, catalog_revision, reason=None):
         for number, node in selected:
             notes = records.get(node.id).notes if records.get(node.id) else ""
             result.append({"chapter_number": number, "chapter_node_id": node.id, "title": node.title,
-                           "notes": notes or "", "has_notes": bool(notes),
-                           "notes_sha256": hashlib.sha256((notes or "").encode("utf-8")).hexdigest(),
+                           "has_notes": bool(notes),
+                           **notes_reading_view(notes or ""),
                            "content_sha256": hashlib.sha256((node.content or "").encode("utf-8")).hexdigest()})
         return _json(success=True, catalog_revision=catalog_revision, chapters=result)
 

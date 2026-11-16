@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom";
 import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft, Users, Gauge } from "lucide-react";
 import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
+import TtsConfigDialog from "../components/TtsConfigDialog";
 import AgentChat from "../components/AgentChat";
 import AppUpdateButton from "../components/AppUpdateButton";
 import AppFloatingComposer from "../components/AppFloatingComposer";
@@ -72,9 +73,22 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   const workSelectorRef = useRef(null);
   const userMenuRef = useRef(null);
   const [showModelConfig, setShowModelConfig] = useState(false);
+  const [showTtsConfig, setShowTtsConfig] = useState(false);
   const isAdmin = window.localStorage.getItem("novel_role") === "admin";
   const [nodeContentDiffs, setNodeContentDiffs] = useState({});
   const [nodeNotesDiffs, setNodeNotesDiffs] = useState({});
+  const activeDiffWorkRef = useRef(null);
+  const diffRequestsRef = useRef({ content: 0, notes: 0 });
+  useLayoutEffect(() => {
+    activeDiffWorkRef.current = currentWorkId;
+    setNodeContentDiffs({});
+    setNodeNotesDiffs({});
+    return () => {
+      activeDiffWorkRef.current = null;
+      diffRequestsRef.current.content += 1;
+      diffRequestsRef.current.notes += 1;
+    };
+  }, [currentWorkId]);
   const [agentRunning, setAgentRunning] = useState(false);
   const insertPillFnRef = useRef(null);
   const pendingContextRef = useRef(null);
@@ -182,8 +196,10 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   }, []);
 
   const handleNodeNotesDiffsReset = useCallback(() => {
-    if (!currentWorkId) return;
+    if (!currentWorkId || activeDiffWorkRef.current !== currentWorkId) return;
+    const request = ++diffRequestsRef.current.notes;
     return fetchNotesDiffs(currentWorkId).then((rows) => {
+      if (activeDiffWorkRef.current !== currentWorkId || request !== diffRequestsRef.current.notes) return;
       const restored = {};
       for (const row of rows) {
         const hunks = buildContentDiffFromContents(row.original_notes, row.current_notes);
@@ -200,8 +216,10 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   }, [currentWorkId]);
 
   const handleNodeContentDiffsReset = useCallback(() => {
-    if (!currentWorkId) return;
+    if (!currentWorkId || activeDiffWorkRef.current !== currentWorkId) return;
+    const request = ++diffRequestsRef.current.content;
     return fetchContentDiffs(currentWorkId).then((rows) => {
+      if (activeDiffWorkRef.current !== currentWorkId || request !== diffRequestsRef.current.content) return;
       const restored = {};
       for (const row of rows) {
         if (row.hunks?.length) restored[row.node_id] = accumulateNodeContentDiff(null, row);
@@ -409,8 +427,8 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
           {!appMode && (
             <>
               <div className="flex items-center gap-2">
-                <span className="text-xl">📚</span>
-                <span className="text-base font-semibold text-slate-800">文灵</span>
+                <span className="flex h-7 w-7 items-center justify-center rounded-md bg-[#c2402a] text-xs font-semibold text-white">灵</span>
+                <span className="text-[17px] font-semibold tracking-wide text-slate-900" style={{ fontFamily: '"Noto Serif SC","Songti SC",serif' }}>文灵</span>
               </div>
               <div className="h-4 w-px bg-slate-200" />
             </>
@@ -420,10 +438,11 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
           <div className="relative" ref={workSelectorRef}>
             <button
               onClick={() => setShowWorkSelector(!showWorkSelector)}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm rounded-lg hover:bg-gray-100 transition-colors"
+              className="flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 hover:bg-gray-100 transition-colors"
+              style={{ fontFamily: '"Noto Serif SC","Songti SC",serif' }}
             >
-              <span className="text-gray-500">作品:</span>
-              <span className="font-medium text-gray-800">
+              <span className="sr-only">作品:</span>
+              <span className="text-base font-semibold text-slate-900">
                 {currentWork ? currentWork.title : "请选择作品"}
               </span>
               <svg
@@ -466,7 +485,6 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                         }`}
                       >
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-gray-400">📄</span>
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-gray-800 truncate">
                               {work.title}
@@ -498,7 +516,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
         <div className="flex items-center gap-2">
           {isAdmin && <button
             onClick={() => navigate("/token-usage")}
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 transition-colors hover:bg-indigo-100"
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-600 transition-colors hover:bg-slate-100"
             aria-label="Token 用量"
           >
             <Gauge className="h-4 w-4" />
@@ -506,7 +524,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
           </button>}
           <button
             onClick={() => navigate("/research")}
-            className="flex items-center gap-1.5 rounded-lg bg-indigo-50 px-3 py-1.5 text-sm text-indigo-700 transition-colors hover:bg-indigo-100"
+            className="flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-slate-600 transition-colors hover:bg-slate-100"
           >
             <BookOpen className="h-4 w-4" />
             <span>小说研究</span>
@@ -530,6 +548,13 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                 >
                   <Settings className="h-4 w-4" />
                   模型配置
+                </button>}
+                {isAdmin && <button
+                  onClick={() => { setShowUserMenu(false); setShowTtsConfig(true); }}
+                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 hover:bg-gray-50 transition-colors"
+                >
+                  <Settings className="h-4 w-4" />
+                  朗读设置
                 </button>}
                 {appMode && (
                   <AppUpdateButton
@@ -590,6 +615,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                 key={currentWorkId}
                 ref={canvasRef}
                 workId={currentWorkId}
+                works={works}
                 onAddContext={handleAddContext}
                 onNodeEdited={handleNodeEdited}
                 nodeContentDiffs={nodeContentDiffs}
@@ -702,6 +728,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
         open={showModelConfig}
         onClose={() => setShowModelConfig(false)}
       />
+      {isAdmin && <TtsConfigDialog open={showTtsConfig} onClose={() => setShowTtsConfig(false)} />}
     </div>
   );
 }

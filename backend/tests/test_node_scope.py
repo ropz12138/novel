@@ -53,14 +53,15 @@ def test_validate_scope_rejects_unknown():
 def test_default_scope_for_type():
     assert node_types.default_scope_for_type("worldbuilding") == "global"
     assert node_types.default_scope_for_type("note") == "global"
+    assert node_types.default_scope_for_type("reviewer_note") == "global"
     for t in ("outline", "volume", "plot", "chapter"):
         assert node_types.default_scope_for_type(t) == "local"
     # character 默认 minor（次要配角）
     assert node_types.default_scope_for_type("character") == "minor"
 
 
-def test_global_locked_types_only_worldbuilding_and_note():
-    assert set(node_types.GLOBAL_LOCKED_TYPES) == {"worldbuilding", "note"}
+def test_global_locked_types_include_reviewer_note():
+    assert set(node_types.GLOBAL_LOCKED_TYPES) == {"worldbuilding", "note", "reviewer_note"}
 
 
 def test_local_locked_types_are_hierarchy_chain():

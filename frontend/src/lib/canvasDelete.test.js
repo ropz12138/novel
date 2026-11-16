@@ -28,7 +28,7 @@ describe("canvasDelete", () => {
     expect(ids).toEqual(["n1"]);
   });
 
-  it("filters nodes, edges, and character relations after removal", () => {
+  it("filters nodes and edges after removal", () => {
     const result = filterGraphAfterNodeRemoval(
       ["n1"],
       [{ id: "n1" }, { id: "n2" }],
@@ -36,11 +36,9 @@ describe("canvasDelete", () => {
         { id: "e1", source: "n1", target: "n2" },
         { id: "e2", source: "n2", target: "n3" },
       ],
-      [{ id: "r1", source: "n1", target: "n2" }],
     );
 
     expect(result.nodes.map((n) => n.id)).toEqual(["n2"]);
     expect(result.edges.map((e) => e.id)).toEqual(["e2"]);
-    expect(result.characterRelations).toEqual([]);
   });
 });

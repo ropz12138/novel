@@ -1,6 +1,8 @@
 """独立、可暂停恢复的长篇小说研究 Agent。"""
 from __future__ import annotations
 
+import database
+
 import asyncio
 import json
 import logging
@@ -35,9 +37,6 @@ PROMPT_PATH = (
 )
 
 
-def _get_db():
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _research_agent_state_path(job_id: str) -> Path:
@@ -65,7 +64,7 @@ def _load_research_agent_messages(job_id: str) -> list:
 
 def _build_research_initial_messages(job_id: str) -> tuple[list, list[str]]:
     """构造一次性的稳定任务说明；运行事件不再反复拼入提示词。"""
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         if not job:
@@ -93,7 +92,7 @@ def _build_research_initial_messages(job_id: str) -> tuple[list, list[str]]:
 
 
 def _pending_research_instruction(job_id: str) -> tuple[HumanMessage | None, list[str]]:
-    db = _get_db()
+    db = database.open_db()
     try:
         rows = db.query(ResearchInstruction).filter(
             ResearchInstruction.job_id == job_id,
@@ -517,7 +516,7 @@ def add_research_event(
     content: str = "",
     meta: dict | None = None,
 ) -> ResearchEvent:
-    db = _get_db()
+    db = database.open_db()
     try:
         row = ResearchEvent(
             id=str(uuid.uuid4()),
@@ -536,7 +535,7 @@ def add_research_event(
 
 
 def add_research_instruction(job_id: str, content: str) -> ResearchInstruction:
-    db = _get_db()
+    db = database.open_db()
     try:
         row = ResearchInstruction(
             id=str(uuid.uuid4()),
@@ -565,7 +564,7 @@ def _save_artifact(
     content: str,
     metadata_text: str = "",
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         row = ResearchArtifact(
             id=str(uuid.uuid4()),
@@ -599,7 +598,7 @@ def _list_artifacts(
     keyword: str | None = None,
     limit: int = 100,
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         query = db.query(ResearchArtifact).filter(ResearchArtifact.job_id == job_id)
         if artifact_type:
@@ -630,7 +629,7 @@ def _list_artifacts(
 
 
 def _read_artifacts(job_id: str, artifact_ids: list[str]) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         rows = db.query(ResearchArtifact).filter(
             ResearchArtifact.job_id == job_id,
@@ -653,7 +652,7 @@ def _read_artifacts(job_id: str, artifact_ids: list[str]) -> dict:
 
 
 def _update_working_memory(job_id: str, content: str) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         if not job:
@@ -673,7 +672,7 @@ def _update_progress(
     unit: str = "步骤",
     detail: str = "",
 ) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         if not job:
@@ -701,7 +700,7 @@ def _update_progress(
 
 
 def _complete_research(job_id: str, summary: str) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         final_count = db.query(ResearchArtifact).filter(
@@ -895,7 +894,7 @@ def build_research_tools(job_id: str) -> list[StructuredTool]:
 def _mark_instructions_consumed(ids: list[str]) -> None:
     if not ids:
         return
-    db = _get_db()
+    db = database.open_db()
     try:
         db.query(ResearchInstruction).filter(
             ResearchInstruction.id.in_(ids)
@@ -906,7 +905,7 @@ def _mark_instructions_consumed(ids: list[str]) -> None:
 
 
 def _job_model_pref(job_id: str) -> dict:
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         user = db.query(User).filter(User.id == job.user_id).first() if job else None
@@ -919,7 +918,7 @@ def _job_model_pref(job_id: str) -> dict:
 
 
 def _set_job_status(job_id: str, status: str, stage: str | None = None, error: str = ""):
-    db = _get_db()
+    db = database.open_db()
     try:
         job = db.query(ResearchJob).filter(ResearchJob.id == job_id).first()
         if not job:
@@ -934,7 +933,7 @@ def _set_job_status(job_id: str, status: str, stage: str | None = None, error: s
 
 
 def _get_job_status(job_id: str) -> str | None:
-    db = _get_db()
+    db = database.open_db()
     try:
         row = db.query(ResearchJob.status).filter(ResearchJob.id == job_id).first()
         return row[0] if row else None
@@ -973,7 +972,7 @@ class ResearchAgentManager:
                 pass
 
     def recover_running(self) -> None:
-        db = _get_db()
+        db = database.open_db()
         try:
             ids = [
                 row[0]

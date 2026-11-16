@@ -363,3 +363,26 @@ describe("CustomNode 长按", () => {
     expect(onNodeLongPress).not.toHaveBeenCalled();
   });
 });
+
+describe("CustomNode markdown preview", () => {
+  it("renders markdown preview instead of raw markers", () => {
+    render(
+      <CustomNode
+        id="outline-md"
+        data={{
+          type: "outline",
+          label: "主线",
+          content: "# 标题\n\n这是 **加粗** 预览",
+          extra_data: {},
+        }}
+      />,
+    );
+
+    expect(screen.getByTestId("node-preview-markdown")).toBeDefined();
+    expect(screen.getByText("标题")).toBeDefined();
+    expect(screen.getByText("加粗")).toBeDefined();
+    expect(screen.queryByText("# 标题")).toBeNull();
+    expect(screen.queryByText(/\*\*加粗\*\*/)).toBeNull();
+  });
+});
+

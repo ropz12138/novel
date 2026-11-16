@@ -1,36 +1,64 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
+import { IS_NATIVE_APP } from "../lib/runtime-config";
+import { subscribeAppBack } from "../lib/appBackNavigation";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ArrowLeft, BookOpen, Bot, Download, FileText, LoaderCircle, MessageSquarePlus, Plus, Send, Upload, UserRound, X } from "lucide-react";
+import { ArrowLeft, BookOpen, Bot, Check, ChevronLeft, ChevronRight, Download, FileText, LoaderCircle, MessageSquare, Plus, Quote, Send, Upload, X } from "lucide-react";
 import { researchApi } from "../lib/researchApi";
 import { authFetch } from "../lib/authFetch";
 import { remarkHtmlBreaks } from "../lib/markdown";
+import "./ResearchPage.css";
+
+const COVER_TONES = ["a", "b", "c"];
+
+function coverGlyph(name) {
+  return String(name || "书").replace(/\.txt$/i, "").slice(0, 1) || "书";
+}
+
+function versionLabel(version) {
+  return version.kind === "raw" ? "原始版" : `整理版 v${version.version_number}`;
+}
+
+function cardExcerpt(content) {
+  const text = String(content || "").replace(/\s+/g, " ").trim();
+  if (text.length <= 48) return "";
+  return `${text.slice(0, 72)}…`;
+}
 
 function Message({ message }) {
   const mine = message.role === "user";
-  return (
-    <div className={`flex items-start gap-3 ${mine ? "justify-end" : ""}`}>
-      {!mine && <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-100 text-indigo-600"><Bot className="h-4 w-4" /></div>}
-      <div className={`max-w-[78%] ${mine ? "rounded-2xl rounded-tr-md bg-indigo-600 text-white" : "rounded-2xl rounded-tl-md border border-slate-200 bg-white text-slate-700"} px-4 py-3 shadow-sm`}>
-        {message.referenced_works?.map((work) => (
-          <div key={work.id} className={`mb-2 flex items-center gap-1.5 text-xs ${mine ? "text-indigo-100" : "text-indigo-500"}`}>
-            <BookOpen className="h-3.5 w-3.5" />引用《{work.filename}》
-          </div>
-        ))}
-        {message.chapter_reference && <div className={`mb-2 flex items-center gap-1.5 text-xs ${mine ? "text-indigo-100" : "text-indigo-500"}`}>
-          <FileText className="h-3.5 w-3.5" />引用章节：{message.chapter_reference.heading}
-        </div>}
-        <div className="prose prose-slate max-w-none text-sm leading-6 text-inherit">
-          <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{message.content}</ReactMarkdown>
+  const body = (
+    <>
+      {message.referenced_works?.map((work) => (
+        <div key={work.id} className={`mb-2 flex items-center gap-1.5 text-xs ${mine ? "text-blue-100" : "text-blue-600"}`}>
+          <BookOpen className="h-3.5 w-3.5" />引用《{work.filename}》
         </div>
+      ))}
+      {message.chapter_reference && <div className={`mb-2 flex items-center gap-1.5 text-xs ${mine ? "text-blue-100" : "text-blue-600"}`}>
+        <FileText className="h-3.5 w-3.5" />引用章节：{message.chapter_reference.heading}
+      </div>}
+      <div className={`prose max-w-none text-sm leading-7 ${mine ? "prose-invert text-inherit" : "prose-slate text-slate-800"}`}>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{message.content}</ReactMarkdown>
       </div>
-      {mine && <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-200 text-slate-600"><UserRound className="h-4 w-4" /></div>}
+    </>
+  );
+  if (!mine) {
+    return (
+      <div className="rs-answer">
+        <div className="rs-who"><span><Bot className="h-3.5 w-3.5" /></span>研究助手</div>
+        {body}
+      </div>
+    );
+  }
+  return (
+    <div className="flex justify-end">
+      <div className="rs-user max-w-[86%] rounded-2xl rounded-br-md bg-blue-600 px-3.5 py-2.5 text-white">{body}</div>
     </div>
   );
 }
 
-export function ResearchPage() {
+export function ResearchPage({ appMode = IS_NATIVE_APP }) {
   const navigate = useNavigate();
   const inputRef = useRef(null);
   const [works, setWorks] = useState([]);
@@ -39,7 +67,9 @@ export function ResearchPage() {
   const [libraryWorks, setLibraryWorks] = useState([]);
   const [versions, setVersions] = useState([]);
   const [selectedArtifactId, setSelectedArtifactId] = useState(null);
-  const [panelTab, setPanelTab] = useState("artifacts");
+  const [panelTab, setPanelTab] = useState("chapters");
+  const [versionPick, setVersionPick] = useState(null);
+  const [readOpen, setReadOpen] = useState(true);
   const [chapterVersionId, setChapterVersionId] = useState(null);
   const [chapters, setChapters] = useState([]);
   const [selectedChapterIndex, setSelectedChapterIndex] = useState(null);
@@ -53,6 +83,27 @@ export function ResearchPage() {
   const [sending, setSending] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (!appMode) return undefined;
+    let disposed = false;
+    let unsubscribe;
+    const handleBack = () => {
+      if (selectedChapterIndex !== null) {
+        setSelectedChapterIndex(null);
+        return;
+      }
+      navigate("/");
+    };
+    subscribeAppBack(handleBack).then((remove) => {
+      if (disposed) remove();
+      else unsubscribe = remove;
+    });
+    return () => {
+      disposed = true;
+      unsubscribe?.();
+    };
+  }, [appMode, navigate, selectedChapterIndex]);
 
   const loadWorks = useCallback(async () => {
     const result = await researchApi.listWorks();
@@ -102,6 +153,7 @@ export function ResearchPage() {
       setVersions(rows);
       const indexed = [...rows].reverse().find((version) => version.kind === "cleaned" && version.has_index);
       setChapterVersionId(indexed?.id || null);
+      setVersionPick(rows.find((version) => version.active)?.id || rows[0]?.id || null);
       setSelectedArtifactId(null);
     }).catch((err) => setError(err.message));
   }, [selectedWorkId]);
@@ -179,6 +231,27 @@ export function ResearchPage() {
     }
   };
 
+  const shelfWorks = [...works];
+  libraryWorks.forEach((work) => {
+    if (!shelfWorks.some((item) => item.id === work.id)) shelfWorks.push(work);
+  });
+  const openLibrary = libraryWorks.find((work) => work.id === selectedWorkId) || null;
+  const techniqueCards = (openLibrary?.artifacts || []).filter((artifact) => artifact.artifact_type === "technique_card");
+  const reportCards = (openLibrary?.artifacts || []).filter((artifact) => artifact.artifact_type !== "technique_card");
+  const pickedVersion = versions.find((version) => version.id === versionPick) || null;
+  const openName = shelfWorks.find((work) => work.id === selectedWorkId)?.original_filename || "";
+  const chapterLines = chapterDetail ? chapterDetail.content.split(/\n+/).map((line) => line.trim()).filter(Boolean) : [];
+  const chapterParagraphs = chapterLines[0] === chapterDetail?.heading ? chapterLines.slice(1) : chapterLines;
+  const chooseVersion = (id) => {
+    setVersionPick(id);
+    const version = versions.find((item) => item.id === id);
+    if (version?.kind === "cleaned" && version.has_index) setChapterVersionId(id);
+  };
+  const stepChapter = (delta) => {
+    const index = chapters.findIndex((chapter) => chapter.section_index === selectedChapterIndex);
+    const next = chapters[index + delta];
+    if (next) setSelectedChapterIndex(next.section_index);
+  };
   const referencedWork = works.find((work) => work.id === referencedWorkId);
   const selectedArtifact = libraryWorks
     .flatMap((work) => work.artifacts || [])
@@ -201,136 +274,140 @@ export function ResearchPage() {
   };
 
   return (
-    <div className="relative flex h-screen flex-col bg-slate-50"
+    <div className={`rs-app${readOpen ? "" : " rs-focus"}${appMode ? " is-native" : ""}`} data-reading={selectedChapterIndex === null ? "0" : "1"}
       onDragEnter={(event) => { event.preventDefault(); setDragging(true); }}
       onDragOver={(event) => event.preventDefault()}
       onDragLeave={(event) => { if (event.currentTarget === event.target) setDragging(false); }}
       onDrop={(event) => { event.preventDefault(); setDragging(false); uploadFile(event.dataTransfer.files?.[0]); }}>
-      {dragging && <div className="pointer-events-none absolute inset-0 z-50 flex items-center justify-center bg-indigo-950/40"><div className="rounded-3xl border-2 border-dashed border-white bg-indigo-600 px-16 py-14 text-2xl font-semibold text-white">松开鼠标，上传作品</div></div>}
-
-      <header className="flex h-14 shrink-0 items-center justify-between border-b border-slate-200 bg-white px-5">
-        <div className="flex items-center gap-3">
-          <button onClick={() => navigate("/")} title="返回创作画布" className="rounded-lg p-2 text-slate-500 hover:bg-slate-100"><ArrowLeft className="h-4 w-4" /></button>
-          <BookOpen className="h-5 w-5 text-indigo-600" />
-          <h1 className="font-semibold text-slate-800">小说研究</h1>
+      {dragging && <div className="rs-dropmask"><div>松开鼠标，上传作品</div></div>}
+      <input className="rs-pane" id="rs-chat" name="rs-pane" type="radio" defaultChecked />
+      <input className="rs-pane" id="rs-shelf" name="rs-pane" type="radio" />
+      <header className="rs-top">
+        <button type="button" className="rs-icon" aria-label="返回创作画布" onClick={() => navigate("/")}><ArrowLeft size={18} /></button>
+        <div className="rs-crumb"><small>文灵 /</small><h1>小说研究</h1></div>
+        <span className="rs-sp" />
+        <div className="rs-switch" aria-label="研究页面">
+          <label htmlFor="rs-chat">对话</label>
+          <label htmlFor="rs-shelf">书架</label>
         </div>
-        <button aria-label="新建对话" onClick={createConversation} className="flex items-center gap-2 rounded-lg bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-700"><Plus className="h-4 w-4" />新建对话</button>
+        <button type="button" className="rs-btn rs-upload" onClick={() => inputRef.current?.click()} disabled={uploading}>{uploading ? <LoaderCircle size={15} className="animate-spin" /> : <Upload size={15} />}上传作品</button>
+        <button type="button" className="rs-btn rs-pri rs-create" onClick={createConversation}><Plus size={15} />新建对话</button>
       </header>
-      {error && <div className="border-b border-red-100 bg-red-50 px-5 py-2 text-sm text-red-700">{error}</div>}
-
-      <main className="flex min-h-0 flex-1">
-        <aside className="flex w-72 shrink-0 flex-col border-r border-slate-200 bg-white">
-          <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3">
-            <h2 className="text-sm font-semibold text-slate-700">作品库</h2>
-            <button onClick={() => inputRef.current?.click()} disabled={uploading} className="rounded-lg p-2 text-indigo-600 hover:bg-indigo-50" title="上传作品">
-              {uploading ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />}
-            </button>
-            <input ref={inputRef} className="hidden" type="file" accept=".txt,text/plain" onChange={(event) => { uploadFile(event.target.files?.[0]); event.target.value = ""; }} />
+      {error && <div className="rs-error">{error}</div>}
+      <div className="rs-body">
+        <aside className="rs-side">
+          <h5>{`书架 · ${shelfWorks.length}`}<button type="button" className="rs-mini" aria-label="上传到书架" onClick={() => inputRef.current?.click()}>{uploading ? <LoaderCircle size={14} className="animate-spin" /> : <Upload size={14} />}</button></h5>
+          <div className="rs-books">
+            {shelfWorks.map((work, index) => {
+              const count = libraryWorks.find((item) => item.id === work.id)?.artifacts?.length || 0;
+              return (
+                <div key={work.id} className={`rs-book${selectedWorkId === work.id ? " is-on" : ""}`}>
+                  <button type="button" className="rs-book-main" onClick={() => { setSelectedWorkId(work.id); setReadOpen(true); }}>
+                    <i className={`rs-cover ${COVER_TONES[index % COVER_TONES.length]}`}>{coverGlyph(work.original_filename)}</i>
+                    <span className="rs-book-name"><b>{work.original_filename}</b><small>{count ? `${count} 项产出` : "暂无产出"}</small></span>
+                  </button>
+                  <button type="button" className="rs-cite" aria-label={`引用 ${work.original_filename}`} aria-pressed={referencedWorkId === work.id} onClick={() => setReferencedWorkId(work.id)}>{referencedWorkId === work.id ? <><Check size={12} />已引用</> : "引用"}</button>
+                </div>
+              );
+            })}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto p-3">
-            {works.length ? works.map((work) => (
-              <button key={work.id} onClick={() => { setSelectedWorkId(work.id); setReferencedWorkId((current) => current === work.id ? null : work.id); }}
-                className={`mb-2 flex w-full items-center gap-3 rounded-xl border p-3 text-left ${selectedWorkId === work.id ? "border-indigo-300 bg-indigo-50" : "border-slate-200 hover:border-indigo-200"}`}>
-                <FileText className="h-5 w-5 shrink-0 text-indigo-500" />
-                <div className="min-w-0"><div className="truncate text-sm font-medium text-slate-700">{work.original_filename}</div><div className="mt-1 text-[11px] text-slate-400">点击后在下一条消息中引用</div></div>
-              </button>
-            )) : <button onClick={() => inputRef.current?.click()} className="w-full rounded-xl border border-dashed border-slate-300 px-4 py-8 text-sm text-slate-500">上传小说 TXT</button>}
+          <button type="button" className="rs-drop" onClick={() => inputRef.current?.click()}><Upload size={14} />把 TXT 拖进页面即可上传</button>
+          <input ref={inputRef} className="rs-file" type="file" accept=".txt,text/plain" onChange={(event) => { uploadFile(event.target.files?.[0]); event.target.value = ""; }} />
+          <h5>{`对话 · ${sessions.length}`}<button type="button" className="rs-mini" aria-label="添加对话" onClick={createConversation}><Plus size={14} /></button></h5>
+          <div className="rs-convs">
+            {sessions.map((item) => (
+              <button type="button" key={item.id} className={`rs-conv${item.id === sessionId ? " is-on" : ""}`} onClick={() => { setSessionId(item.id); setReferencedWorkId(null); }}><MessageSquare size={14} aria-hidden="true" />{item.title}</button>
+            ))}
           </div>
         </aside>
 
-        <section className="flex min-w-0 flex-1 flex-col">
-          <div className="flex items-center gap-3 border-b border-slate-200 bg-white px-5 py-3">
-            <MessageSquarePlus className="h-4 w-4 text-indigo-500" />
-            <select aria-label="切换对话" value={sessionId} onChange={(event) => { setSessionId(event.target.value); setReferencedWorkId(null); }} className="max-w-md flex-1 rounded-lg border border-slate-200 px-3 py-2 text-sm text-slate-700">
-              {sessions.map((item) => <option key={item.id} value={item.id}>{item.title}</option>)}
-            </select>
+        <section className="rs-chat">
+          <div className="rs-chat-h">{session?.title || "研究对话"}</div>
+          <div className="rs-thread">
+            {session?.messages?.length ? <div className="rs-col">{session.messages.map((message) => <Message key={message.id} message={message} />)}{sending && <div className="rs-wait"><LoaderCircle size={16} className="animate-spin" />正在阅读并分析……</div>}</div> : <div className="rs-empty-chat"><Bot size={36} /><h2>开始一个独立研究对话</h2><p>先在书架里打开一本书，需要引用时再点「引用」。</p></div>}
           </div>
-
-          <div className="min-h-0 flex-1 overflow-y-auto p-6">
-            {session?.messages?.length ? <div className="mx-auto max-w-4xl space-y-5">{session.messages.map((message) => <Message key={message.id} message={message} />)}{sending && <div className="flex items-center gap-2 text-sm text-indigo-500"><LoaderCircle className="h-4 w-4 animate-spin" />正在阅读并分析……</div>}</div> : <div className="flex h-full items-center justify-center text-center"><div><Bot className="mx-auto mb-4 h-10 w-10 text-indigo-300" /><h2 className="font-semibold text-slate-700">开始一个独立研究对话</h2><p className="mt-2 text-sm text-slate-500">可以直接提问，也可以先点击左侧作品进行引用。</p></div></div>}
-          </div>
-
-          <div className="border-t border-slate-200 bg-white p-4">
-            <div className="mx-auto max-w-4xl">
-            {referencedWork && <div className="mb-2 inline-flex items-center gap-2 rounded-lg bg-indigo-50 px-3 py-1.5 text-xs text-indigo-700"><BookOpen className="h-3.5 w-3.5" />引用《{referencedWork.original_filename}》<button onClick={() => setReferencedWorkId(null)} title="取消引用"><X className="h-3.5 w-3.5" /></button></div>}
-              {chapterReference && <div className="mb-2 ml-2 inline-flex items-center gap-2 rounded-lg bg-violet-50 px-3 py-1.5 text-xs text-violet-700"><FileText className="h-3.5 w-3.5" />引用章节：{chapterReference.heading}<button onClick={() => setChapterReference(null)} title="取消章节引用"><X className="h-3.5 w-3.5" /></button></div>}
-              <div className="flex items-end gap-2 rounded-2xl border border-slate-200 bg-white p-2 shadow-sm focus-within:border-indigo-300">
-                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} rows={2} placeholder="输入研究问题……" className="min-h-[52px] flex-1 resize-none border-0 px-3 py-2 text-sm outline-none" />
-                <button aria-label="发送" onClick={sendMessage} disabled={!draft.trim() || sending || !sessionId} className="flex h-10 w-10 items-center justify-center rounded-xl bg-indigo-600 text-white disabled:opacity-40">{sending ? <LoaderCircle className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}</button>
+          <div className="rs-foot">
+            <div className="rs-composer">
+              {(referencedWork || chapterReference) && <div className="rs-refs">
+                {referencedWork && <span className="rs-rc"><BookOpen size={13} />{referencedWork.original_filename}<button type="button" aria-label="取消引用" onClick={() => setReferencedWorkId(null)}><X size={12} /></button></span>}
+                {chapterReference && <span className="rs-rc rs-rc-ch"><FileText size={13} />{chapterReference.heading}<button type="button" aria-label="取消章节引用" onClick={() => setChapterReference(null)}><X size={12} /></button></span>}
+              </div>}
+              <div className="rs-row">
+                <textarea value={draft} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); sendMessage(); } }} rows={2} placeholder={session?.messages?.length ? "继续追问，或换一章来问…" : "输入研究问题……"} />
+                <button type="button" className="rs-send" aria-label="发送" onClick={sendMessage} disabled={!draft.trim() || sending || !sessionId}>{sending ? <LoaderCircle size={16} className="animate-spin" /> : <Send size={16} />}</button>
               </div>
             </div>
           </div>
         </section>
 
-        <aside className="flex w-[400px] shrink-0 flex-col border-l border-slate-200 bg-white">
-          <div className="border-b border-slate-100 px-4 py-3">
-            <div className="flex gap-1 rounded-lg bg-slate-100 p-1">
-              <button aria-label="研究产出" onClick={() => setPanelTab("artifacts")} className={`flex-1 rounded-md px-2 py-1.5 text-xs ${panelTab === "artifacts" ? "bg-white font-semibold text-indigo-600 shadow-sm" : "text-slate-500"}`}>研究产出</button>
-              <button aria-label="章节阅读" onClick={() => setPanelTab("chapters")} className={`flex-1 rounded-md px-2 py-1.5 text-xs ${panelTab === "chapters" ? "bg-white font-semibold text-indigo-600 shadow-sm" : "text-slate-500"}`}>章节阅读</button>
-            </div>
-            {versions.length > 0 && <div className="mt-3 flex flex-wrap gap-1.5">
-              {versions.map((version) => <button key={version.id} onClick={() => downloadVersion(version)}
-                className="flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] text-slate-500 hover:border-indigo-200 hover:text-indigo-600">
-                <Download className="h-3 w-3" />
-                {version.kind === "raw" ? "原始版" : `整理版 v${version.version_number}`}
-                {version.active && <span className="text-indigo-500">当前</span>}
-              </button>)}
-            </div>}
+        <aside className="rs-read">
+          <div className="rs-rd-h">
+            <button type="button" className="rs-read-back" onClick={() => setSelectedChapterIndex(null)}><ArrowLeft size={16} />目录</button>
+            {openName && <i className="rs-cover a rs-cover-sm">{coverGlyph(openName)}</i>}
+            <b>{openName || "选择一本书"}</b>
+            <span className="rs-sp" />
+            {versions.length > 0 && <span className="rs-verwrap"><select className="rs-ver" aria-label="版本" value={versionPick || ""} onChange={(event) => chooseVersion(event.target.value)}>{versions.map((version) => <option key={version.id} value={version.id}>{versionLabel(version)}</option>)}</select>{pickedVersion?.active && <span className="rs-now">当前</span>}</span>}
+            <button type="button" className="rs-icon" aria-label="下载当前版本" disabled={!pickedVersion} onClick={() => downloadVersion(pickedVersion)}><Download size={16} /></button>
+            {selectedWorkId && <button type="button" className="rs-cite" aria-pressed={referencedWorkId === selectedWorkId} onClick={() => setReferencedWorkId(selectedWorkId)}>{referencedWorkId === selectedWorkId ? "已引用" : "引用"}</button>}
+            <button type="button" className="rs-icon" aria-label="关闭阅读" onClick={() => setReadOpen(false)}><X size={16} /></button>
           </div>
-          {panelTab === "artifacts" ? <div className="grid min-h-0 flex-1 grid-rows-[minmax(160px,38%)_1fr]">
-            <div className="overflow-y-auto border-b border-slate-100 p-2">
-              {libraryWorks.length ? libraryWorks.map((work) => (
-                <section key={work.id} className="mb-3 overflow-hidden rounded-xl border border-slate-200">
-                  <button onClick={() => setSelectedWorkId(work.id)} className="flex w-full items-center gap-2 bg-slate-50 px-3 py-2 text-left">
-                    <BookOpen className="h-3.5 w-3.5 text-indigo-500" />
-                    <span className="min-w-0 flex-1 truncate text-xs font-semibold text-slate-700">{work.original_filename}</span>
-                    <span className="text-[10px] text-slate-400">{work.artifacts?.length || 0}</span>
-                  </button>
-                  <div className="p-1.5">
-                    {work.artifacts?.length ? work.artifacts.map((artifact) => (
-                      <button key={artifact.id} onClick={() => { setSelectedWorkId(work.id); setSelectedArtifactId(artifact.id); }}
-                        className={`mb-1 w-full rounded-lg px-3 py-2 text-left ${selectedArtifactId === artifact.id ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"}`}>
-                        <div className="text-[10px] uppercase tracking-wide opacity-60">{artifact.artifact_type === "technique_card" ? "技法卡" : "研究报告"}</div>
-                        <div className="mt-1 text-xs font-medium leading-5">{artifact.title}</div>
-                      </button>
-                    )) : <div className="px-3 py-4 text-center text-xs text-slate-400">暂无产出</div>}
-                  </div>
-                </section>
-              )) : <div className="px-4 py-10 text-center text-xs leading-5 text-slate-400">还没有上传作品</div>}
-            </div>
-            <article className="min-h-0 overflow-y-auto p-5">
-              {selectedArtifact ? <>
-                <h3 className="mb-4 border-b border-slate-100 pb-3 font-semibold text-slate-800">{selectedArtifact.title}</h3>
-                <div className="prose prose-slate max-w-none text-sm leading-7"><ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{selectedArtifact.content}</ReactMarkdown></div>
-              </> : <div className="flex h-full items-center justify-center text-sm text-slate-400">选择一项产出查看正文</div>}
-            </article>
-          </div> : <div className="flex min-h-0 flex-1 flex-col">
-            <div className="border-b border-slate-100 p-3">
-              <select aria-label="整理版本" value={chapterVersionId || ""} onChange={(event) => setChapterVersionId(event.target.value || null)} className="w-full rounded-lg border border-slate-200 px-3 py-2 text-xs">
-                <option value="">选择已建立索引的整理版本</option>
-                {versions.filter((version) => version.kind === "cleaned" && version.has_index).map((version) => <option key={version.id} value={version.id}>整理版 v{version.version_number}</option>)}
-              </select>
-            </div>
-            <div className="grid min-h-0 flex-1 grid-cols-[140px_1fr]">
-              <div className="overflow-y-auto border-r border-slate-100 p-2">
-                {chapters.length ? chapters.map((chapter) => <button key={chapter.section_index} onClick={() => setSelectedChapterIndex(chapter.section_index)} className={`mb-1 w-full rounded-lg px-2 py-2 text-left text-xs ${selectedChapterIndex === chapter.section_index ? "bg-indigo-50 text-indigo-700" : "text-slate-600 hover:bg-slate-50"}`}>{chapter.heading}</button>) : <div className="px-2 py-6 text-center text-xs text-slate-400">该整理版本尚无章节索引</div>}
+          <div className="rs-tabs">
+            <button type="button" aria-label="章节阅读" className={panelTab === "chapters" ? "is-on" : ""} onClick={() => setPanelTab("chapters")}>章节{chapters.length > 0 && <b>{chapters.length}</b>}</button>
+            <button type="button" aria-label="研究产出" className={panelTab === "artifacts" ? "is-on" : ""} onClick={() => setPanelTab("artifacts")}>技法卡{techniqueCards.length > 0 && <b>{techniqueCards.length}</b>}</button>
+            <button type="button" className={panelTab === "reports" ? "is-on" : ""} onClick={() => setPanelTab("reports")}>研究报告{reportCards.length > 0 && <b>{reportCards.length}</b>}</button>
+          </div>
+          <div className="rs-pane-body">
+            <div className={panelTab === "chapters" ? "rs-ch" : "rs-ch rs-off"}>
+              <div className="rs-toc">
+                {chapters.length ? chapters.map((chapter) => <button type="button" key={chapter.section_index} className={selectedChapterIndex === chapter.section_index ? "is-on" : ""} onClick={() => setSelectedChapterIndex(chapter.section_index)}>{chapter.heading}</button>) : <div className="rs-empty">该整理版本尚无章节索引</div>}
               </div>
-              <article className="min-h-0 overflow-y-auto p-4">
+              <div className="rs-sheet">
                 {chapterDetail ? <>
-                  <div className="mb-3 flex items-center justify-between gap-2 border-b border-slate-100 pb-3">
-                    <h3 className="text-sm font-semibold text-slate-800">{chapterDetail.heading}</h3>
-                    <button aria-label="引用本章" onClick={() => {
+                  <div className="rs-sheet-body">
+                    <h3>{chapterDetail.heading}</h3>
+                    <div className="rs-meta">{openName}{pickedVersion ? ` · ${versionLabel(pickedVersion)}` : ""}</div>
+                    {chapterParagraphs.map((paragraph, index) => <p key={index}>{paragraph}</p>)}
+                  </div>
+                  <div className="rs-bar">
+                    <button type="button" className="rs-pbtn" aria-label="引用本章" onClick={() => {
                       setReferencedWorkId(selectedWorkId);
                       setChapterReference({ versionId: chapterVersionId, sectionIndex: chapterDetail.section_index, heading: chapterDetail.heading });
-                    }} className="shrink-0 rounded-lg bg-violet-50 px-2 py-1 text-xs text-violet-700 hover:bg-violet-100">引用本章</button>
+                    }}><Quote size={14} />引用本章到对话</button>
+                    <span className="rs-sp" />
+                    <button type="button" className="rs-pbtn rs-line" onClick={() => stepChapter(-1)} disabled={chapters[0]?.section_index === selectedChapterIndex}><ChevronLeft size={14} />上一章</button>
+                    <button type="button" className="rs-pbtn rs-line" onClick={() => stepChapter(1)} disabled={chapters.at(-1)?.section_index === selectedChapterIndex}>下一章<ChevronRight size={14} /></button>
                   </div>
-                  <div className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{chapterDetail.content}</div>
-                </> : <div className="flex h-full items-center justify-center text-xs text-slate-400">选择章节查看完整正文</div>}
-              </article>
+                </> : <div className="rs-empty">选择章节查看完整正文</div>}
+              </div>
             </div>
-          </div>}
+            <div className={panelTab === "artifacts" ? "rs-cards" : "rs-cards rs-off"}>
+              {selectedArtifact?.artifact_type === "technique_card" && <article className="rs-doc"><h3>{selectedArtifact.title}</h3><div className="rs-md"><ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{selectedArtifact.content}</ReactMarkdown></div></article>}
+              {techniqueCards.length ? techniqueCards.map((artifact, index) => {
+                const excerpt = cardExcerpt(artifact.content);
+                return (
+                <button type="button" key={artifact.id} className={`rs-tcard${selectedArtifactId === artifact.id ? " is-on" : ""}`} onClick={() => { setSelectedArtifactId(artifact.id); setPanelTab("artifacts"); }}>
+                  <small>{`技法卡 · ${String(index + 1).padStart(2, "0")}`}</small>
+                  <h4>{artifact.title}</h4>
+                  {excerpt && <p>{excerpt}</p>}
+                </button>
+                );
+              }) : <div className="rs-empty">还没有技法卡</div>}
+            </div>
+            <div className={panelTab === "reports" ? "rs-reps" : "rs-reps rs-off"}>
+              {selectedArtifact && selectedArtifact.artifact_type !== "technique_card" && <article className="rs-doc"><h3>{selectedArtifact.title}</h3><div className="rs-md"><ReactMarkdown remarkPlugins={[remarkGfm, remarkHtmlBreaks]}>{selectedArtifact.content}</ReactMarkdown></div></article>}
+              {reportCards.length ? reportCards.map((artifact) => {
+                const excerpt = cardExcerpt(artifact.content);
+                return (
+                <button type="button" key={artifact.id} className={`rs-rep${selectedArtifactId === artifact.id ? " is-on" : ""}`} onClick={() => { setSelectedArtifactId(artifact.id); setPanelTab("reports"); }}>
+                  <FileText size={16} />
+                  <span><h4>{artifact.title}</h4>{excerpt && <p>{excerpt}</p>}</span>
+                </button>
+                );
+              }) : <div className="rs-empty">还没有研究报告</div>}
+            </div>
+          </div>
         </aside>
-      </main>
+      </div>
     </div>
   );
 }

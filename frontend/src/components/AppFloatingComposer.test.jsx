@@ -27,7 +27,7 @@ describe("AppFloatingComposer", () => {
   beforeEach(() => {
     vi.stubGlobal("PointerEvent", MouseEvent);
   });
-  it("uses a capsule bar and opens sessions from the minus button", () => {
+  it("uses a capsule bar and opens sessions from the history button", () => {
     const onNewSession = vi.fn();
     const onSelectSession = vi.fn();
     const onSend = vi.fn();
@@ -98,7 +98,7 @@ describe("AppFloatingComposer", () => {
       />,
     );
 
-    expect(screen.getByText("等待发送：已经排队的任务")).toBeDefined();
+    expect(screen.getByText("等待插入：已经排队的任务")).toBeDefined();
 
     const input = screen.getByRole("textbox", { name: "快捷创作指令" });
     fireEvent.change(input, { target: { value: "下一条任务" } });
@@ -217,7 +217,7 @@ describe("AppFloatingComposer", () => {
     expect(screen.getByTestId("app-floating-composer-bar").contains(agent)).toBe(false);
   });
 
-  it("keeps chapter review intensity above the input so the text row stays wide", () => {
+  it("keeps chapter review intensity above the input row", () => {
     const onIntensityChange = vi.fn();
     render(
       <AppFloatingComposer
@@ -231,9 +231,12 @@ describe("AppFloatingComposer", () => {
     );
 
     const slider = screen.getByRole("slider", { name: "快捷评审强度" });
+    const input = screen.getByRole("textbox", { name: "快捷创作指令" });
     const bar = screen.getByTestId("app-floating-composer-bar");
     expect(bar.contains(slider)).toBe(false);
-    expect(slider.compareDocumentPosition(bar) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByTestId("app-floating-composer").contains(slider)).toBe(true);
+    expect(screen.getByText("评审")).toBeTruthy();
+    expect(slider.compareDocumentPosition(input) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     expect(slider.getAttribute("aria-valuetext")).toBe("low");
 
     vi.spyOn(slider, "getBoundingClientRect").mockReturnValue({

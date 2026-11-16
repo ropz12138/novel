@@ -20,8 +20,9 @@ describe("orderedNavigationNodes", () => {
       { id: "note", data: { type: "note", sort_order: 1 } },
       { id: "character", data: { type: "character", sort_order: 1 } },
       { id: "world", data: { type: "worldbuilding", sort_order: 1 } },
+      { id: "review", data: { type: "reviewer_note", sort_order: 1 } },
     ];
-    expect(orderedNavigationNodes(nodes).map((node) => node.id)).toEqual(["character", "world", "note"]);
+    expect(orderedNavigationNodes(nodes).map((node) => node.id)).toEqual(["character", "world", "note", "review"]);
   });
 });
 

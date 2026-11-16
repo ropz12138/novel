@@ -12,7 +12,7 @@ describe("AuthIllustrationImage helpers", () => {
 
   it("resolves relative illustration URL against API base", () => {
     expect(resolveIllustrationFetchUrl("/api/illustrations/id-1")).toBe(
-      "http://127.0.0.1:9001/api/illustrations/id-1",
+      "/novel/api/illustrations/id-1",
     );
   });
 });

@@ -8,8 +8,11 @@ import { sessionApi } from "../lib/api";
 const mocks = vi.hoisted(() => ({
   handleSend: vi.fn(),
   handleStop: vi.fn(),
+  handleSelectSession: vi.fn(),
   running: false,
   timeline: [],
+  stickToBottom: true,
+  scrollToBottom: vi.fn(),
 }));
 
 vi.mock("../hooks/useSupervisorChat", () => ({
@@ -22,7 +25,7 @@ vi.mock("../hooks/useSupervisorChat", () => ({
     assistantReasoningDraft: "",
     handleSend: mocks.handleSend,
     handleStop: mocks.handleStop,
-    handleSelectSession: vi.fn(),
+    handleSelectSession: mocks.handleSelectSession,
     resetState: vi.fn(),
     toggleStepPanel: vi.fn(),
     handleEditResend: vi.fn(),
@@ -30,7 +33,7 @@ vi.mock("../hooks/useSupervisorChat", () => ({
 }));
 
 vi.mock("../hooks/useSmartScroll", () => ({
-  useSmartScroll: () => ({ stickToBottom: true, scrollToBottom: vi.fn() }),
+  useSmartScroll: () => ({ stickToBottom: mocks.stickToBottom, scrollToBottom: mocks.scrollToBottom }),
 }));
 
 vi.mock("../lib/canvasApi", () => ({
@@ -50,6 +53,15 @@ vi.mock("../lib/keyboardInset", () => ({
 }));
 
 describe("AgentChat context quote", () => {
+  it("keeps a new conversation when the initial session list arrives late", async () => {
+    let resolveList;
+    sessionApi.listSupervisor.mockReturnValueOnce(new Promise((resolve) => { resolveList = resolve; }));
+    render(<AgentChat workId="work-late" />);
+    fireEvent.click(screen.getByTitle("新建对话"));
+    await act(async () => { resolveList([{ id: "old-session", title: "旧对话" }]); });
+    expect(mocks.handleSelectSession).not.toHaveBeenCalled();
+  });
+
   it("shows persisted context usage in the desktop session list", async () => {
     sessionApi.listSupervisor.mockResolvedValueOnce([
       { id: "s1", title: "第一章", context_input_tokens: 12345 },
@@ -61,6 +73,27 @@ describe("AgentChat context quote", () => {
     expect(await screen.findByText("【12,345】 tokens")).toBeDefined();
     expect(screen.getAllByText("【0】 tokens").length).toBeGreaterThan(0);
   });
+  it("shows tasks only in the current task panel without a conversation bubble", () => {
+    mocks.timeline = [{ id: "plan-source", kind: "message", role: "assistant", type: "requirements_todolist", todoCard: {
+      intent_summary: "设计章节", ready_to_execute: true, todolist: [{ task_id: "T1", task: "场景规划", status: "pending" }],
+    } }];
+    const { container } = render(<AgentChat workId="work-1" />);
+    const panel = screen.getByRole("region", { name: "当前任务" });
+    const message = container.querySelector('[data-message-id="plan-source"]');
+    expect(message).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: /设计章节.*已完成/ }));
+    expect(panel.contains(screen.getByText("场景规划"))).toBe(true);
+    expect(screen.getAllByText("需求任务清单")).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "定位任务消息" })).toBeNull();
+  });
+  it("uses a white mobile chat surface so the assistant bubble stays visible", () => {
+    mocks.timeline = [{ kind: "message", id: 1, role: "assistant", content: "第三章初稿已写完" }];
+    const { container } = render(<AgentChat workId="work-1" appMode />);
+    expect(container.firstElementChild.className).toContain("bg-white");
+    expect(container.firstElementChild.className).not.toContain("bg-[#f3f5f8]");
+    expect(screen.getByTestId("assistant-message-bubble").className).toContain("bg-[#f1f4f8]");
+  });
+
   it("does not send on Enter", () => {
     render(<AgentChat workId="work-1" appMode />);
     fireEvent.keyDown(screen.getByRole("textbox", { name: "创作指令" }), { key: "Enter" });
@@ -70,6 +103,7 @@ describe("AgentChat context quote", () => {
     vi.clearAllMocks();
     mocks.running = false;
     mocks.timeline = [];
+    mocks.stickToBottom = true;
     vi.stubGlobal("PointerEvent", MouseEvent);
   });
 
@@ -134,6 +168,31 @@ describe("AgentChat context quote", () => {
     expect(screen.queryByText("废墟相遇")).toBeNull();
     expect(screen.queryByText("废墟中遇见苏婉")).toBeNull();
     expect(screen.getByRole("button", { name: "发送" }).disabled).toBe(true);
+  });
+
+  it("places the jump button on the top edge of the conversation composer", () => {
+    mocks.stickToBottom = false;
+    mocks.timeline = [1, 2, 3, 4].map((id) => ({ kind: "message", id: String(id), role: "user", content: `第${id}条` }));
+    render(<AgentChat workId="work-1" />);
+    const button = screen.getByRole("button", { name: "回到底部" });
+    const composer = screen.getByTestId("agent-composer");
+    expect(composer.contains(button)).toBe(true);
+    expect(button.className).toContain("bottom-full");
+  });
+
+  it("uses the App conversation composer in the web sidebar", () => {
+    const { unmount } = render(<AgentChat workId="work-1" />);
+    const webComposer = screen.getByTestId("agent-composer");
+    const webCard = screen.getByTestId("agent-composer-card");
+    expect(webCard.className).toContain("rounded-2xl");
+    expect(webCard.contains(screen.getByRole("textbox", { name: "创作指令" }))).toBe(true);
+    expect(webCard.contains(screen.getByText("章节评审强度"))).toBe(true);
+    const webComposerClass = webComposer.className;
+    const webCardClass = webCard.className;
+    unmount();
+    render(<AgentChat workId="work-1" appMode />);
+    expect(screen.getByTestId("agent-composer").className).toBe(webComposerClass);
+    expect(screen.getByTestId("agent-composer-card").className).toBe(webCardClass);
   });
 
   it("defaults chapter review intensity to medium and snaps by sliding, not clicking", async () => {

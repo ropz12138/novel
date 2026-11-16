@@ -99,6 +99,62 @@ def test_novel_llm_astream_uses_provider_and_emits_chunks():
     assert aggregated.tool_calls[0]["name"] == "query_nodes"
 
 
+def _assert_deltas_aggregate_once(chunks):
+    pieces = [
+        call.get("args") or ""
+        for chunk in chunks
+        for call in (getattr(chunk, "tool_call_chunks", None) or [])
+    ]
+    assert "".join(pieces) == '{"limit":1}'
+    aggregated = chunks[0]
+    for chunk in chunks[1:]:
+        aggregated = aggregated + chunk
+    assert aggregated.tool_calls[0]["name"] == "query_nodes"
+    assert aggregated.tool_calls[0]["args"] == {"limit": 1}
+    assert aggregated.tool_calls[0]["id"] == "c1"
+
+
+def test_tool_argument_deltas_are_not_repeated_by_the_final_tool_call():
+    raw = '{"limit":1}'
+    provider = _FakeProvider([
+        ToolStreamEvent(kind="tool_call_delta", text=raw[:8], index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {})),
+        ToolStreamEvent(kind="tool_call_delta", text=raw[8:], index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {})),
+        ToolStreamEvent(kind="tool_call", index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {"limit": 1})),
+    ])
+    llm = NovelLLM(provider=provider, model_name="m")
+
+    async def _run():
+        return [chunk async for chunk in llm.astream([HumanMessage(content="hi")])]
+
+    _assert_deltas_aggregate_once(asyncio.run(_run()))
+
+
+def test_deep_agent_adapter_does_not_repeat_final_tool_arguments():
+    from services.llm.langchain_adapter import DeepAgentChatModel
+
+    raw = '{"limit":1}'
+    provider = _FakeProvider([
+        ToolStreamEvent(kind="thinking", text="先核对参数。"),
+        ToolStreamEvent(kind="tool_call_delta", text=raw[:8], index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {})),
+        ToolStreamEvent(kind="tool_call_delta", text=raw[8:], index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {})),
+        ToolStreamEvent(kind="tool_call", index=0,
+                        tool_call=ToolCallFinished("query_nodes", "c1", {"limit": 1})),
+    ])
+    model = DeepAgentChatModel(provider=provider, model_name="m")
+
+    async def _run():
+        return [chunk async for chunk in model.astream([HumanMessage(content="hi")])]
+
+    chunks = asyncio.run(_run())
+    assert chunks[0].additional_kwargs["reasoning_content"] == "先核对参数。"
+    _assert_deltas_aggregate_once(chunks)
+
+
 def test_novel_llm_astream_attaches_terminal_usage_to_aggregated_message():
     provider = _FakeProvider([
         ToolStreamEvent(kind="text", text="正文"),

@@ -16,7 +16,7 @@ class NodeCreate(BaseModel):
     extra_data: dict = {}
     layer: int = 0
     sort_order: int = Field(..., description=SORT_ORDER_DESC)
-    scope: Optional[str] = Field(None, description="作用域：global/local；不传则按类型推断（worldbuilding/note→global，其余→local）")
+    scope: Optional[str] = Field(None, description="作用域：global/local；不传则按类型推断（worldbuilding/note/reviewer_note→global，其余→local）")
     position_x: float = 0.0
     position_y: float = 0.0
 
@@ -33,7 +33,7 @@ class NodeUpdate(BaseModel):
     extra_data: Optional[dict] = None
     layer: Optional[int] = None
     sort_order: Optional[int] = Field(None, description=f"新的{SORT_ORDER_DESC}")
-    scope: Optional[str] = Field(None, description="新的作用域：global/local。worldbuilding/note 强制为 global")
+    scope: Optional[str] = Field(None, description="新的作用域：global/local。worldbuilding/note/reviewer_note 强制为 global")
     position_x: Optional[float] = None
     position_y: Optional[float] = None
     locked: Optional[bool] = Field(None, description="是否固定节点（固定后坐标不可被 agent 修改）")

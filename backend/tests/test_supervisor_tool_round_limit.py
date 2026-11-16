@@ -29,12 +29,12 @@ def test_graph_recursion_limit_covers_forty_work_rounds_plus_wrap_up():
 def test_high_review_intensity_uses_eighty_tools_and_two_hundred_graph_steps():
     assert HIGH_SUPERVISOR_TOOL_CALL_LIMIT == 80
     assert HIGH_SUPERVISOR_GRAPH_RECURSION_LIMIT == 200
-    assert get_supervisor_iteration_limits("high") == (80, 200)
+    assert get_supervisor_iteration_limits("high") == (float("inf"), float("inf"))
 
 
-def test_low_and_medium_review_intensity_keep_default_limits():
-    assert get_supervisor_iteration_limits("low") == (40, 90)
-    assert get_supervisor_iteration_limits("medium") == (40, 90)
+def test_all_review_intensities_have_unlimited_execution():
+    for intensity in ("low", "medium", "high"):
+        assert get_supervisor_iteration_limits(intensity) == (float("inf"), float("inf"))
 
 
 def test_count_work_rounds_ignores_respond_to_user_and_non_ai():

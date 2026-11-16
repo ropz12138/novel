@@ -54,11 +54,15 @@ def _build_todo_card_from_db(db: Session, session_id: str) -> dict | None:
     items = list_todo_items(db, session_id)
     if not items:
         return None
-    return {
+    card = {
         "intent_summary": "",
         "todolist": [serialize_todo_item(t) for t in items],
         "ready_to_execute": True,
     }
+    session = db.get(SupervisorSession, session_id)
+    if session is not None and session.status in {"needs_user", "needs_revision"}:
+        card["delivery_status"] = session.status
+    return card
 
 
 def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) -> bool:
@@ -79,8 +83,7 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                 data["baseline_content"] = state.baseline_content
         diff = data.get("diff") or {}
         node_id = data.get("node_id") or data.get("chapter_node_id") or ""
-        db.add(
-            SupervisorMessage(
+        message = SupervisorMessage(
                 id=str(uuid.uuid4()),
                 session_id=session_id,
                 role="assistant",
@@ -90,6 +93,7 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                 meta={
                     "type": "chapter_content_diff_card",
                     "chapterContentDiffCard": {
+                        "task_id": data.get("task_id"),
                         "node_id": node_id,
                         "chapter_node_id": data.get("chapter_node_id") or node_id,
                         "node_type": data.get("node_type", ""),
@@ -107,7 +111,16 @@ def _persist_diff_event(db: Session, session_id: str, event: str, data: dict) ->
                     },
                 },
             )
-        )
+        existing = None
+        if data.get('task_id'):
+            candidates = db.query(SupervisorMessage).filter_by(session_id=session_id, role='assistant').all()
+            existing = next((row for row in candidates
+                if (row.meta or {}).get('chapterContentDiffCard', {}).get('task_id') == data['task_id']
+                and (row.meta or {}).get('chapterContentDiffCard', {}).get('node_id') == node_id), None)
+        if existing is not None:
+            existing.meta = message.meta
+        else:
+            db.add(message)
         db.commit()
         return True
 

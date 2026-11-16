@@ -1,3 +1,5 @@
+import database
+
 from models.node import Node
 from models.user import User
 from models.work import CanvasWork
@@ -25,7 +27,7 @@ def test_load_work_notes_returns_all_latest_note_content_in_stable_order(db_sess
         def close(self):
             pass
 
-    monkeypatch.setattr("services.agents.supervisor._get_db", lambda: SessionProxy())
+    monkeypatch.setattr(database, "open_db", lambda: SessionProxy())
 
     context = SupervisorAgent()._load_work_note_context(work.id)
 

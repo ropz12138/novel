@@ -55,7 +55,7 @@ def db_message_dicts_to_langchain(
             ))
             continue
 
-        if role == "user":
+        if role in {"user", "agent_event"}:
             flush_pending_tool_calls()
             langchain_messages.append(HumanMessage(content=m.get("content", "")))
             continue

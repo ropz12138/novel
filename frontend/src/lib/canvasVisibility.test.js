@@ -3,7 +3,6 @@ import { buildGraphIndex } from "./canvasGraph";
 import {
   DEFAULT_EXPAND_DEPTH,
   projectVisibleGraph,
-  isNodeExpandable,
   toggleExpanded,
 } from "./canvasVisibility";
 
@@ -175,19 +174,6 @@ describe("角色与设定不上画布", () => {
     const result = project({ expandedNodeIds: new Set(["v1", "p1"]) });
     expect(result.visibleNodeIds.has("w1")).toBe(false);
     expect(result.visibleNodeIds.has("n1")).toBe(false);
-  });
-});
-
-describe("展开控件可见性", () => {
-  it("有结构子节点时可展开", () => {
-    const index = buildGraphIndex(nodes, edges);
-    expect(isNodeExpandable(index, "v1")).toBe(true);
-  });
-
-  it("没有结构子节点时不可展开", () => {
-    const index = buildGraphIndex(nodes, edges);
-    expect(isNodeExpandable(index, "c1")).toBe(false);
-    expect(isNodeExpandable(index, "v2")).toBe(false);
   });
 });
 

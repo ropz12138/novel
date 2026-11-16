@@ -1,6 +1,9 @@
 """查询工具 - 结构化查询和grep查询"""
+import database
 import json
 import hashlib
+
+from services.agent_paragraphs import content_reading_view, notes_reading_view, paragraph_bounds, segmentation_mode
 import asyncio
 from typing import Literal, Optional
 from functools import partial
@@ -14,10 +17,6 @@ from models.edge import Edge
 from models.chapter import Chapter
 
 
-def _get_db():
-    """获取数据库会话（工具内部使用）"""
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _get_current_work_id():
@@ -82,7 +81,7 @@ class CanvasOverviewInput(BaseModel):
 
 # 同步实现
 def _query_nodes_sync(node_type=None, keyword=None, limit=50, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         work_id = _get_current_work_id()
         query = db.query(Node)
@@ -114,7 +113,7 @@ def _query_nodes_sync(node_type=None, keyword=None, limit=50, reason=None):
 
 
 def _query_edges_sync(source_id=None, target_id=None, edge_type=None, limit=100, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         work_id = _get_current_work_id()
         query = db.query(Edge)
@@ -146,7 +145,7 @@ def _query_edges_sync(source_id=None, target_id=None, edge_type=None, limit=100,
 
 
 def _read_node_content_sync(node_ids: list[str], reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         query = db.query(Node).filter(Node.id.in_(node_ids))
         work_id = _get_current_work_id()
@@ -176,19 +175,25 @@ def _read_node_content_sync(node_ids: list[str], reason=None):
                     "source_title": source.title if source else "未知",
                     "edge_type": edge.edge_type,
                 })
-            results.append({
+            record = {
                 "id": node.id,
                 "type": node.type,
                 "title": node.title,
-                "content": node.content,
-                "content_sha256": hashlib.sha256((node.content or "").encode("utf-8")).hexdigest(),
+                **content_reading_view(node.content or "", segmentation_mode(node.type)),
                 "extra_data": node.extra_data,
+                "scope": node.scope,
+                "sort_order": node.sort_order,
+                "layer": node.layer,
+                "position_x": node.position_x,
+                "position_y": node.position_y,
+                "locked": bool(node.locked),
                 "outgoing_edges": outgoing,
                 "incoming_edges": incoming,
-            })
+            }
             if node.type == "chapter":
                 chapter = db.query(Chapter).filter_by(node_id=node.id).first()
-                results[-1]["notes"] = chapter.notes if chapter else ""
+                record.update(notes_reading_view(chapter.notes if chapter else ""))
+            results.append(record)
         
         return json.dumps({"nodes": results, "total": len(results)}, ensure_ascii=False)
     finally:
@@ -207,7 +212,7 @@ def _text_leaves(value, path):
 
 
 def _grep_nodes_sync(keywords, node_type=None, fields=None, match_mode="any", limit=20, offset=0, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         work_id = _get_current_work_id()
         if not work_id:
@@ -245,7 +250,7 @@ def _grep_nodes_sync(keywords, node_type=None, fields=None, match_mode="any", li
                     idx = lower.find(keyword.casefold())
                     if idx < 0:
                         continue
-                    results.append({
+                    match = {
                         "node_id": node.id,
                         "node_type": node.type,
                         "title": node.title,
@@ -254,7 +259,13 @@ def _grep_nodes_sync(keywords, node_type=None, fields=None, match_mode="any", li
                         "match_start": idx,
                         "match_end": idx + len(keyword),
                         "field_sha256": hashlib.sha256(text.encode("utf-8")).hexdigest(),
-                    })
+                    }
+                    if field_path in {"content", "notes"}:
+                        mode = segmentation_mode(node.type, field=field_path)
+                        bounds = paragraph_bounds(text, idx, idx + len(keyword), mode)
+                        if bounds:
+                            match["paragraph_start"], match["paragraph_end"] = bounds
+                    results.append(match)
         page = results[offset:offset + limit]
         return json.dumps({"success": True, "matches": page, "total": len(page),
                            "has_more": offset + len(page) < len(results),
@@ -264,7 +275,7 @@ def _grep_nodes_sync(keywords, node_type=None, fields=None, match_mode="any", li
 
 
 def _get_canvas_overview_sync(work_id=None, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         if not work_id:
             work_id = _get_current_work_id()
@@ -351,6 +362,7 @@ read_node_content = StructuredTool.from_function(
     name="read_node_content",
     description=(
         "批量读取节点完整正文。先 get_canvas_index 获取 UUID，再一次性传入 node_ids 列表。"
+        "返回的 number 是本次读取的段落号。章节正文按自然段编号；非章节正文和章节笔记按 Markdown 标题、列表条目等结构编号。"
     ),
     args_schema=ReadNodeContentInput,
 )
@@ -359,7 +371,7 @@ grep_nodes = StructuredTool.from_function(
     coroutine=_grep_nodes_async,
     func=_grep_nodes_sync,
     name="grep_nodes",
-    description="在节点标题、正文、章节笔记或声明的元数据字段中定位关键词；返回字段路径和位置，不返回字段全文。",
+    description="在节点标题、正文、章节笔记或声明的元数据字段中定位关键词；返回字段路径和位置，不返回字段全文。正文和笔记的段落范围使用该字段本次读取的编号。",
     args_schema=GrepNodesInput,
 )
 
@@ -386,7 +398,7 @@ class ListUserCanvasActionsInput(BaseModel):
 
 
 def _get_canvas_index_sync(node_offset=0, node_limit=50, edge_offset=0, edge_limit=50, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         work_id = _get_current_work_id()
         node_q = db.query(Node)
@@ -448,7 +460,7 @@ def _list_user_canvas_actions_sync(limit=50, reason=None):
     from services import user_action_service
 
     work_id = _get_current_work_id()
-    db = _get_db()
+    db = database.open_db()
     try:
         actions = user_action_service.list_actions(db, work_id, limit=limit)
     finally:

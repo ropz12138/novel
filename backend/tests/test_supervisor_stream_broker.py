@@ -1,6 +1,46 @@
 import asyncio
 
+import pytest
+
 from services.supervisor_stream_broker import SupervisorStreamBroker
+
+
+@pytest.mark.parametrize("event,data", [
+    ("supervisor_stream", {"phase": "content"}),
+    ("supervisor_stream", {"phase": "reasoning"}),
+    ("node_content_diff_preview", {"phase": "delta", "node_id": "chapter-1"}),
+])
+@pytest.mark.parametrize("after_seq,expected", [(0, "甲🙂乙丙"), (1, "乙丙"), (2, "丙"), (3, "")])
+def test_reconnect_inside_sealed_batch_replays_only_unseen_chunks(event, data, after_seq, expected):
+    async def run():
+        broker = SupervisorStreamBroker(max_pending_events=3)
+        broker.begin("session-1")
+        for chunk in ("甲🙂", "乙", "丙"):
+            await broker.publish("session-1", event, {**data, "chunk": chunk})
+        await broker.publish("session-1", "supervisor_done", {})
+        replay = [item async for item in broker.subscribe("session-1", after_seq=after_seq)]
+        assert "".join(payload.get("chunk", "") for _, payload in replay) == expected
+        assert replay[-1][0] == "supervisor_done"
+        if expected:
+            assert replay[0] == (event, {**data, "chunk": expected, "_stream_seq": 3})
+    asyncio.run(run())
+
+
+def test_reconnect_inside_batch_flushed_by_event_change():
+    async def run():
+        broker = SupervisorStreamBroker()
+        broker.begin("session-1")
+        for chunk in ("甲", "乙"):
+            await broker.publish("session-1", "supervisor_stream", {"chunk": chunk})
+        await broker.publish("session-1", "stage_start", {"stage": "tool"})
+        await broker.publish("session-1", "supervisor_done", {})
+        replay = [item async for item in broker.subscribe("session-1", after_seq=1)]
+        assert replay == [
+            ("supervisor_stream", {"chunk": "乙", "_stream_seq": 2}),
+            ("stage_start", {"stage": "tool", "_stream_seq": 3}),
+            ("supervisor_done", {"_stream_seq": 4}),
+        ]
+    asyncio.run(run())
 
 
 def test_reconnect_replays_events_created_after_previous_stream_disconnected():

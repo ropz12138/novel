@@ -1,4 +1,5 @@
 """按精确字符范围维护工具分组；重叠修改沿已有分组累计。"""
+from services.agent_paragraphs import paragraph_index_for_span
 
 
 def apply_groups(baseline, groups):
@@ -14,7 +15,7 @@ def apply_groups(baseline, groups):
     return current
 
 
-def compose_groups(baseline, groups, replacements):
+def compose_groups(baseline, groups, replacements, mode: str = "blank"):
     segments = []
     cursor = 0
     for group in groups:
@@ -83,6 +84,6 @@ def compose_groups(baseline, groups, replacements):
         if old != new:
             result.append({"start_offset": offset, "old_text": old, "new_text": new,
                            "type": "replace" if old and new else "delete" if old else "insert_after",
-                           "paragraph_index": baseline[:offset].count("\n\n") + (1 if old else 0)})
+                           "paragraph_index": paragraph_index_for_span(baseline, offset, old, mode)})
         offset += len(old)
     return [] if "".join(segment["old"] for segment in segments) == "".join(segment["new"] for segment in segments) else result

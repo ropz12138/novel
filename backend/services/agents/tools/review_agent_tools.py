@@ -6,12 +6,11 @@ import hashlib
 import json
 import logging
 from pathlib import Path
-from typing import Literal
-
 from langchain_core.tools import StructuredTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from models.node import Node
+from services.agent_paragraphs import present_content_record
 from services.agents.subagent_runtime import invoke_isolated_subagent
 
 logger = logging.getLogger(__name__)
@@ -33,30 +32,18 @@ class ReviewAgentInput(BaseModel):
     reason: str | None = None
 
 
-class NeededElement(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-    element: str = Field(min_length=1, description="读者在本段需要或已获得的体验元素")
-    experience: str = Field(min_length=1, description="该元素在当前题材中的实际阅读感受，说明是否获得满足")
-    evidence: str = Field(description="目标正文中的连续原文；元素缺失时为空，原因写入 experience")
-
-
 class ReviewIssue(BaseModel):
     model_config = ConfigDict(extra="forbid")
     chapter_node_id: str
     evidence: str = Field(min_length=1, description="问题位置的连续原文，逐字引用目标正文")
-    impact: str = Field(min_length=1, description="为何影响当前评审视角的阅读体验")
-    suggestion: str = Field(min_length=1, description="具体修改目标，尊重作者要求与故事事实")
-    priority: Literal["high", "medium", "low"]
-    revision_scope: Literal["local_edit", "rewrite", "replan"]
+    impact: str = Field(min_length=1, description="该处对当前视角阅读的影响")
+    suggestion: str = Field(min_length=1, description="具体修改目标，保留作者要求与故事事实")
 
 
 class ReviewReport(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    reading_experience: str = Field(min_length=1, description="读完后的具体感受与阅读负担")
-    continue_reading: bool
-    continue_reason: str = Field(min_length=1, description="愿意继续读或离开的具体原因")
-    needed_elements: list[NeededElement] = Field(min_length=1)
-    issues: list[ReviewIssue] = Field(description="值得修订的问题；阅读体验良好时可为空")
+    report: str = Field(min_length=1, description="当前视角的阅读结论与依据，可使用 Markdown")
+    issues: list[ReviewIssue] = Field(default_factory=list, description="有连续原文定位的问题；结论写在 report 中时留空")
 
 
 def _load_review_task(request: ReviewAgentInput, work_id: str) -> dict:
@@ -77,10 +64,45 @@ def _load_review_task(request: ReviewAgentInput, work_id: str) -> dict:
                                "content_sha256": hashlib.sha256(content.encode()).hexdigest()})
             return result
 
+        reviewer_note_ids = [node.id for node in db.query(Node).filter_by(work_id=work_id, type='reviewer_note')
+                             .order_by(Node.sort_order, Node.created_at, Node.id).all()]
+        author_notes, chapter_notes = _collected_notes(work_id)
         return {"chapters": load(request.chapter_node_ids, chapters_only=True),
                 "sources": load(request.source_node_ids),
+                "author_notes": author_notes,
+                "chapter_notes": chapter_notes,
+                "reviewer_notes": load(reviewer_note_ids),
                 "author_requirements": request.author_requirements,
                 "review_goal": request.review_goal}
+
+
+def _collected_notes(work_id: str) -> tuple[list[dict], list[dict]]:
+    from services.work_state import snapshot
+
+    author_notes = []
+    chapter_notes = []
+    for node in snapshot(work_id)["nodes"]:
+        if node["type"] == "note":
+            author_notes.append({
+                "node_id": node["id"], "type": node["type"], "title": node["title"],
+                "scope": node.get("scope"), "content": node["content"] or "",
+            })
+        elif node["type"] == "chapter" and node.get("notes"):
+            chapter_notes.append({
+                "chapter_node_id": node["id"], "type": "chapter_note", "title": node["title"],
+                "scope": "本章节及其后续连续性", "content": node["notes"],
+            })
+    return author_notes, chapter_notes
+
+
+def _model_review_task(task: dict) -> dict:
+    model = {}
+    for key, value in task.items():
+        if key in {"chapters", "sources", "author_notes", "chapter_notes", "reviewer_notes"}:
+            model[key] = [present_content_record(item) for item in value]
+        else:
+            model[key] = value
+    return model
 
 
 async def _review_perspective(perspective: str, task: dict) -> dict:
@@ -94,22 +116,21 @@ async def _review_perspective(perspective: str, task: dict) -> dict:
         for issue in report.issues:
             if issue.chapter_node_id not in target_contents or issue.evidence not in target_contents[issue.chapter_node_id]:
                 raise ValueError("问题证据需要逐字引用所标记目标章节的连续正文")
-        for element in report.needed_elements:
-            if element.evidence and not any(element.evidence in content for content in target_contents.values()):
-                raise ValueError("体验元素的证据需要来自目标正文")
         submitted.append(report.model_dump())
         return json.dumps({"success": True, "submitted": True}, ensure_ascii=False)
 
     submit = StructuredTool.from_function(
         coroutine=submit_review, name="submit_review", args_schema=ReviewReport,
-        return_direct=True, description="提交当前视角的阅读报告与有原文证据的修改建议。",
+        return_direct=True, description="提交当前视角的阅读报告；有连续原文定位的问题写入 issues。",
     )
     try:
         prompt = (PROMPT_ROOT / "reviewer_system.txt").read_text(encoding="utf-8")
         perspective_prompt = REVIEW_PERSPECTIVES[perspective].read_text(encoding="utf-8")
+        system_prompt = prompt + "\n\n" + perspective_prompt
+        model_task = _model_review_task(task)
         await invoke_isolated_subagent(
-            name=f"reviewer_{perspective}", system_prompt=prompt + "\n\n" + perspective_prompt,
-            task=task, tools=[submit],
+            name=f"reviewer_{perspective}", system_prompt=system_prompt,
+            task=model_task, tools=[submit],
         )
         if len(submitted) != 1:
             raise ValueError("评审子 Agent 未提交报告")
@@ -119,7 +140,7 @@ async def _review_perspective(perspective: str, task: dict) -> dict:
     return {"perspective": perspective, "report": submitted[0]}
 
 
-async def _run_review_agent(**kwargs):
+async def _execute_review_agent(**kwargs):
     from services.agents.supervisor import get_context
 
     request = ReviewAgentInput.model_validate(kwargs)
@@ -132,12 +153,19 @@ async def _run_review_agent(**kwargs):
                            "available_perspectives": list(REVIEW_PERSPECTIVES)}, ensure_ascii=False)
     try:
         task = _load_review_task(request, work_id)
-    except ValueError as exc:
+    except (ValueError, KeyError) as exc:
         return json.dumps({"success": False, "error": str(exc)}, ensure_ascii=False)
     emit = get_context().get("emit")
     if emit:
         await emit("stage_start", {"stage": "reviewing", "label": "评审子 Agent 正在阅读"})
     results = await asyncio.gather(*(_review_perspective(name, task) for name in perspectives))
+    try:
+        current = _load_review_task(request, work_id)
+        if any(current[key] != task[key] for key in (
+                'chapters', 'sources', 'author_notes', 'chapter_notes', 'reviewer_notes')):
+            raise ValueError('评审目标、引用来源、作者笔记或专用评审笔记已变化，请基于最新版本重新评审')
+    except ValueError as exc:
+        return json.dumps({'success': False, 'error': str(exc)}, ensure_ascii=False)
     reports = [result for result in results if "report" in result]
     errors = [result for result in results if "error" in result]
     return json.dumps({"success": not errors,
@@ -147,9 +175,38 @@ async def _run_review_agent(**kwargs):
                        "reports": reports, "errors": errors}, ensure_ascii=False)
 
 
+async def _run_review_agent(**kwargs):
+    from services.agents.run_control import current_run_control
+    request = ReviewAgentInput.model_validate(kwargs)
+    # 输入归属校验在派发前完成。
+    from services.agents.supervisor import get_context
+    work_id = get_context().get('work_id')
+    if not work_id:
+        return json.dumps({'success': False, 'error': '当前会话未绑定作品'}, ensure_ascii=False)
+    try:
+        _load_review_task(request, work_id)
+        if any(name not in REVIEW_PERSPECTIVES for name in request.perspectives):
+            raise ValueError('未知评审视角')
+    except ValueError as exc:
+        return json.dumps({'success': False, 'error': str(exc)}, ensure_ascii=False)
+
+    async def execute(child):
+        current = dict(kwargs)
+        while True:
+            additions = child.take_instructions()
+            if additions:
+                current['review_goal'] += '\n\nSupervisor 补充要求：\n' + '\n\n'.join(additions)
+            result = json.loads(await _execute_review_agent(**current))
+            if not child.instructions:
+                return result
+
+    child = current_run_control().start('reviewer', None, execute)
+    return json.dumps({'success': True, 'status': 'running', 'agent': 'reviewer', 'task_id': child.id}, ensure_ascii=False)
+
+
 run_review_agent = StructuredTool.from_function(
     coroutine=_run_review_agent, name="run_review_agent", args_schema=ReviewAgentInput,
-    description=("委派独立只读评审子 Agent 阅读完整章节，返回阅读感受、所需体验元素与原文定位建议。"
+    description=("异步派发只读评审子 Agent，立即返回 task_id，完成通知提供阅读报告与可选的原文定位问题。"
                  "视角 tired_reader：劳累读者；ai_taste：表达自然度与机械感。可单独调用或并行。提供完整作者要求与相关来源，"
-                 "各视角共用同一正文版本并独立提交报告；Supervisor 汇总决定，Writer 执行修改。"),
+                 "各视角共用同一正文版本并独立提交报告；Supervisor 汇总决定并直接修改正文。"),
 )

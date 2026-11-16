@@ -68,7 +68,7 @@ function TodoTaskNode({ task, fallbackId, level = 0 }) {
         </div>
         <div className="mt-1 space-y-1 text-[11px] text-slate-500">
           <p>负责人：{task.owner || task.agent_scope || "supervisor"}</p>
-          <p>状态：{meta.text}</p>
+          <p>状态：{task.waiting_for_decision ? "等待你确认" : meta.text}</p>
           {task.dispatch_tool && task.dispatch_tool !== "none" && (
             <p>工具：{task.dispatch_tool}</p>
           )}
@@ -76,6 +76,7 @@ function TodoTaskNode({ task, fallbackId, level = 0 }) {
             <p>依赖：{task.depends_on.join(", ")}</p>
           )}
           {task.done_criteria && <p>验收：{task.done_criteria}</p>}
+          {task.result_summary && <p>进展：{task.result_summary}</p>}
           {task.error_message && <p className="text-red-600">错误：{task.error_message}</p>}
         </div>
       </div>
@@ -105,12 +106,18 @@ export function RequirementsTodoCard({ todoCard }) {
         <p className="text-sm font-medium text-slate-700">需求任务清单</p>
         <span
           className={`rounded-full px-2 py-0.5 text-[10px] ${
-            todoCard?.ready_to_execute
-              ? "bg-emerald-100 text-emerald-700"
-              : "bg-amber-100 text-amber-700"
+            todoCard?.delivery_status === "needs_user" || todoCard?.ready_to_execute === false
+              ? "bg-amber-100 text-amber-700"
+              : todoCard?.delivery_status === "needs_revision"
+                ? "bg-red-100 text-red-700"
+                : "bg-emerald-100 text-emerald-700"
           }`}
         >
-          {todoCard?.ready_to_execute ? "可执行" : "待澄清"}
+          {todoCard?.delivery_status === "needs_user" || todoCard?.ready_to_execute === false
+            ? "等待你确认"
+            : todoCard?.delivery_status === "needs_revision"
+              ? "需要处理"
+              : "可执行"}
         </span>
       </div>
       {todoCard?.intent_summary && (

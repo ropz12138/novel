@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen } from "@testing-library/react";
 import IsolatedNodePanel from "./IsolatedNodePanel";
 
 const node = (id, type, label, scope = "global") => ({
@@ -17,6 +17,13 @@ const nodes = [
 ];
 
 describe("IsolatedNodePanel", () => {
+  it("shows dedicated reviewer notes separately and opens them for editing", () => {
+    const onSelect = vi.fn();
+    render(<IsolatedNodePanel nodes={[node("review", "reviewer_note", "本作评审要求")]} onSelect={onSelect} />);
+    expect(screen.getByText("评审笔记 1")).toBeDefined();
+    fireEvent.click(screen.getByText("本作评审要求"));
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: "review", type: "reviewer_note" }));
+  });
   it("只列出非层级链节点，不列出画布上的结构节点", () => {
     render(<IsolatedNodePanel nodes={nodes} />);
     expect(screen.getByText("灵气体系")).toBeDefined();
@@ -39,6 +46,49 @@ describe("IsolatedNodePanel", () => {
     expect(onSelect).toHaveBeenCalledWith(
       expect.objectContaining({ id: "w1", label: "灵气体系" }),
     );
+  });
+
+  it("右键笔记、角色和世界观后可以选择复制到其他作品", () => {
+    const onSelect = vi.fn();
+    const onCopyNode = vi.fn();
+    render(<IsolatedNodePanel nodes={nodes} onSelect={onSelect} onCopyNode={onCopyNode} />);
+
+    fireEvent.contextMenu(screen.getByRole("button", { name: "灵感" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "灵气体系" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+    fireEvent.contextMenu(screen.getByRole("button", { name: "林川" }));
+    fireEvent.click(screen.getByRole("button", { name: "复制到其他作品" }));
+
+    expect(onCopyNode).toHaveBeenNthCalledWith(1, expect.objectContaining({ id: "n1", data: expect.objectContaining({ type: "note" }) }));
+    expect(onCopyNode).toHaveBeenNthCalledWith(2, expect.objectContaining({ id: "w1", data: expect.objectContaining({ type: "worldbuilding" }) }));
+    expect(onCopyNode).toHaveBeenNthCalledWith(3, expect.objectContaining({ id: "hero", data: expect.objectContaining({ type: "character" }) }));
+    expect(onSelect).not.toHaveBeenCalled();
+  });
+
+  it("左键只打开节点，不弹出复制菜单", () => {
+    render(<IsolatedNodePanel nodes={nodes} onCopyNode={vi.fn()} />);
+    fireEvent.click(screen.getByRole("button", { name: "林川" }));
+    expect(screen.queryByRole("button", { name: "复制到其他作品" })).toBeNull();
+  });
+
+  it("App 里长按会打开复制菜单，松手后的点击不进入详情", () => {
+    vi.useFakeTimers();
+    try {
+      const onSelect = vi.fn();
+      render(<IsolatedNodePanel nodes={nodes} onSelect={onSelect} onCopyNode={vi.fn()} appMode />);
+      const row = screen.getByRole("button", { name: "灵感" });
+      fireEvent.mouseDown(row, { clientX: 20, clientY: 30 });
+      act(() => {
+        vi.advanceTimersByTime(500);
+      });
+      expect(screen.getByRole("button", { name: "复制到其他作品" })).toBeDefined();
+      fireEvent.mouseUp(row);
+      fireEvent.click(row);
+      expect(onSelect).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("没有可列出的节点时不渲染任何分组", () => {

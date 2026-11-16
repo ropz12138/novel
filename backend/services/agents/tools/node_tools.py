@@ -1,4 +1,5 @@
 """节点操作工具"""
+import database
 import json
 import hashlib
 import uuid
@@ -32,10 +33,6 @@ from node_types import (
 logger = logging.getLogger(__name__)
 
 
-def _get_db():
-    """获取数据库会话"""
-    from database import SessionLocal
-    return SessionLocal()
 
 
 def _get_current_work_id():
@@ -146,7 +143,7 @@ class CreateNodeInput(BaseModel):
         default=0,
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
     )
-    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
+    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note/reviewer_note 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
     position_x: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
     position_y: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -155,8 +152,9 @@ class CreateNodeInput(BaseModel):
 class ContentReplacement(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    old: str = Field(description="作者独立审阅的一组原文。通常取单个完整段落，逐字保留空白及换行，在当前正文中唯一匹配。跨段落连贯重构按完整组提交。")
-    new: str = Field(description="该组的目标文本。插入时保留 old 锚点并加入新段落；删除时传空字符串。每组独立保留或撤回。")
+    start_paragraph: int = Field(ge=1, description="选中范围的起始段落号，从 1 开始，包含该段。编号使用本次读取返回的 number。Markdown 标题和列表条目可以各自编号。")
+    end_paragraph: int = Field(ge=1, description="选中范围的结束段落号，包含该段。单段修改时与 start_paragraph 相同。")
+    new: str = Field(description="选中范围修改后的完整文本。同段内的关联改动写在同一项。删除该范围时传空字符串。新段落之间用空行分隔。Markdown 范围保留原有标记与缩进。")
 
 
 class UpdateNodeInput(BaseModel):
@@ -167,7 +165,7 @@ class UpdateNodeInput(BaseModel):
         default="overwrite",
         description=(
             "正文写入模式。overwrite：用 content 全量覆盖现有正文；"
-            "replace：只按 replacements 替换命中的原文片段，其余正文保持不变。"
+            "replace：按 replacements 的段落范围替换，其余正文保持不变。"
             "未指定时默认为 overwrite。"
         ),
     )
@@ -182,7 +180,11 @@ class UpdateNodeInput(BaseModel):
     replacements: list[ContentReplacement] = Field(
         default_factory=list,
         max_length=50,
-        description="mode=replace 时填写。数组。元素是对象。对象字段是 old 和 new。",
+        description="mode=replace 时填写。数组。元素是对象。对象字段是 start_paragraph、end_paragraph 和 new。",
+    )
+    expected_content_sha256: Optional[str] = Field(
+        default=None,
+        description="章节正文写入，以及 mode=replace，填写本次 read_node_content 返回的 content_sha256。",
     )
     sort_order: Optional[int] = Field(
         default=None,
@@ -240,6 +242,8 @@ class UpdateNodeInput(BaseModel):
                 raise ValueError("mode=replace 时只填写 replacements")
             if not self.replacements:
                 raise ValueError("mode=replace 时 replacements 需要至少一个替换项")
+            if not self.expected_content_sha256:
+                raise ValueError("mode=replace 需要 expected_content_sha256")
         elif self.replacements:
             raise ValueError("mode=overwrite 时只填写 content；局部修改使用 mode=replace")
         return self
@@ -551,7 +555,7 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
 
     
-    db = _get_db()
+    db = database.open_db()
     try:
         normalized_characters = None
         if characters is not None:
@@ -596,45 +600,10 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
         db.close()
 
 
-def _replacement_pair(item) -> tuple[object, object]:
-    if isinstance(item, dict):
-        return item.get("old"), item.get("new")
-    return getattr(item, "old", None), getattr(item, "new", None)
+def _apply_content_replacements(content: str, replacements, mode: str = "blank"):
+    from services.agent_paragraphs import apply_paragraph_replacements
 
-
-def _identical_replacement_message(indexes: list[int]) -> str:
-    labels = "、".join(f"第 {index + 1} 条（replacements[{index}]）" for index in indexes)
-    return (
-        f"{labels}的 old 和 new 完全相同，正文不会发生任何变化。"
-        "请把修改后的文字写进 new；不需要修改的片段不要放进 replacements。"
-    )
-
-
-def _apply_content_replacements(content: str, replacements) -> str:
-    if not replacements:
-        raise ValueError("mode=replace 时 replacements 不能为空")
-    pairs: list[tuple[str, str]] = []
-    identical_indexes: list[int] = []
-    for index, item in enumerate(replacements):
-        old, new = _replacement_pair(item)
-        if not isinstance(old, str) or not old:
-            raise ValueError(f"replacements[{index}] 缺少非空 old")
-        if not isinstance(new, str):
-            raise ValueError(f"replacements[{index}] 的 new 必须是字符串")
-        if old == new:
-            identical_indexes.append(index)
-        pairs.append((old, new))
-    if identical_indexes:
-        raise ValueError(_identical_replacement_message(identical_indexes))
-    updated = content
-    for index, (old, new) in enumerate(pairs):
-        match_count = updated.count(old)
-        if match_count == 0:
-            raise ValueError(f"replacements[{index}] 的 old 在正文中未找到")
-        if match_count > 1:
-            raise ValueError(f"replacements[{index}] 的 old 在正文中出现多次")
-        updated = updated.replace(old, new, 1)
-    return updated
+    return apply_paragraph_replacements(content, replacements, mode)
 
 
 def _update_node_sync(
@@ -655,7 +624,6 @@ def _update_node_sync(
     mode="overwrite",
     replacements=None,
     expected_content_sha256=None,
-    expected_work_id=None,
 ):
     if node_type is not None:
         try:
@@ -672,19 +640,50 @@ def _update_node_sync(
         normalized_storylines, err = _normalize_storylines(storylines)
         if err:
             return json.dumps({"error": err}, ensure_ascii=False)
-    db = _get_db()
+    db = database.open_db()
     try:
         query = db.query(Node).filter(Node.id == node_id)
-        if expected_work_id is not None:
-            query = query.filter(Node.work_id == expected_work_id, Node.type == "chapter")
         if expected_content_sha256 is not None:
             query = query.with_for_update()
         node = query.first()
         if not node:
             return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
         old_content = node.content or ""
+        writes_body = content is not None or (mode or "overwrite") == "replace"
+        changes_chapter_type = node.type == "chapter" and node_type not in (None, "chapter")
+        converts_to_chapter = node_type == "chapter" and node.type != "chapter" and (bool(old_content) or writes_body)
+        if changes_chapter_type or converts_to_chapter:
+            return json.dumps({
+                "success": False,
+                "error_code": "type_change_forbidden",
+                "error": "章节与其他类型不能通过 update_node 互相转换",
+            }, ensure_ascii=False)
+        if node.type == "chapter" and writes_body and not expected_content_sha256:
+            return json.dumps({
+                "success": False,
+                "error_code": "content_hash_required",
+                "error": "章节正文写入需要本次读取的 expected_content_sha256",
+            }, ensure_ascii=False)
+        if (mode or "overwrite") == "replace" and not expected_content_sha256:
+            return json.dumps({"error": "mode=replace 需要 expected_content_sha256"}, ensure_ascii=False)
         if expected_content_sha256 is not None and hashlib.sha256(old_content.encode()).hexdigest() != expected_content_sha256:
-            return json.dumps({"success": False, "error_code": "content_changed", "error": "正文已变化，请重新读取后交接写作任务"}, ensure_ascii=False)
+            return json.dumps({"success": False, "error_code": "content_changed", "error": "当前节点正文已变化，请重新读取后修改"}, ensure_ascii=False)
+        resolved_replacements = None
+        content_mode = None
+        if (mode or "overwrite") == "replace":
+            from services.agent_paragraphs import segmentation_mode
+            content_mode = segmentation_mode(node.type)
+            try:
+                write_content, resolved_replacements = _apply_content_replacements(old_content, replacements, content_mode)
+            except ValueError as e:
+                if "正文不会发生任何变化" in str(e):
+                    from services.agents.sampling_override import arm_identical_replacement_sampling
+                    arm_identical_replacement_sampling()
+                return json.dumps({"error": str(e)}, ensure_ascii=False)
+        elif replacements:
+            return json.dumps({"error": "mode=overwrite 时只填写 content；局部修改使用 mode=replace"}, ensure_ascii=False)
+        else:
+            write_content = content
         final_type_for_elements = node_type or node.type
         if chapter_elements is not None and final_type_for_elements != "chapter":
             return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
@@ -704,17 +703,6 @@ def _update_node_sync(
             node.title = title
         if node_type is not None:
             node.type = node_type
-        write_content = content
-        if (mode or "overwrite") == "replace":
-            try:
-                write_content = _apply_content_replacements(old_content, replacements)
-            except ValueError as e:
-                if "old 和 new 完全相同" in str(e):
-                    from services.agents.sampling_override import arm_identical_replacement_sampling
-                    arm_identical_replacement_sampling()
-                return json.dumps({"error": str(e)}, ensure_ascii=False)
-        elif replacements:
-            return json.dumps({"error": "mode=overwrite 时只填写 content；局部修改使用 mode=replace"}, ensure_ascii=False)
         if write_content is not None:
             from services.node_content_write_service import write_node_content
             write_node_content(db, node, write_content)
@@ -750,9 +738,10 @@ def _update_node_sync(
         if content is not None and content != old_content:
             from services.chapter_edit_service import build_replacement_diff, build_whole_content_group
             from services.node_agent_diff import record_change
-            diff = (build_replacement_diff(old_content, replacements) if mode == "replace"
+            diff = (build_replacement_diff(old_content, resolved_replacements, content_mode) if mode == "replace"
                     else build_whole_content_group(old_content, content))
-            grouped_diff = {"diff": diff, "node_diff": record_change(db, node, old_content, diff),
+            node_diff = record_change(db, node, old_content, diff)
+            grouped_diff = {"diff": diff, "node_diff": node_diff,
                             "old_content": old_content, "new_content": content}
         db.commit()
         db.refresh(node)
@@ -773,7 +762,7 @@ def _update_node_sync(
 
 
 def _delete_node_sync(node_id, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         node = db.query(Node).filter(Node.id == node_id).first()
         if not node:
@@ -806,7 +795,7 @@ def _create_edge_sync(source_id, target_id, edge_type="uses", reason=None):
     if not work_id:
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
     
-    db = _get_db()
+    db = database.open_db()
     try:
         source = db.query(Node).filter(Node.id == source_id, Node.work_id == work_id).first()
         target = db.query(Node).filter(Node.id == target_id, Node.work_id == work_id).first()
@@ -854,7 +843,7 @@ def _create_edge_sync(source_id, target_id, edge_type="uses", reason=None):
 
 
 def _delete_edge_sync(edge_id, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         edge = db.query(Edge).filter(Edge.id == edge_id).first()
         if not edge:
@@ -880,7 +869,7 @@ def _delete_edge_sync(edge_id, reason=None):
 
 
 def _update_edge_sync(edge_id, edge_type=None, label=None, reason=None):
-    db = _get_db()
+    db = database.open_db()
     try:
         edge = db.query(Edge).filter(Edge.id == edge_id).first()
         if not edge:
@@ -970,7 +959,7 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             if err:
                 return json.dumps({"error": err}, ensure_ascii=False)
 
-    db = _get_db()
+    db = database.open_db()
     try:
         created_nodes = []
         for data in normalized_items:
@@ -1042,7 +1031,7 @@ def _batch_create_edges_sync(edges_data, reason=None):
     if not work_id:
         return json.dumps({"error": "未指定作品ID"}, ensure_ascii=False)
     
-    db = _get_db()
+    db = database.open_db()
     try:
         created_edges = []
         for data in edges_data:
@@ -1101,19 +1090,21 @@ def _batch_create_edges_sync(edges_data, reason=None):
         db.close()
 
 
-# 异步包装
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
-    result = await asyncio.to_thread(partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
-    # 触发画布更新事件
+async def _emit_nodes_updated(result, label, payload):
     try:
         data = json.loads(result)
         if data.get("success"):
             emit = _get_emit()
             if emit:
-                await emit("nodes_updated", {"action": "create", "node_type": node_type})
+                await emit("nodes_updated", payload(data))
     except Exception:
-        logger.warning("_create_node_async 触发 nodes_updated 失败", exc_info=True)
+        logger.warning("%s 触发 nodes_updated 失败", label, exc_info=True)
     return result
+
+
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
+    result = await asyncio.to_thread(partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
+    return await _emit_nodes_updated(result, "_create_node_async", lambda data: {"action": "create", "node_type": node_type})
 
 
 async def _update_node_async(
@@ -1134,10 +1125,9 @@ async def _update_node_async(
     mode="overwrite",
     replacements=None,
     expected_content_sha256=None,
-    expected_work_id=None,
 ):
     result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements,
-                                           expected_content_sha256=expected_content_sha256, expected_work_id=expected_work_id))
+                                           expected_content_sha256=expected_content_sha256))
     try:
         data = json.loads(result)
         if data.get("success"):
@@ -1156,87 +1146,34 @@ async def _update_node_async(
 
 async def _delete_node_async(node_id, reason=None):
     result = await asyncio.to_thread(partial(_delete_node_sync, node_id, reason))
-    # 触发画布更新事件
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "delete", "node_id": node_id})
-    except Exception:
-        logger.warning("_delete_node_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_delete_node_async", lambda data: {"action": "delete", "node_id": node_id})
 
 
 async def _create_edge_async(source_id, target_id, edge_type="uses", reason=None):
     result = await asyncio.to_thread(partial(_create_edge_sync, source_id, target_id, edge_type, reason))
-    # 触发画布更新事件
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "edge_create", "edge_type": edge_type})
-    except Exception:
-        logger.warning("_create_edge_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_create_edge_async", lambda data: {"action": "edge_create", "edge_type": edge_type})
 
 
 async def _delete_edge_async(edge_id, reason=None):
     result = await asyncio.to_thread(partial(_delete_edge_sync, edge_id, reason))
-    # 触发画布更新事件
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "edge_delete", "edge_id": edge_id})
-    except Exception:
-        logger.warning("_delete_edge_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_delete_edge_async", lambda data: {"action": "edge_delete", "edge_id": edge_id})
 
 
 async def _update_edge_async(edge_id, edge_type=None, label=None, reason=None):
     result = await asyncio.to_thread(
         partial(_update_edge_sync, edge_id, edge_type, label, reason)
     )
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "edge_update", "edge_id": edge_id})
-    except Exception:
-        logger.warning("_update_edge_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_update_edge_async", lambda data: {"action": "edge_update", "edge_id": edge_id})
 
 
 async def _batch_create_nodes_async(nodes_data, reason=None):
     result = await asyncio.to_thread(partial(_batch_create_nodes_sync, nodes_data, reason))
-    # 触发画布更新事件
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "batch_create", "count": data.get("count", 0)})
-    except Exception:
-        logger.warning("_batch_create_nodes_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_batch_create_nodes_async", lambda data: {"action": "batch_create", "count": data.get("count", 0)})
 
 
 async def _batch_create_edges_async(edges_data, reason=None):
     result = await asyncio.to_thread(partial(_batch_create_edges_sync, edges_data, reason))
-    # 触发画布更新事件
-    try:
-        data = json.loads(result)
-        if data.get("success"):
-            emit = _get_emit()
-            if emit:
-                await emit("nodes_updated", {"action": "batch_edge_create", "count": data.get("count", 0)})
-    except Exception:
-        logger.warning("_batch_create_edges_async 触发 nodes_updated 失败", exc_info=True)
-    return result
+    return await _emit_nodes_updated(result, "_batch_create_edges_async", lambda data: {"action": "batch_edge_create", "count": data.get("count", 0)})
 
 
 # 创建工具
@@ -1261,9 +1198,9 @@ update_node = StructuredTool.from_function(
     description=(
         "更新节点属性。"
         "正文用 mode 选择写入方式：overwrite 填写完整 content 覆盖；"
-        "replace 填写 replacements 数组，按原文片段替换。"
-        "局部修改使用 mode=replace，且 old 必须与当前正文完全一致并只出现一次。"
-        "保存后重新读取核对。"
+        "replace 填写 replacements 的段落范围和修改后文本。"
+        "章节正文的 overwrite 与 replace 都提交本次读取的 expected_content_sha256。"
+        "局部修改使用 mode=replace。保存后重新读取核对。"
         f"{NODE_LAYOUT_RULES_TEXT}"
     ),
     args_schema=UpdateNodeInput,

@@ -24,8 +24,9 @@ class _UnrecoveredContextOverflow(Exception):
 class NovelSummarizationMiddleware(SummarizationMiddleware):
     """自动压缩使用公开摘要实现，但超窗时直接失败，不截断工具参数。"""
 
-    def __init__(self, model: BaseChatModel, *, backend: BackendProtocol, on_compaction=None) -> None:
+    def __init__(self, model: BaseChatModel, *, backend: BackendProtocol, on_compaction=None, restore_state=None) -> None:
         self._on_compaction = on_compaction
+        self._restore_state = restore_state
         super().__init__(
             model,
             backend=backend,
@@ -34,6 +35,19 @@ class NovelSummarizationMiddleware(SummarizationMiddleware):
             trim_tokens_to_summarize=None,
             truncate_args_settings=None,
         )
+
+    def before_agent(self, state, runtime):
+        # Private graph fields must be restored by an internal state update.
+        # Values supplied through ainvoke/astream input are excluded by the framework.
+        saved = self._restore_state() if self._restore_state else None
+        if not saved:
+            return None
+        if saved['_summarization_event']['cutoff_index'] > len(state['messages']):
+            raise RuntimeError('持久化的上下文压缩点超出当前会话历史')
+        return saved
+
+    async def abefore_agent(self, state, runtime):
+        return self.before_agent(state, runtime)
 
     def wrap_model_call(
         self,
@@ -127,8 +141,9 @@ def build_novel_summarization_middleware(
     backend: BackendProtocol,
     *,
     on_compaction=None,
+    restore_state=None,
 ) -> tuple[NovelSummarizationMiddleware, SummarizationToolMiddleware]:
     summarization = NovelSummarizationMiddleware(
-        model, backend=backend, on_compaction=on_compaction,
+        model, backend=backend, on_compaction=on_compaction, restore_state=restore_state,
     )
     return summarization, NovelSummarizationToolMiddleware(summarization, system_prompt=None)

@@ -64,25 +64,20 @@ export function resolveOptimalSides(sourceNode, targetNode) {
     : { source_side: "top", target_side: "bottom" };
 }
 
-export function edgeHandlesFromSides(sides, { relation = false } = {}) {
-  const prefix = relation ? "rel-" : "";
+export function edgeHandlesFromSides(sides) {
   return {
-    sourceHandle: `${prefix}source-${sides.source_side}`,
-    targetHandle: `${prefix}target-${sides.target_side}`,
+    sourceHandle: `source-${sides.source_side}`,
+    targetHandle: `target-${sides.target_side}`,
   };
 }
 
-export function applyEdgeHandles(nodes, edges, { relation = false } = {}) {
+export function applyEdgeHandles(nodes, edges) {
   const nodeMap = new Map(nodes.map((node) => [node.id, node]));
   return edges.map((edge) => {
     const source = nodeMap.get(edge.source);
     const target = nodeMap.get(edge.target);
     if (!source || !target) return edge;
-    const handles = edgeHandlesFromSides(
-      resolveOptimalSides(source, target),
-      { relation },
-    );
-    return { ...edge, ...handles };
+    return { ...edge, ...edgeHandlesFromSides(resolveOptimalSides(source, target)) };
   });
 }
 

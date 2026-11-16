@@ -62,6 +62,104 @@ function tokenOperations(oldTokens, newTokens) {
   return [];
 }
 
+// A shortest edit script can lock onto an earlier repeated word and slide a later unique phrase
+// onto the wrong sentence. Pin phrases that occur once on each side, then diff the gaps.
+function uniqueAnchors(oldTokens, newTokens) {
+  const candidates = [];
+  for (let length = 8; length >= 2; length -= 1) {
+    const oldCounts = new Map();
+    const newCounts = new Map();
+    const oldAt = new Map();
+    const newAt = new Map();
+    for (let index = 0; index + length <= oldTokens.length; index += 1) {
+      const key = oldTokens.slice(index, index + length).join("");
+      oldCounts.set(key, (oldCounts.get(key) || 0) + 1);
+      if (!oldAt.has(key)) oldAt.set(key, index);
+    }
+    for (let index = 0; index + length <= newTokens.length; index += 1) {
+      const key = newTokens.slice(index, index + length).join("");
+      newCounts.set(key, (newCounts.get(key) || 0) + 1);
+      if (!newAt.has(key)) newAt.set(key, index);
+    }
+    for (const [key, count] of oldCounts) {
+      if (count === 1 && newCounts.get(key) === 1) {
+        candidates.push({ length, oldIndex: oldAt.get(key), newIndex: newAt.get(key) });
+      }
+    }
+  }
+  candidates.sort((left, right) => right.length - left.length || left.oldIndex - right.oldIndex);
+  const chosen = [];
+  for (const candidate of candidates) {
+    const blocked = chosen.some((anchor) => {
+      const oldOverlaps = candidate.oldIndex < anchor.oldIndex + anchor.length
+        && anchor.oldIndex < candidate.oldIndex + candidate.length;
+      const newOverlaps = candidate.newIndex < anchor.newIndex + anchor.length
+        && anchor.newIndex < candidate.newIndex + candidate.length;
+      const crosses = (candidate.oldIndex < anchor.oldIndex) !== (candidate.newIndex < anchor.newIndex);
+      return oldOverlaps || newOverlaps || crosses;
+    });
+    if (!blocked) chosen.push(candidate);
+  }
+  chosen.sort((left, right) => left.oldIndex - right.oldIndex);
+  return chosen;
+}
+
+function anchoredTokenOperations(oldTokens, newTokens) {
+  const anchors = uniqueAnchors(oldTokens, newTokens);
+  const operations = [];
+  let oldCursor = 0;
+  let newCursor = 0;
+  const appendGap = (gapOld, gapNew) => {
+    if (!gapOld.length && !gapNew.length) return;
+    operations.push(...tokenOperations(gapOld, gapNew));
+  };
+  for (const anchor of anchors) {
+    appendGap(oldTokens.slice(oldCursor, anchor.oldIndex), newTokens.slice(newCursor, anchor.newIndex));
+    for (let offset = 0; offset < anchor.length; offset += 1) {
+      operations.push({ kind: "equal", text: oldTokens[anchor.oldIndex + offset] });
+    }
+    oldCursor = anchor.oldIndex + anchor.length;
+    newCursor = anchor.newIndex + anchor.length;
+  }
+  appendGap(oldTokens.slice(oldCursor), newTokens.slice(newCursor));
+  return operations;
+}
+
+// Retain equal runs as plain text and collect adjacent edits into clickable regions.
+export function inlineTextSegments(oldText, newText) {
+  if (oldText === newText) return [{ kind: "equal", oldText, newText }];
+  if (!oldText || !newText) return [{ kind: "change", oldText, newText }];
+  const operations = anchoredTokenOperations(graphemes(oldText), graphemes(newText));
+  const segments = [];
+  for (const operation of operations) {
+    const kind = operation.kind === "equal" ? "equal" : "change";
+    let segment = segments[segments.length - 1];
+    if (!segment || segment.kind !== kind) {
+      segment = { kind, oldText: "", newText: "" };
+      segments.push(segment);
+    }
+    if (operation.kind !== "insert") segment.oldText += operation.text;
+    if (operation.kind !== "delete") segment.newText += operation.text;
+  }
+  const merged = [];
+  for (let index = 0; index < segments.length; index += 1) {
+    const segment = segments[index];
+    const previous = merged[merged.length - 1];
+    const next = segments[index + 1];
+    if (segment.kind === "equal"
+      && /^[\p{Script=Han}]{1,2}$/u.test(segment.newText)
+      && previous?.kind === "change" && previous.oldText && previous.newText
+      && next?.kind === "change" && next.oldText && next.newText) {
+      previous.oldText += segment.oldText + next.oldText;
+      previous.newText += segment.newText + next.newText;
+      index += 1;
+    } else {
+      merged.push({ ...segment });
+    }
+  }
+  return merged;
+}
+
 function alignedBoundaryMap(baselineCharacters, currentCharacters) {
   const operations = tokenOperations(baselineCharacters, currentCharacters);
   const boundaries = Array(currentCharacters.length + 1);
@@ -279,7 +377,7 @@ function alignParagraphs(oldParagraphs, newParagraphs) {
   return reversed.reverse();
 }
 
-export function buildContentDiffFromContents(originalContent, currentContent) {
+export function buildContentDiffFromContents(originalContent, currentContent, { paragraphReview = false } = {}) {
   if (originalContent === currentContent) return [];
   const oldParagraphs = splitParagraphs(originalContent);
   const newParagraphs = splitParagraphs(currentContent);
@@ -332,7 +430,7 @@ export function buildContentDiffFromContents(originalContent, currentContent) {
       });
     } else {
       const inserted = [operation.newText];
-      while (operations[index + 1]?.operation === "insert") {
+      while (!paragraphReview && operations[index + 1]?.operation === "insert") {
         index += 1;
         inserted.push(operations[index].newText);
       }
@@ -341,10 +439,30 @@ export function buildContentDiffFromContents(originalContent, currentContent) {
         paragraph_index: oldParagraphIndex,
         old_text: "",
         new_text: joinParagraphs(inserted),
+        ...(paragraphReview ? { insertion_order: index } : {}),
       });
     }
   }
   return hunks;
+}
+
+export function narrowHunksToChangedParagraphs(hunks = []) {
+  return hunks.flatMap((hunk) => {
+    const oldText = hunk.old_text || "";
+    const newText = hunk.new_text || "";
+    if (!oldText.includes("\n\n") && !newText.includes("\n\n")) return [hunk];
+    const narrowed = buildContentDiffFromContents(oldText, newText);
+    if (!narrowed.length) return [];
+    const unchanged = narrowed.length === 1
+      && (narrowed[0].old_text || "") === oldText
+      && (narrowed[0].new_text || "") === newText;
+    if (unchanged) return [hunk];
+    const base = Number.isInteger(hunk.paragraph_index) ? hunk.paragraph_index : 1;
+    return narrowed.map((item) => ({
+      ...item,
+      paragraph_index: base + item.paragraph_index - 1,
+    }));
+  });
 }
 
 export function commitUserParagraphEdit(baselineContent, currentContent, paragraphIndex, nextText) {
@@ -452,7 +570,8 @@ function sortForApply(hunks) {
     if (b.paragraph_index !== a.paragraph_index) {
       return b.paragraph_index - a.paragraph_index;
     }
-    return (TYPE_ORDER[b.type] ?? 3) - (TYPE_ORDER[a.type] ?? 3);
+    return (TYPE_ORDER[b.type] ?? 3) - (TYPE_ORDER[a.type] ?? 3)
+      || (b.insertion_order ?? 0) - (a.insertion_order ?? 0);
   });
 }
 
@@ -578,6 +697,32 @@ export function hydrateDiffBatches(currentContent, diff) {
     original_content: baseline,
     batches: hydrated,
   };
+}
+
+// The review unit is a paragraph; the persisted agent group remains a transport detail.
+export function hydrateParagraphReview(currentContent, diff) {
+  const restored = hydrateDiffBatches(currentContent, diff);
+  if (!restored.batches.length) return restored;
+  const grouped = diff?.grouping === "agent_replacements";
+  const baseline = contentAfterBatches(setAllHunkStatusInBatches(restored.batches, "rejected"));
+  const current = contentAfterBatches(restored.batches);
+  const hunks = buildContentDiffFromContents(baseline, current, { paragraphReview: true });
+  return { ...restored, original_content: baseline, batches: hunks.length ? [{ ...(grouped ? { grouping: "paragraph_review" } : {}), original_content: baseline, hunks }] : [] };
+}
+
+export function agentReviewSnapshot(baseline, current) {
+  const hunks = [];
+  let offset = 0;
+  for (const segment of inlineTextSegments(baseline, current)) {
+    if (segment.kind !== "equal") {
+      const old = segment.oldText;
+      const next = segment.newText;
+      hunks.push({ start_offset: offset, old_text: old, new_text: next,
+        type: old && next ? "replace" : old ? "delete" : "insert_after" });
+    }
+    offset += Array.from(segment.oldText).length;
+  }
+  return { grouping: "agent_replacements", original_content: baseline, current_content: current, hunks };
 }
 
 export function accumulateNodeContentDiff(existing, incoming, currentContent) {
@@ -745,52 +890,18 @@ export function buildStackedInlineDiffBlocks(batches) {
   return slots.flatMap((slot) => slot.blocks);
 }
 
-function blockForSettledReplace(paragraph, hunk) {
-  if (hunk.old_text === paragraph) return hunk.new_text;
-  return paragraph.replace(hunk.old_text, hunk.new_text);
-}
-
-export function buildInlineDiffBlocks(originalContent, hunks) {
-  const paragraphs = splitParagraphs(originalContent);
-  const blocks = [];
-  const hunkIndex = indexHunksByParagraph(hunks);
-
-  const pushInserts = (paragraphIndex) => {
-    for (const item of hunkIndex.inserts.get(paragraphIndex) || []) {
-      if (item.hunk.status === "rejected") continue;
-      if (item.hunk.status === "accepted") {
-        blocks.push({ kind: "paragraph", text: item.hunk.new_text });
-        continue;
-      }
-      blocks.push({ kind: "hunk", hunk: item.hunk, hunkIndex: item.index });
-    }
-  };
-
-  pushInserts(0);
-
-  paragraphs.forEach((paragraph, offset) => {
-    const paragraphIndex = offset + 1;
-    const edits = hunkIndex.edits.get(paragraphIndex) || [];
-    const edit = edits[0];
-
-    if (!edit) {
-      blocks.push({ kind: "paragraph", text: paragraph, paragraphIndex });
-    } else if (edit.hunk.status === "accepted") {
-      if (edit.hunk.type !== "delete") {
-        blocks.push({
-          kind: "paragraph",
-          text: blockForSettledReplace(paragraph, edit.hunk),
-          paragraphIndex,
-        });
-      }
-    } else if (edit.hunk.status === "rejected") {
-      blocks.push({ kind: "paragraph", text: paragraph, paragraphIndex });
-    } else {
-      blocks.push({ kind: "hunk", hunk: edit.hunk, hunkIndex: edit.index, paragraph });
-    }
-
-    pushInserts(paragraphIndex);
+export function resolveLocalHunkInBatches(batches, batchIndex, hunkIndex, resolved) {
+  const withReplacement = (source, text) => source.map((batch, index) => index !== batchIndex ? batch : {
+    ...batch,
+    hunks: batch.hunks.map((hunk, index) => index !== hunkIndex ? hunk : {
+      ...hunk,
+      status: "accepted",
+      new_text: text,
+      type: hunk.type === "delete" && text ? "replace" : hunk.type,
+    }),
   });
-
-  return blocks;
+  return {
+    baselineContent: contentAfterBatches(withReplacement(setAllHunkStatusInBatches(batches, "rejected"), resolved.oldText)),
+    currentContent: contentAfterBatches(withReplacement(batches, resolved.newText)),
+  };
 }

@@ -1,4 +1,5 @@
 """章节正文变更后保留章节笔记 — TDD。"""
+import hashlib
 import importlib
 import json
 import pytest
@@ -62,7 +63,10 @@ def test_update_node_content_preserves_chapter_notes(db_session):
     db_session.add(row)
     db_session.commit()
 
-    result = json.loads(nt._update_node_sync(node.id, content="手改后的正文"))
+    result = json.loads(nt._update_node_sync(
+        node.id, content="手改后的正文",
+        expected_content_sha256=hashlib.sha256("旧正文".encode()).hexdigest(),
+    ))
     assert result["success"] is True
 
     db_session.refresh(row)
@@ -78,7 +82,10 @@ def test_update_node_content_synchronizes_chapter_row(db_session):
     db_session.add(row)
     db_session.commit()
 
-    result = json.loads(nt._update_node_sync(node.id, content="新正文"))
+    result = json.loads(nt._update_node_sync(
+        node.id, content="新正文",
+        expected_content_sha256=hashlib.sha256("旧正文".encode()).hexdigest(),
+    ))
 
     assert result["success"] is True
     db_session.refresh(node)
@@ -185,7 +192,10 @@ def test_update_node_accepts_chapter_without_highlight_gate(db_session, marker):
     db_session.commit()
 
     weak_content = "正文铺陈。" * 160 + marker
-    result = json.loads(nt._update_node_sync(node.id, content=weak_content))
+    result = json.loads(nt._update_node_sync(
+        node.id, content=weak_content,
+        expected_content_sha256=hashlib.sha256("短草稿".encode()).hexdigest(),
+    ))
 
     assert result["success"] is True
     assert "plot_highlight_validation" not in result

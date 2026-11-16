@@ -1,0 +1,195 @@
+"""把一个节点复制到另一部作品。
+
+复制该节点、沿父子层级向下的全部下级，以及这些章节仍然引用得到的角色。
+角色 id 改写到目标作品里新建的角色上。下级之间的父子连线按新 id 重建。
+复制出来的树不挂到目标作品已有节点上。
+"""
+import copy
+import uuid
+from dataclasses import dataclass
+
+from sqlalchemy import func
+from sqlalchemy.orm import Session
+
+from models.chapter import Chapter
+from models.edge import Edge
+from models.node import Node
+from services.edge_relation import RELATION_HIERARCHY, derive_relation_kind
+from services.node_content_write_service import write_node_content
+
+
+@dataclass
+class NodeCopyResult:
+    nodes: list[Node]
+    edges: list[Edge]
+    omitted_character_refs: list[str]
+
+
+def copy_node_to_work(db: Session, source: Node, target_work_id: str) -> NodeCopyResult:
+    source_nodes = db.query(Node).filter(Node.work_id == source.work_id).all()
+    source_edges = db.query(Edge).filter(Edge.work_id == source.work_id).all()
+    nodes_by_id = {node.id: node for node in source_nodes}
+    children = _children_by_parent(nodes_by_id, source_edges)
+    structural = [nodes_by_id[node_id] for node_id in _subtree_ids(source.id, children)]
+    characters, omitted = _referenced_characters(structural, nodes_by_id)
+    copied_sources = structural + characters
+    id_map = {node.id: str(uuid.uuid4()) for node in copied_sources}
+    character_sort = _character_sort_orders(db, target_work_id, characters)
+    root_sort = _next_sort_order(db, target_work_id, source.type)
+
+    created_pairs = []
+    created_nodes = []
+    for source_node in copied_sources:
+        if source_node.id == source.id:
+            sort_order = root_sort
+        elif source_node.id in character_sort:
+            sort_order = character_sort[source_node.id]
+        else:
+            sort_order = source_node.sort_order
+        created = Node(
+            id=id_map[source_node.id],
+            work_id=target_work_id,
+            type=source_node.type,
+            title=source_node.title,
+            content="",
+            extra_data=_remap_extra(source_node.extra_data, id_map),
+            layer=source_node.layer,
+            sort_order=sort_order,
+            scope=source_node.scope,
+            position_x=0.0,
+            position_y=0.0,
+            locked=False,
+        )
+        created_pairs.append((source_node, created))
+        created_nodes.append(created)
+    db.add_all(created_nodes)
+    db.flush()
+
+    notes_by_id = _chapter_notes(db, [node.id for node in structural if node.type == "chapter"])
+    for source_node, created in created_pairs:
+        summary = notes_by_id.get(source_node.id, "") if created.type == "chapter" else None
+        write_node_content(db, created, source_node.content or "", summary=summary)
+
+    created_edges = []
+    for edge in source_edges:
+        new_source = id_map.get(edge.source_id)
+        new_target = id_map.get(edge.target_id)
+        if new_source is None or new_target is None:
+            continue
+        origin = nodes_by_id[edge.source_id]
+        dest = nodes_by_id[edge.target_id]
+        if derive_relation_kind(origin.type, dest.type) != RELATION_HIERARCHY:
+            continue
+        created_edges.append(Edge(
+            id=str(uuid.uuid4()),
+            work_id=target_work_id,
+            source_id=new_source,
+            target_id=new_target,
+            edge_type=edge.edge_type,
+            label=edge.label or "",
+            extra_data=copy.deepcopy(edge.extra_data or {}),
+        ))
+    db.add_all(created_edges)
+    db.commit()
+    for item in [*created_nodes, *created_edges]:
+        db.refresh(item)
+    return NodeCopyResult(
+        nodes=created_nodes,
+        edges=created_edges,
+        omitted_character_refs=omitted,
+    )
+
+
+def _children_by_parent(nodes_by_id, edges):
+    children = {}
+    for edge in edges:
+        source = nodes_by_id.get(edge.source_id)
+        target = nodes_by_id.get(edge.target_id)
+        if source is None or target is None:
+            continue
+        if derive_relation_kind(source.type, target.type) != RELATION_HIERARCHY:
+            continue
+        children.setdefault(source.id, []).append(target.id)
+    for child_ids in children.values():
+        child_ids.sort(key=lambda node_id: (nodes_by_id[node_id].sort_order, node_id))
+    return children
+
+
+def _subtree_ids(root_id, children):
+    ordered = []
+    seen = set()
+    queue = [root_id]
+    while queue:
+        current = queue.pop(0)
+        if current in seen:
+            continue
+        seen.add(current)
+        ordered.append(current)
+        queue.extend(children.get(current, []))
+    return ordered
+
+
+def _referenced_characters(structural, nodes_by_id):
+    characters = []
+    omitted = []
+    seen = set()
+    for node in structural:
+        if node.type != "chapter":
+            continue
+        raw = (node.extra_data or {}).get("characters")
+        if not isinstance(raw, list):
+            continue
+        for item in raw:
+            if not isinstance(item, dict) or not item.get("id"):
+                continue
+            character_id = item["id"]
+            if character_id in seen:
+                continue
+            seen.add(character_id)
+            character = nodes_by_id.get(character_id)
+            if character is None or character.type != "character":
+                omitted.append(character_id)
+                continue
+            characters.append(character)
+    return characters, omitted
+
+
+def _remap_extra(extra, id_map):
+    data = copy.deepcopy(extra or {})
+    characters = data.get("characters")
+    if not isinstance(characters, list):
+        return data
+    remapped = []
+    for item in characters:
+        if not isinstance(item, dict) or not item.get("id"):
+            remapped.append(item)
+            continue
+        new_id = id_map.get(item["id"])
+        if new_id is None:
+            continue
+        remapped.append({**item, "id": new_id})
+    data["characters"] = remapped
+    return data
+
+
+def _chapter_notes(db, chapter_ids):
+    if not chapter_ids:
+        return {}
+    rows = db.query(Chapter).filter(Chapter.node_id.in_(chapter_ids)).all()
+    return {row.node_id: row.notes or "" for row in rows}
+
+
+def _next_sort_order(db, work_id, node_type):
+    current = db.query(func.max(Node.sort_order)).filter(
+        Node.work_id == work_id,
+        Node.type == node_type,
+    ).scalar()
+    return int(current or 0) + 1
+
+
+def _character_sort_orders(db, work_id, characters):
+    if not characters:
+        return {}
+    start = _next_sort_order(db, work_id, "character")
+    ordered = sorted(characters, key=lambda node: (node.sort_order, node.id))
+    return {node.id: start + index for index, node in enumerate(ordered)}

@@ -44,7 +44,7 @@ def run(monkeypatch, responses, handler):
     tool = StructuredTool.from_function(coroutine=handler, name="submit_test",
                                         description="提交", args_schema=Submission, return_direct=True)
     task = {"operation": "revise", "target": {"content": "全文" * 4000},
-            "brief": {"revision_scope": "只改指定段落"}}
+            "brief": "只改指定段落"}
     result = asyncio.run(invoke_isolated_subagent(
         name="writer", system_prompt="完整规则", task=task, tools=[tool]))
     return result, model, task
@@ -151,3 +151,39 @@ def test_multiple_submissions_are_rejected_before_side_effects(monkeypatch):
     _, model, _ = run(monkeypatch, [batch, call("fixed")], submit)
     assert called == ["fixed"]
     assert all(message.status == "error" for message in model.seen[1][-2:])
+
+
+def test_isolated_subagent_inherits_session_for_model_headers(monkeypatch):
+    async def submit(value):
+        return '成功'
+    token = set_context({'session_id': 'session-123', 'work_id': 'w'})
+    try:
+        _, model, _ = run(monkeypatch, [call('ok')], submit)
+        assert model.contexts[0]['session_id'] == 'session-123'
+    finally:
+        reset_context(token)
+
+
+def test_stream_reports_validation_and_correction_before_requesting_again(monkeypatch):
+    from langchain_core.messages import AIMessageChunk
+    class StreamModel(Model):
+        async def astream(self, messages, config=None):
+            self.seen.append(list(messages))
+            value = {} if len(self.seen) == 1 else {'value': '完整结果'}
+            yield AIMessageChunk(content='', tool_call_chunks=[{
+                'name': 'submit_test', 'id': str(len(self.seen)), 'index': 0,
+                'args': json.dumps(value, ensure_ascii=False)}])
+    model = StreamModel([])
+    monkeypatch.setattr('services.agents.llm.get_deep_agent_model', lambda **kw: model)
+    async def submit(value):
+        return value
+    events = []
+    async def emit(event, data):
+        events.append((event, data))
+    tool = StructuredTool.from_function(coroutine=submit, name='submit_test', description='提交', args_schema=Submission)
+    asyncio.run(invoke_isolated_subagent(name='storyboard_designer', system_prompt='完整规则', task={}, tools=[tool], emit=emit))
+    progress = [data for event, data in events if event == 'stage_progress']
+    assert [data['stage'] for data in progress] == ['validating', 'correcting', 'validating']
+    assert progress[1]['attempt'] == 1 and progress[1]['detail']
+    starts = [data['label'] for event, data in events if event == 'stage_start']
+    assert starts[1] == '正在修正提交（第 1 次）'

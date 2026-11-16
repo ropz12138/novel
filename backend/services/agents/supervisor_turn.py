@@ -1,7 +1,8 @@
-"""Supervisor 单轮收口：按评审强度限制迭代，结束工具转为用户可见终态。"""
+"""Supervisor 持续执行，结束工具转为用户可见终态。"""
 from __future__ import annotations
 
 import json
+from math import inf
 from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
@@ -16,14 +17,14 @@ HIGH_SUPERVISOR_TOOL_CALL_LIMIT = 80
 HIGH_SUPERVISOR_GRAPH_RECURSION_LIMIT = 200
 
 
-def get_supervisor_iteration_limits(chapter_review_intensity: str) -> tuple[int, int]:
-    if chapter_review_intensity == "high":
-        return HIGH_SUPERVISOR_TOOL_CALL_LIMIT, HIGH_SUPERVISOR_GRAPH_RECURSION_LIMIT
-    return SUPERVISOR_TOOL_CALL_LIMIT, SUPERVISOR_GRAPH_RECURSION_LIMIT
+def get_supervisor_iteration_limits(chapter_review_intensity: str) -> tuple[int | float, int | float]:
+    """所有评审强度均不限工具调用次数和图执行步数。"""
+    return inf, inf
 
 SUPERVISOR_TOOL_LIMIT_INSTRUCTION = """You have reached the maximum number of tool rounds for this turn.
 Call respond_to_user now with a complete user-visible reply.
 Summarize what was finished, what was not, and what the user can do next.
+Set outcome to needs_revision for unfinished execution or verification, needs_user for a pending author decision, or completed for fully finished work.
 Do not call any other tool.
 """
 
@@ -215,7 +216,7 @@ def terminal_respond_to_user_message(messages: list[BaseMessage]) -> AIMessage |
                 continue
             if result.tool_call_id and call.get("id") != result.tool_call_id:
                 continue
-            reply = str(_tool_args(call).get("message") or "").strip()
+            reply = str(payload.get("message") or _tool_args(call).get("message") or "").strip()
             if reply:
                 return AIMessage(content=reply)
         return None

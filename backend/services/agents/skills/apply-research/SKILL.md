@@ -6,7 +6,7 @@ description: Supervisor 将研究全文转化为当前作品可用技法。
 # 应用研究成果
 
 本技能由 Supervisor 亲自执行。参考规则通过 `read_skill_reference` 按阶段完整加载，工具仅负责读取与保存。
-参考文件中的结构化输出格式用于组织工作记录；章节正文创作交给 `run_writing_agent`，其他节点使用节点工具保存，用户回复使用 `respond_to_user`。
+参考文件中的结构化输出格式用于组织工作记录；章节正文通过 `update_node` 保存，其他节点使用节点工具保存，用户回复使用 `respond_to_user`。
 
 ## 完成标准
 

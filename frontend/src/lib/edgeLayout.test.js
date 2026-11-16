@@ -4,7 +4,6 @@ import {
   applyEdgeLabelAvoidance,
   normalizeEdgeLayout,
   resolveOptimalSides,
-  edgeHandlesFromSides,
   applyEdgeHandles,
   isHierarchyChainEdge,
   resolveHierarchyChainSides,
@@ -95,27 +94,6 @@ describe("edge layout", () => {
       node("c1", 0, 0, "chapter"),
       node("c2", 400, 0, "chapter"),
     )).toEqual({ source_side: "bottom", target_side: "top" });
-  });
-
-  it("applyEdgeHandles assigns relation handles with rel- prefix", () => {
-    const nodes = [node("a", 0, 0, "character"), node("b", 0, 300, "character")];
-    const [laidOut] = applyEdgeHandles(
-      nodes,
-      [edge("e1", "a", "b")],
-      { relation: true },
-    );
-    expect(laidOut.sourceHandle).toBe("rel-source-bottom");
-    expect(laidOut.targetHandle).toBe("rel-target-top");
-  });
-
-  it("edgeHandlesFromSides supports relation prefix", () => {
-    expect(edgeHandlesFromSides(
-      { source_side: "right", target_side: "left" },
-      { relation: true },
-    )).toEqual({
-      sourceHandle: "rel-source-right",
-      targetHandle: "rel-target-left",
-    });
   });
 
   it("normalizes agent-editable layout without label positioning fields", () => {
