@@ -1,5 +1,9 @@
+"""create_node / update_node 不再接受 chapter_elements。"""
 import importlib
 import json
+
+import pytest
+from pydantic import ValidationError
 
 import database
 from models.node import Node
@@ -35,74 +39,43 @@ def test_create_element_node_is_rejected(monkeypatch):
         db.close()
 
 
-def test_create_chapter_accepts_chapter_elements(monkeypatch):
+def test_create_and_update_schemas_reject_chapter_elements():
+    with pytest.raises(ValidationError):
+        nt.CreateNodeInput(node_type="chapter", title="第一章", sort_order=1, chapter_elements=[{"title": "觉醒"}])
+    with pytest.raises(ValidationError):
+        nt.UpdateNodeInput(node_id="n1", chapter_elements=[{"title": "仓库醒来"}])
+    assert "chapter_elements" not in str(nt.CreateNodeInput.model_json_schema())
+    assert "chapter_elements" not in str(nt.UpdateNodeInput.model_json_schema())
+
+
+def test_update_strips_existing_chapter_elements(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync(
-            "chapter",
-            "第一章",
-            content="草稿",
-            position_x=0,
-            position_y=0,
-            chapter_elements=[
-                {"title": "主角觉醒", "content": "林远第一次感知时间异常", "priority": "high"},
-            ],
-         sort_order=1,))
-        assert result["success"] is True
-        node = db.query(Node).filter(Node.work_id == work.id, Node.type == "chapter").first()
-        assert node.extra_data["chapter_elements"][0]["title"] == "主角觉醒"
-        assert node.extra_data["chapter_elements"][0]["priority"] == "high"
-    finally:
-        db.close()
-
-
-def test_create_non_chapter_rejects_chapter_elements(monkeypatch):
-    db = database.SessionLocal()
-    try:
-        _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync(
-            "plot",
-            "情节",
-            position_x=0,
-            position_y=0,
-            chapter_elements=[{"title": "不该出现"}],
-         sort_order=1,))
-        assert result["error"] == "chapter_elements 只能用于 chapter 节点"
-    finally:
-        db.close()
-
-
-def test_update_chapter_elements_preserves_other_extra_data(monkeypatch):
-    db = database.SessionLocal()
-    try:
-        work = _make_work(monkeypatch, db)
-        node = Node(sort_order=0, 
+        node = Node(sort_order=0,
             work_id=work.id,
             type="chapter",
             title="第一章",
             content="草稿",
-            extra_data={"last_generation": {"ok": True}},
+            extra_data={"last_generation": {"ok": True}, "chapter_elements": [{"title": "仓库醒来"}]},
         )
         db.add(node)
         db.commit()
 
-        result = json.loads(nt._update_node_sync(
-            node.id,
-            chapter_elements=[{"title": "仓库醒来", "content": "男主在仓库恢复意识"}],
-        ))
+        result = json.loads(nt._update_node_sync(node.id, title="第一章·改"))
         assert result["success"] is True
         db.refresh(node)
+        assert node.title == "第一章·改"
         assert node.extra_data["last_generation"] == {"ok": True}
-        assert node.extra_data["chapter_elements"][0]["title"] == "仓库醒来"
+        assert "chapter_elements" not in (node.extra_data or {})
     finally:
         db.close()
 
 
-def test_batch_create_chapter_accepts_chapter_elements(monkeypatch):
+def test_batch_create_rejects_chapter_elements(monkeypatch):
     db = database.SessionLocal()
     try:
-        work = _make_work(monkeypatch, db)
+        _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
             {
                 "sort_order": 1, "node_type": "chapter",
@@ -112,8 +85,7 @@ def test_batch_create_chapter_accepts_chapter_elements(monkeypatch):
                 "chapter_elements": [{"title": "暗金瞳", "content": "眼瞳异常被注意到"}],
             },
         ]))
-        assert result["success"] is True
-        node = db.query(Node).filter(Node.work_id == work.id, Node.title == "第二章").first()
-        assert node.extra_data["chapter_elements"][0]["content"] == "眼瞳异常被注意到"
+        assert "error" in result
+        assert "chapter_elements" in result["error"]
     finally:
         db.close()

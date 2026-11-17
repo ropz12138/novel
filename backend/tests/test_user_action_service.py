@@ -149,8 +149,8 @@ def test_has_substantial_node_change_detects_content():
     assert svc.has_substantial_node_change({"content": "新内容"}) is True
 
 
-def test_has_substantial_node_change_detects_chapter_elements():
-    assert svc.has_substantial_node_change({"chapter_elements": []}) is True
+def test_has_substantial_node_change_detects_characters():
+    assert svc.has_substantial_node_change({"characters": []}) is True
 
 
 def test_has_substantial_node_change_detects_storylines():

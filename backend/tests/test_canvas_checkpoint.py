@@ -74,7 +74,7 @@ def test_capture_and_restore_canvas_checkpoint(db_session, mock_auth):
     work = _make_work(db_session, mock_auth.id)
     session = _make_session(db_session, mock_auth.id, work.id)
 
-    n1 = Node(sort_order=0, work_id=work.id, type="outline", title="N1", layer=0)
+    n1 = Node(sort_order=0, work_id=work.id, type="note", title="N1", layer=0)
     db_session.add(n1)
     db_session.commit()
     db_session.refresh(n1)
@@ -105,7 +105,7 @@ def test_prepare_edit_resend_restores_and_truncates(db_session, mock_auth):
     work = _make_work(db_session, mock_auth.id)
     session = _make_session(db_session, mock_auth.id, work.id)
 
-    n1 = Node(sort_order=0, work_id=work.id, type="outline", title="keep", layer=0)
+    n1 = Node(sort_order=0, work_id=work.id, type="note", title="keep", layer=0)
     db_session.add(n1)
     db_session.commit()
     db_session.refresh(n1)

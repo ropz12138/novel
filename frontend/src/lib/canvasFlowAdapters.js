@@ -15,12 +15,6 @@ export function applyNodeUpdateToData(previous, update) {
     notes: update.notes ?? previous.notes,
     sort_order: update.sort_order ?? previous.sort_order,
   };
-  if (update.chapter_elements !== undefined) {
-    next.extra_data = {
-      ...(previous.extra_data || {}),
-      chapter_elements: update.chapter_elements,
-    };
-  }
   if (update.characters !== undefined) {
     next.extra_data = {
       ...(next.extra_data || previous.extra_data || {}),

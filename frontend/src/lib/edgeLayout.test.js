@@ -5,8 +5,6 @@ import {
   normalizeEdgeLayout,
   resolveOptimalSides,
   applyEdgeHandles,
-  isHierarchyChainEdge,
-  resolveHierarchyChainSides,
 } from "./edgeLayout";
 import { ELEMENT_SIZE, NODE_HEIGHT, NODE_WIDTH } from "./nodeDimensions";
 
@@ -51,21 +49,6 @@ describe("edge layout", () => {
     });
   });
 
-  it("hierarchy chain nodes always use bottom to top", () => {
-    expect(isHierarchyChainEdge(
-      node("o", 0, 0, "outline"),
-      node("v", 500, 0, "volume"),
-    )).toBe(true);
-    expect(resolveOptimalSides(
-      node("o", 0, 0, "outline"),
-      node("v", 500, 0, "volume"),
-    )).toEqual(resolveHierarchyChainSides());
-    expect(resolveOptimalSides(
-      node("p", 0, 100, "plot"),
-      node("c", 0, 500, "chapter"),
-    )).toEqual({ source_side: "bottom", target_side: "top" });
-  });
-
   it("resolveOptimalSides reverses when target is above source", () => {
     expect(resolveOptimalSides(node("a", 0, 300, "element"), node("b", 0, 0, "character"))).toEqual({
       source_side: "top",
@@ -80,20 +63,9 @@ describe("edge layout", () => {
     expect(laidOut.targetHandle).toBe("target-left");
   });
 
-  it("applyEdgeHandles uses bottom-top for hierarchy chain edges", () => {
-    const nodes = [node("a", 0, 0, "outline"), node("b", 400, 0, "volume")];
-    const [laidOut] = applyEdgeHandles(nodes, [edge("e1", "a", "b")]);
-    expect(laidOut.sourceHandle).toBe("source-bottom");
-    expect(laidOut.targetHandle).toBe("target-top");
-  });
-
-  it("same-type chain nodes no longer get a dedicated right-to-left rule", () => {
-    // 同级连线已非法，chapter↔chapter 不再有专用端点规则，
-    // 落回层级链的下→上，避免为不可能存在的边保留特例
-    expect(resolveOptimalSides(
-      node("c1", 0, 0, "chapter"),
-      node("c2", 400, 0, "chapter"),
-    )).toEqual({ source_side: "bottom", target_side: "top" });
+  it("同尺寸章节端点根据相对位置计算", () => {
+    expect(resolveOptimalSides(node("c1", 0, 0, "chapter"), node("c2", 400, 0, "chapter")))
+      .toEqual({ source_side: "right", target_side: "left" });
   });
 
   it("normalizes agent-editable layout without label positioning fields", () => {

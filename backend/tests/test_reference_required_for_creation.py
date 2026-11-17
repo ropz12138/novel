@@ -20,7 +20,7 @@ def test_supervisor_requires_reference_even_for_a_complete_existing_plan():
 
 def test_all_creation_skills_include_the_reference_prerequisite():
     for skill in ('bootstrap-novel', 'design-worldbuilding', 'design-characters',
-                  'plan-outline', 'plan-story-structure', 'plan-chapter-scenes', 'write-chapter'):
+                  'plan-story-structure', 'plan-chapter-scenes', 'write-chapter'):
         text = (ROOT / 'skills' / skill / 'SKILL.md').read_text()
         assert 'run_reference_agent' in text, skill
         assert '必经环节' in text, skill

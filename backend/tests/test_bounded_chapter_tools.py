@@ -26,23 +26,10 @@ def structured_work(db_session):
     db_session.add(work)
     db_session.flush()
 
-    outline = Node(work_id=work.id, type="outline", title="总纲", sort_order=1)
-    volumes = [Node(work_id=work.id, type="volume", title=f"第{i}卷", sort_order=i) for i in (1, 2)]
-    plots = [Node(work_id=work.id, type="plot", title=f"情节{i}", sort_order=1) for i in (1, 2)]
-    chapters = [
-        Node(work_id=work.id, type="chapter", title=f"章节{i}", sort_order=order,
-             content=f"正文{i}尾部-{i}")
-        for i, order in ((1, 1), (2, 2), (3, 1), (4, 2), (5, 3), (6, 4))
-    ]
-    db_session.add_all([outline, *volumes, *plots, *chapters])
+    chapters = [Node(work_id=work.id, type="chapter", title=f"章节{i}", sort_order=i,
+                     content=f"正文{i}尾部-{i}") for i in range(1, 7)]
+    db_session.add_all(chapters)
     db_session.flush()
-    pairs = [
-        (outline, volumes[0]), (outline, volumes[1]),
-        (volumes[0], plots[0]), (volumes[1], plots[1]),
-        (plots[0], chapters[0]), (plots[0], chapters[1]),
-        *[(plots[1], chapter) for chapter in chapters[2:]],
-    ]
-    db_session.add_all([Edge(work_id=work.id, source_id=a.id, target_id=b.id, edge_type="contains") for a, b in pairs])
     for i, chapter in enumerate(chapters, 1):
         db_session.add(Chapter(work_id=work.id, node_id=chapter.id, title=chapter.title,
                                content=chapter.content, notes=f"笔记{i}尾部-{i}"))
@@ -52,7 +39,7 @@ def structured_work(db_session):
     set_context({})
 
 
-def test_catalog_uses_hierarchy_then_sibling_sort_order(structured_work):
+def test_catalog_uses_work_chapter_sort_order(structured_work):
     from services.agents.tools.workflow_skill_tools import list_chapters
     _, chapters = structured_work
     result = invoke(list_chapters, limit=20)
@@ -124,8 +111,8 @@ def test_grep_can_locate_notes_and_metadata_without_returning_full_field(structu
     notes = invoke(grep_nodes, keywords=["笔记1尾部"], fields=["notes"], node_type="chapter")
     assert notes["matches"][0]["field_path"] == "notes"
     assert "context" not in notes["matches"][0]
-    metadata = invoke(grep_nodes, keywords=["晶核"], fields=["extra_data.chapter_elements"], node_type="chapter")
-    assert metadata["matches"][0]["field_path"] == "extra_data.chapter_elements[0].content"
+    metadata = invoke(grep_nodes, keywords=["沈砚"], fields=["extra_data.characters"], node_type="chapter")
+    assert metadata["matches"][0]["field_path"] == "extra_data.characters[0].name"
     assert metadata["matches"][0]["node_id"] == chapters[0].id
 
 

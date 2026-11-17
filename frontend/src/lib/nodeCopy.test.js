@@ -9,8 +9,6 @@ function flowNode(id, type, label, extra = {}) {
 }
 
 const nodes = [
-  flowNode("vol", "volume", "第一卷"),
-  flowNode("plot", "plot", "开端"),
   flowNode("ch", "chapter", "第一章", {
     characters: [
       { id: "hero", name: "林舟" },
@@ -34,10 +32,10 @@ const edges = [
 
 describe("describeNodeCopy", () => {
   it("counts hierarchy descendants and distinct characters, ignoring same-level edges", () => {
-    expect(describeNodeCopy(nodes, edges, "vol")).toEqual({
-      rootId: "vol",
-      title: "第一卷",
-      descendantCount: 3,
+    expect(describeNodeCopy(nodes, edges, "ch")).toEqual({
+      rootId: "ch",
+      title: "第一章",
+      descendantCount: 0,
       characterCount: 1,
       omittedCount: 1,
     });
@@ -55,8 +53,8 @@ describe("describeNodeCopy", () => {
 
 describe("copyDialogText", () => {
   it("describes a subtree, a single node, a missing node, and stale character refs", () => {
-    expect(copyDialogText(describeNodeCopy(nodes, edges, "vol"))).toBe(
-      "「第一卷」会连同下级 3 个节点、章节引用的 1 个角色，一起复制到所选作品，并作为独立结构放在那里。有 1 条已失效的角色引用不会带过去。",
+    expect(copyDialogText(describeNodeCopy(nodes, edges, "ch"))).toBe(
+      "「第一章」会连同章节引用的 1 个角色，一起复制到所选作品，并作为独立结构放在那里。有 1 条已失效的角色引用不会带过去。",
     );
     expect(copyDialogText(describeNodeCopy(nodes, edges, "note"))).toBe(
       "「写作要求」会复制到所选作品，并作为独立结构放在那里。",

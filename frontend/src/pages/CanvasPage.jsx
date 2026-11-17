@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { useNavigate } from "react-router-dom";
-import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft, Users, Gauge } from "lucide-react";
+import { Bot, User, Settings, LogOut, BookOpen, ChevronLeft, Gauge } from "lucide-react";
 import Canvas from "../components/Canvas";
 import ModelConfigDialog from "../components/ModelConfigDialog";
 import TtsConfigDialog from "../components/TtsConfigDialog";
@@ -40,7 +40,6 @@ function getStoredChatWidth() {
 export function CanvasPage({ appMode = IS_NATIVE_APP }) {
   const navigate = useNavigate();
   const [showChat, setShowChat] = useState(() => !appMode);
-  const [showCharactersPanel, setShowCharactersPanel] = useState(() => !appMode);
   const [nodeEditing, setNodeEditing] = useState(false);
   const [agentDraft, setAgentDraft] = useState("");
   const [modifiedNodes, setModifiedNodes] = useState([]);
@@ -353,10 +352,6 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
       if (canvasRef.current?.closeNodeDetail?.()) {
         return;
       }
-      if (showCharactersPanel) {
-        setShowCharactersPanel(false);
-        return;
-      }
       exitNativeApp();
     };
     subscribeAppBack(handleBack).then((remove) => {
@@ -367,7 +362,7 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
       disposed = true;
       unsubscribe?.();
     };
-  }, [appMode, showChat, showCharactersPanel]);
+  }, [appMode, showChat]);
 
   const handleChatResizeStart = useCallback((event) => {
     if (event.button !== 0) return;
@@ -599,17 +594,6 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
           </div>
         ) : (
           <>
-            {appMode && !showCharactersPanel && (
-              <button
-                type="button"
-                aria-label="展开角色与设定"
-                title="展开角色与设定"
-                onClick={() => setShowCharactersPanel(true)}
-                className="absolute right-3 top-3 z-30 flex h-9 w-9 items-center justify-center rounded-full border border-slate-200/90 bg-white/95 text-slate-500 shadow-[0_8px_20px_rgba(15,23,42,0.12)] backdrop-blur hover:bg-violet-50 hover:text-violet-600"
-              >
-                <Users className="h-4 w-4" />
-              </button>
-            )}
             <div className="min-w-0 flex-1 transition-all duration-300">
               <Canvas
                 key={currentWorkId}
@@ -626,8 +610,6 @@ export function CanvasPage({ appMode = IS_NATIVE_APP }) {
                 onNodeNotesDiffsRefresh={handleNodeNotesDiffsReset}
                 agentRunning={agentRunning}
                 appMode={appMode}
-                charactersPanelOpen={showCharactersPanel}
-                onCharactersPanelOpenChange={setShowCharactersPanel}
                 onNodeEditingChange={setNodeEditing}
               />
             </div>

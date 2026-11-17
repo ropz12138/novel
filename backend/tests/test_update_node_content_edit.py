@@ -278,7 +278,7 @@ def test_metadata_update_and_structured_arrays_keep_their_fields():
         hero = Node(work_id=node.work_id, type="character", title="林舟", sort_order=1, content="赶路", scope="major")
         db.add(hero)
         db.commit()
-        node.extra_data = {"chapter_elements": [{"id": "e1", "title": "出发", "content": "清晨"}], "characters": []}
+        node.extra_data = {"keep": {"ok": True}, "chapter_elements": [{"id": "e1", "title": "出发", "content": "清晨"}], "characters": []}
         node.scope = "local"
         db.commit()
         added = json.loads(nt._update_node_sync(
@@ -288,13 +288,15 @@ def test_metadata_update_and_structured_arrays_keep_their_fields():
         assert added["success"] is True
         db.refresh(node)
         assert node.content == original
-        assert node.extra_data["chapter_elements"][0]["title"] == "出发"
+        assert "chapter_elements" not in (node.extra_data or {})
+        assert node.extra_data["keep"] == {"ok": True}
         assert node.extra_data["characters"] == [{"id": hero.id, "name": "林舟"}]
         cleared = json.loads(nt._update_node_sync(node.id, characters=[]))
         assert cleared["success"] is True
         db.refresh(node)
         assert node.extra_data["characters"] == []
-        assert node.extra_data["chapter_elements"][0]["title"] == "出发"
+        assert "chapter_elements" not in (node.extra_data or {})
+        assert node.extra_data["keep"] == {"ok": True}
         kept = json.loads(nt._update_node_sync(node.id, title="只改标题"))
         assert kept["success"] is True
         db.refresh(node)
@@ -306,7 +308,8 @@ def test_metadata_update_and_structured_arrays_keep_their_fields():
         assert viewed["position_x"] == 4
         assert viewed["position_y"] == 5
         assert viewed["locked"] is False
-        assert viewed["extra_data"]["chapter_elements"][0]["content"] == "清晨"
+        assert "chapter_elements" not in viewed["extra_data"]
+        assert viewed["extra_data"]["keep"] == {"ok": True}
         assert "content" not in viewed
         assert viewed["content_paragraphs"][0]["text"].startswith("苏瑶")
     finally:

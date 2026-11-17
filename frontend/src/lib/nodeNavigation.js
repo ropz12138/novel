@@ -3,8 +3,8 @@ import { HIERARCHY_CHAIN } from "./canvasRelation";
 
 const NAVIGATION_GROUPS = [...HIERARCHY_CHAIN, "character", "worldbuilding", "note", "reviewer_note"];
 
-export function firstOutlineNode(nodes) {
-  return orderedNavigationNodes(nodes).find((node) => node.type === "outline") ?? null;
+export function firstChapterNode(nodes) {
+  return orderedNavigationNodes(nodes).find((node) => node.type === "chapter") ?? null;
 }
 
 export function orderedNavigationNodes(nodes) {

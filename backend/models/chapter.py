@@ -18,5 +18,4 @@ class Chapter(Base):
     # 复用既有文本列，历史摘要直接作为章节笔记读取。
     notes = Column("summary", Text, default="")
     summary = synonym("notes")
-    outline_binding_id = Column(String(36), nullable=True)
     node_id = Column(String(36), ForeignKey("nodes.id", ondelete="SET NULL"), nullable=True, index=True)

@@ -52,7 +52,7 @@ def test_create_non_character_rejects_storylines(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._create_node_sync(
-            "plot",
+            "note",
             "情节",
             position_x=0,
             position_y=0,

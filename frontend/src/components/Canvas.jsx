@@ -22,10 +22,11 @@ import {
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
 import CustomNode from "./nodes/CustomNode";
-import IsolatedNodePanel from "./nodes/IsolatedNodePanel";
+import { WorkbenchSidebar } from "./WorkbenchSidebar";
+import ExplorerPanel, { NEW_NODE_TITLES } from "./ExplorerPanel";
 import CustomEdge from "./edges/CustomEdge";
 import NodeDetailDrawer from "./nodes/NodeDetailDrawer";
-import { firstOutlineNode, orderedNavigationNodes } from "../lib/nodeNavigation";
+import { firstChapterNode, orderedNavigationNodes } from "../lib/nodeNavigation";
 import { paragraphSpan } from "../lib/agentParagraphs";
 import {
   fetchNodes,
@@ -121,6 +122,23 @@ export { applyNodeUpdateToData, mergeRefreshedNodes, toCanvasSnapshot };
 
 const snapshotKey = canvasSnapshotKey;
 
+const EXPLORER_WIDTH_KEY = "novel_workbench_explorer_width";
+const EXPLORER_COLLAPSED_KEY = "novel_workbench_explorer_collapsed";
+const DEFAULT_EXPLORER_WIDTH = 260;
+
+function readExplorerWidth() {
+  if (typeof window === "undefined") return DEFAULT_EXPLORER_WIDTH;
+  const raw = window.localStorage.getItem(EXPLORER_WIDTH_KEY);
+  const value = Number(raw);
+  return Number.isFinite(value) ? value : DEFAULT_EXPLORER_WIDTH;
+}
+
+function readExplorerCollapsed() {
+  if (typeof window === "undefined") return false;
+  return window.localStorage.getItem(EXPLORER_COLLAPSED_KEY) === "true";
+}
+
+
 const Canvas = memo(forwardRef(function Canvas({ workId, works = [], onAddContext, onNodeEdited, nodeContentDiffs = {}, nodeNotesDiffs = {}, onNodeContentDiffChange, onNodeNotesDiffChange, onNodeContentDiffsRefresh, onNodeNotesDiffsRefresh, agentRunning, appMode = false, charactersPanelOpen = true, onCharactersPanelOpenChange, onNodeEditingChange }, ref) {
   return (
     <ReactFlowProvider>
@@ -133,11 +151,15 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
   const [nodes, setNodes, onNodesChange] = useNodesState([]);
   const [edges, setEdges, onEdgesChange] = useEdgesState([]);
   const [contextMenu, setContextMenu] = useState(null);
+  const [explorerWidth, setExplorerWidth] = useState(readExplorerWidth);
+  const [explorerCollapsed, setExplorerCollapsed] = useState(readExplorerCollapsed);
   const [copyDialog, setCopyDialog] = useState(null);
   const [copying, setCopying] = useState(false);
   const [copyError, setCopyError] = useState("");
   const [copyNotice, setCopyNotice] = useState("");
   const [selectedNode, setSelectedNode] = useState(null);
+  const [selectedIds, setSelectedIds] = useState([]);
+
   const [loadError, setLoadError] = useState("");
   // 视图状态在挂载时同步读取：defaultViewport 只在挂载生效，晚一帧就来不及
   const [initialViewState] = useState(() =>
@@ -177,6 +199,14 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
     if (stack.length && snapshotKey(stack[stack.length - 1]) === snapshotKey(value)) return;
     undoStackRef.current = [...stack.slice(-29), value];
   }, []);
+
+  useEffect(() => {
+    window.localStorage.setItem(EXPLORER_WIDTH_KEY, String(explorerWidth));
+  }, [explorerWidth]);
+
+  useEffect(() => {
+    window.localStorage.setItem(EXPLORER_COLLAPSED_KEY, String(explorerCollapsed));
+  }, [explorerCollapsed]);
 
   useEffect(() => {
     if (workId) {
@@ -306,6 +336,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
       });
 
       selectedNodeIdsRef.current = selectedNodeIdsRef.current.filter((id) => !idSet.has(id));
+      setSelectedIds((prev) => prev.filter((id) => !idSet.has(id)));
       setSelectedNode((prev) => (prev && idSet.has(prev.id) ? null : prev));
     } catch (err) {
       console.error("Failed to delete nodes:", err);
@@ -359,7 +390,7 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
         nodesRef.current = next;
         return next;
       });
-      // 同步更新抽屉里的节点（即时显示新内容，含 chapter_elements）
+      // 同步更新抽屉里的节点（即时显示新内容）
       setSelectedNode((prev) =>
         prev && prev.id === nodeId ? applyNodeUpdateToData(prev, localData) : prev
       );
@@ -434,6 +465,8 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
       closeNodeDetail: () => {
         if (!selectedNode) return false;
         setSelectedNode(null);
+        setSelectedIds([]);
+        selectedNodeIdsRef.current = [];
         return true;
       },
       openNodeDetail: (nodeId, quote, diffTarget) => {
@@ -644,41 +677,74 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
     try {
       pushUndoSnapshot();
 
-      // 位置由布局推导，不再计算坐标；顺序排在同类型节点末尾
       const created = await createNode(workId, {
         type,
-        title: `新${type}节点`,
+        title: NEW_NODE_TITLES[type] || `新${type}`,
         content: "",
         sort_order: nextSortOrder(nodesRef.current, type),
+        ...(type === "character" ? { scope: "minor" } : {}),
       });
 
+      const flowNode = {
+        id: created.id,
+        type: "custom",
+        position: { x: 0, y: 0 },
+        data: {
+          type: created.type,
+          label: created.title,
+          content: created.content,
+          extra_data: created.extra_data,
+          layer: created.layer ?? 0,
+          sort_order: created.sort_order ?? 0,
+          scope: created.scope ?? (type === "character" ? "minor" : "local"),
+          locked: created.locked ?? false,
+          created_at: created.created_at,
+        },
+      };
+
       setNodes((nds) => {
-        const next = [
-          ...nds,
-          {
-            id: created.id,
-            type: "custom",
-            position: { x: 0, y: 0 },
-            data: {
-              type: created.type,
-              label: created.title,
-              content: created.content,
-              extra_data: created.extra_data,
-              layer: created.layer ?? 0,
-              sort_order: created.sort_order ?? 0,
-              scope: created.scope ?? "local",
-              locked: created.locked ?? false,
-              created_at: created.created_at,
-            },
-          },
-        ];
+        const next = [...nds, flowNode];
         nodesRef.current = next;
         return next;
       });
+      selectedNodeIdsRef.current = [created.id];
+      setSelectedIds([created.id]);
+      setSelectedNode({ id: created.id, ...flowNode.data });
     } catch (err) {
       console.error("Failed to create node:", err);
     }
   };
+
+  const handleReorderChapters = useCallback(async (orderedIds) => {
+    const orderById = new Map((orderedIds || []).map((id, index) => [id, index]));
+    if (!orderById.size) return;
+    const previous = nodesRef.current;
+    const changed = [];
+    const next = previous.map((node) => {
+      if (node.data?.type !== "chapter" || !orderById.has(node.id)) return node;
+      const sort_order = orderById.get(node.id);
+      if ((node.data.sort_order ?? 0) === sort_order) return node;
+      changed.push({ id: node.id, sort_order });
+      return { ...node, data: { ...node.data, sort_order } };
+    });
+    if (!changed.length) return;
+    pushUndoSnapshot(toCanvasSnapshot(previous, edgesRef.current));
+    nodesRef.current = next;
+    setNodes(next);
+    setSelectedNode((prev) => (
+      prev && orderById.has(prev.id)
+        ? { ...prev, sort_order: orderById.get(prev.id) }
+        : prev
+    ));
+    try {
+      await Promise.all(changed.map((item) => updateNode(item.id, { sort_order: item.sort_order })));
+    } catch (err) {
+      nodesRef.current = previous;
+      setNodes(previous);
+      console.error("Failed to reorder chapters:", err);
+      alert("调整章节顺序失败：" + (err?.message || "未知错误"));
+    }
+  }, [setNodes, pushUndoSnapshot]);
 
   const handleDeleteEdge = async (edgeId) => {
     try {
@@ -698,17 +764,36 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
     refreshData();
   };
 
-  const outlineTarget = firstOutlineNode(nodes);
-  const handleFocusOutline = useCallback(() => {
-    if (!outlineTarget) return;
+  const chapterTarget = firstChapterNode(nodes);
+  const handleFocusChapter = useCallback(() => {
+    if (!chapterTarget) return;
     fitView({
-      nodes: [{ id: outlineTarget.id }],
+      nodes: [{ id: chapterTarget.id }],
       padding: 0.35,
       duration: 300,
     });
-  }, [fitView, outlineTarget]);
+  }, [fitView, chapterTarget]);
 
-  const handleNodeClick = useCallback((nodeData) => {
+  const handleNodeClick = useCallback((nodeData, event) => {
+    if (!nodeData) {
+      setSelectedNode(null);
+      setSelectedIds([]);
+      selectedNodeIdsRef.current = [];
+      return;
+    }
+    const multi = event?.metaKey || event?.ctrlKey;
+    if (multi) {
+      const current = new Set(selectedNodeIdsRef.current);
+      if (current.has(nodeData.id)) current.delete(nodeData.id);
+      else current.add(nodeData.id);
+      const nextIds = [...current];
+      selectedNodeIdsRef.current = nextIds;
+      setSelectedIds(nextIds);
+      setSelectedNode(nodeData);
+      return;
+    }
+    selectedNodeIdsRef.current = [nodeData.id];
+    setSelectedIds([nodeData.id]);
     setSelectedNode(nodeData);
   }, []);
 
@@ -721,6 +806,9 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
   const navigationNodes = useMemo(() => orderedNavigationNodes(nodes), [nodes]);
 
   const handleChapterNavigate = useCallback((chapterNode) => {
+    if (!chapterNode) return;
+    selectedNodeIdsRef.current = [chapterNode.id];
+    setSelectedIds([chapterNode.id]);
     setSelectedNode(chapterNode);
   }, []);
 
@@ -735,6 +823,8 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
 
   const handleCloseDrawer = useCallback(() => {
     setSelectedNode(null);
+    setSelectedIds([]);
+    selectedNodeIdsRef.current = [];
   }, []);
   const handleSelectedContentDiffChange = useCallback((diff) => {
     if (selectedNode) onNodeContentDiffChange?.(selectedNode.id, diff);
@@ -929,174 +1019,69 @@ const CanvasContent = forwardRef(function CanvasContent({ workId, works = [], on
     ],
   );
 
+  const showExplorer = !appMode || !selectedNode;
+  const showEditor = !appMode || !!selectedNode;
+
   return (
-    <div className="w-full h-full flex relative">
-      <div className="flex-1 relative">
-        {loadError && (
-          <div className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 shadow-sm">
-            {loadError}
-          </div>
-        )}
-        <div className="absolute top-3 left-3 z-10 flex overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-          <button
-            type="button"
-            aria-label="定位到大纲"
-            title="定位到大纲"
-            disabled={!outlineTarget}
-            onClick={handleFocusOutline}
-            className="border-0 bg-white px-2.5 py-1 text-xs text-slate-700 transition-colors hover:bg-slate-50 disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            定位大纲
-          </button>
-        </div>
-        <ReactFlow
-          nodes={displayedNodes}
-          edges={displayedEdges}
-          onNodesChange={onNodesChange}
-          onEdgesChange={onCombinedEdgesChange}
-          onConnect={onConnect}
-          isValidConnection={isValidConnection}
-          onPaneClick={onPaneClick}
-          onPaneContextMenu={onPaneContextMenu}
-          onNodeContextMenu={onNodeContextMenu}
-          onSelectionChange={handleSelectionChange}
-          onNodeDragStart={beginDragTracking}
-          onNodeDragStop={endDragTracking}
-          onSelectionDragStart={beginDragTracking}
-          onSelectionDragStop={endDragTracking}
-          selectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
-          multiSelectionKeyCode={CANVAS_MARQUEE_KEY_CODE}
-          deleteKeyCode={null}
-          nodeTypes={nodeTypes}
-          edgeTypes={edgeTypes}
-          onMoveEnd={handleMoveEnd}
-          defaultViewport={initialViewState?.viewport ?? undefined}
-          fitView={!initialViewState?.viewport}
-          attributionPosition="bottom-left"
-          proOptions={appMode ? { hideAttribution: true } : undefined}
-          onlyRenderVisibleElements={appMode}
+    <div className="w-full h-full flex relative" data-testid="workbench">
+      {showExplorer && (
+        <WorkbenchSidebar
+          side="left"
+          title="资源管理器"
+          collapsed={appMode ? false : explorerCollapsed}
+          onCollapsedChange={setExplorerCollapsed}
+          width={explorerWidth}
+          onWidthChange={setExplorerWidth}
+          fillOnMobile={appMode}
         >
-          <Background />
-          {!appMode && <Controls />}
-          {!appMode && (
-            <MiniMap
-              nodeStrokeWidth={3}
-              zoomable
-              pannable
-              style={{ height: 120, width: 180 }}
-            />
+          <ExplorerPanel
+            nodes={nodes}
+            selectedIds={selectedIds}
+            onSelect={handleNodeClick}
+            onAdd={handleAddNode}
+            onReorderChapters={handleReorderChapters}
+            onCopyNode={openCopyDialog}
+            onDeleteNode={handleDeleteNode}
+            onAddContext={onAddContext}
+            appMode={appMode}
+          />
+        </WorkbenchSidebar>
+      )}
+      {showEditor && (
+        <div className="relative min-h-0 min-w-0 flex-1">
+          {loadError && (
+            <div className="absolute left-1/2 top-3 z-20 -translate-x-1/2 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700 shadow-sm">
+              {loadError}
+            </div>
           )}
-        </ReactFlow>
-
-        {/* 右键菜单 */}
-        {contextMenu && (
-          <div
-            ref={contextMenuRef}
-            className="absolute z-50 bg-white rounded-lg shadow-lg border border-gray-200 py-1 min-w-[160px]"
-            style={{ left: contextMenu.x, top: contextMenu.y }}
-          >
-            {contextMenu.kind === "node" ? (
-              <>
-              <button
-                type="button"
-                aria-label="引用此节点"
-                onPointerDown={(event) => event.preventDefault()}
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  onAddContext?.(contextMenu.node);
-                  closeContextMenu();
-                }}
-                className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-              >
-                引用此节点
-              </button>
-              <button
-                type="button"
-                aria-label="复制到其他作品"
-                onClick={() => {
-                  openCopyDialog(contextMenu.node);
-                  closeContextMenu();
-                }}
-                className="w-full px-3 py-2 text-left text-sm text-slate-700 hover:bg-slate-50"
-              >
-                复制到其他作品
-              </button>
-              <button
-                type="button"
-                aria-label="删除节点"
-                onClick={() => {
-                  const node = contextMenu.node;
-                  closeContextMenu();
-                  if (window.confirm(`确定删除节点「${node.label}」？关联的连线也会被删除。`)) {
-                    handleDeleteNode(node);
-                  }
-                }}
-                className="w-full px-3 py-2 text-left text-sm text-red-600 hover:bg-red-50"
-              >
-                删除节点
-              </button>
-              </>
-            ) : (
-              <>
-                <div className="px-3 py-1.5 text-xs font-medium text-gray-400 border-b border-gray-100">
-                  添加节点
-                </div>
-                {[
-                  { type: "outline", icon: "📋", label: "大纲", color: "text-blue-600" },
-                  { type: "volume", icon: "📚", label: "卷", color: "text-indigo-600" },
-                  { type: "plot", icon: "⚡", label: "情节", color: "text-orange-600" },
-                  { type: "chapter", icon: "📖", label: "章节", color: "text-green-600" },
-                  { type: "character", icon: "👤", label: "角色", color: "text-pink-600" },
-                  { type: "worldbuilding", icon: "🌍", label: "世界观", color: "text-purple-600" },
-                  { type: "note", icon: "📝", label: "笔记", color: "text-fuchsia-600" },
-                  { type: "reviewer_note", icon: "🔎", label: "评审笔记", color: "text-amber-600" },
-                ].map((item) => (
-                  <button
-                    key={item.type}
-                    onClick={() => {
-                      handleAddNode(item.type);
-                      closeContextMenu();
-                    }}
-                    className={`w-full flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 transition-colors ${item.color}`}
-                  >
-                    <span>{item.icon}</span>
-                    <span>{item.label}</span>
-                  </button>
-                ))}
-                <div className="border-t border-gray-100 mt-1 pt-1">
-                  <button
-                    onClick={() => {
-                      handleRefresh();
-                      closeContextMenu();
-                    }}
-                    className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-gray-600 hover:bg-gray-50 transition-colors"
-                  >
-                    <span>🔄</span>
-                    <span>刷新</span>
-                  </button>
-                </div>
-              </>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* 全局节点入口：禁止连线的孤立节点不进画布，避免铺满可视区域 */}
-      <IsolatedNodePanel
-        nodes={nodes}
-        onSelect={handleNodeClick}
-        onCopyNode={openCopyDialog}
-        appMode={appMode}
-        initialCollapsed={appMode}
-        collapsed={appMode ? !charactersPanelOpen : undefined}
-        onCollapsedChange={appMode
-          ? (collapsed) => onCharactersPanelOpenChange?.(!collapsed)
-          : undefined}
-        showCollapsedTrigger={!appMode}
-      />
-
-      {/* 节点详情抽屉 */}
-      <NodeDetailDrawer appMode={appMode} workId={workId} node={selectedNode} contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null} notesDiff={selectedNode ? nodeNotesDiffs[selectedNode.id] : null} agentRunning={agentRunning} onClose={handleCloseDrawer} onUpdate={handleNodeUpdate} onContentDiffDecision={handleContentDiffDecision} onNotesDiffDecision={handleNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={handleSelectedContentDiffChange} onNotesDiffChange={handleSelectedNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={handleChapterNavigate} onEditingChange={onNodeEditingChange} />
+          {selectedNode ? (
+            <NodeDetailDrawer
+              embedded
+              appMode={appMode}
+              workId={workId}
+              node={selectedNode}
+              contentDiff={selectedNode ? nodeContentDiffs[selectedNode.id] : null}
+              notesDiff={selectedNode ? nodeNotesDiffs[selectedNode.id] : null}
+              agentRunning={agentRunning}
+              onClose={handleCloseDrawer}
+              onUpdate={handleNodeUpdate}
+              onContentDiffDecision={handleContentDiffDecision}
+              onNotesDiffDecision={handleNotesDiffDecision}
+              onAddContext={onAddContext}
+              onContentDiffChange={handleSelectedContentDiffChange}
+              onNotesDiffChange={handleSelectedNotesDiffChange}
+              chapterNodes={chapterNodes}
+              navigationNodes={navigationNodes}
+              onChapterNavigate={handleChapterNavigate}
+              onEditingChange={onNodeEditingChange}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center bg-slate-50 text-sm text-slate-400">
+              从左侧选择一项
+            </div>
+          )}
+        </div>
+      )}
       {copyDialog && (
         <div
           className="absolute inset-0 z-[70] flex items-center justify-center bg-slate-900/20 p-4"

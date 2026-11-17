@@ -1,14 +1,13 @@
 """Canvas 节点类型与作用域(scope)的统一定义。
 
-节点类型（仅以下 8 种合法，创建/更新节点时强制校验）：
-  层级链：outline(大纲) → volume(卷) → plot(情节) → chapter(章节)
+节点类型（仅以下 5 种合法，创建/更新节点时强制校验）：
+  正文节点：chapter(章节)，按作品内 sort_order 排序
   关联节点：character(角色) — 完整实体，不在画布上显示；章节通过 extra_data.characters 引用
-  情节元素：不再作为独立节点创建，存放在 chapter.extra_data.chapter_elements
   全局节点：worldbuilding(世界观)、note(笔记)、reviewer_note(评审笔记)
 
 作用域 scope（5 值，按类型受限）：
   global — 全局（worldbuilding/note/reviewer_note 固定；character 表示主角）
-  local  — 局部层级链（outline/volume/plot/chapter 固定）
+  local  — 章节（chapter 固定）
   major  — 主要配角（仅 character）
   minor  — 次要配角（仅 character，默认）
   temp   — 临时角色（仅 character）
@@ -17,9 +16,6 @@ character 不允许 local（已废弃），默认 minor。
 
 STANDARD_NODE_TYPES = frozenset({
     "character",
-    "outline",
-    "volume",
-    "plot",
     "chapter",
     "worldbuilding",
     "note",
@@ -49,8 +45,8 @@ STANDARD_SCOPES = frozenset({
 
 # 固定为 global 的类型：worldbuilding/note/reviewer_note（全局节点）
 GLOBAL_LOCKED_TYPES = frozenset({"worldbuilding", "note", "reviewer_note"})
-# 固定为 local 的类型：层级链 outline/volume/plot/chapter
-LOCAL_LOCKED_TYPES = frozenset({"outline", "volume", "plot", "chapter"})
+# 固定为 local 的类型：章节 chapter
+LOCAL_LOCKED_TYPES = frozenset({"chapter"})
 # character 允许的 scope（角色分类：主角/主要配角/次要配角/临时）
 CHARACTER_SCOPES = frozenset({SCOPE_GLOBAL, SCOPE_MAJOR, SCOPE_MINOR, SCOPE_TEMP})
 
@@ -75,7 +71,7 @@ def allowed_scopes_for_type(node_type: str) -> frozenset:
 
 
 def default_scope_for_type(node_type: str) -> str:
-    """按类型返回默认 scope：worldbuilding/note/reviewer_note→global，character→minor，层级链→local。"""
+    """按类型返回默认 scope：worldbuilding/note/reviewer_note→global，character→minor，章节→local。"""
     if node_type in GLOBAL_LOCKED_TYPES:
         return SCOPE_GLOBAL
     if node_type == "character":
@@ -109,6 +105,8 @@ def resolve_update_scope(old_type, old_scope, new_type, proposed_scope):
     - 未传 scope 且未改类型：保持 old_scope。
     """
     final_type = new_type or old_type
+    if new_type is not None:
+        validate_node_type(new_type)
     if proposed_scope is not None:
         scope = validate_scope(proposed_scope)
         allowed = allowed_scopes_for_type(final_type)
@@ -123,43 +121,33 @@ def resolve_update_scope(old_type, old_scope, new_type, proposed_scope):
 
 
 NODE_TYPES_RULES_TEXT = (
-    "仅限 8 种：character, outline, volume, plot, chapter, worldbuilding, note, reviewer_note。"
-    "reviewer_note 是由 Supervisor 维护的专用评审笔记，其最新全文自动注入 Reviewer 系统提示词。"
-    "element 不再是节点类型；章节元素请在创建/更新 chapter 时使用 chapter_elements 参数。"
-    "角色发展线请在创建/更新 character 时使用 storylines 参数（写入 extra_data.storylines；"
-    "每项含 name、description、body 字符串列表），不要把发展线只写进 content。"
-    "禁止自创 event/idea/setting 等其它类型；非法类型会报错并列出可用值。"
+    "支持 5 种节点：chapter（章节）、character（角色）、worldbuilding（世界观）、note（笔记）、reviewer_note（评审笔记）。"
+    "章节直接归属作品，按 sort_order 排序。长期故事规划保存到 note，逐章计划保存到章节笔记。"
+    "reviewer_note 由 Supervisor 维护，其最新全文自动注入 Reviewer 系统提示词。"
+    "出场角色使用 characters 参数，每项含角色 id 与 name。"
+    "角色发展线使用 storylines 参数，每项含 name、description、body 字符串列表。"
 )
 
 EDGE_ENDPOINT_RULES_TEXT = (
-    "端点限制（违反会报错）："
-    "scope=global 的节点（worldbuilding/note/reviewer_note + 主角 character）禁止任何连线；"
-    "character 禁止任何画布连线，章节出场角色请写入 chapter.extra_data.characters（每项含 id 与 name）；"
-    "同级节点之间禁止连线（chapter↔chapter、volume↔volume、plot↔plot），"
-    "同级顺序由节点的 sort_order 字段表达，不要用连线表示顺序。"
+    "章节顺序通过 sort_order 表达，章节出场角色通过 chapter.extra_data.characters 表达。"
+    "worldbuilding、note、reviewer_note 是全局资料，character 是章节引用的角色资料。"
 )
 
-EDGE_CONNECTION_RULES_TEXT = (
-    "连接点由程序自动计算，无需指定方向："
-    "outline/volume/plot/chapter 之间固定源下边界→目标上边界；"
-    "其它节点按相对位置自动选择。"
-)
+EDGE_CONNECTION_RULES_TEXT = "连接点由程序按节点相对位置自动计算。"
 
 NODE_LAYOUT_RULES_TEXT = (
-    "节点位置由前端根据当前展开状态自动布局，不需要提供 position_x/position_y："
-    "父子层级决定纵向位置，sort_order 决定同级横向顺序。"
-    "传入坐标不会影响画布呈现，请把精力放在节点内容与父子关系上。"
+    "章节位置由前端自动布局，sort_order 决定作品内的章节顺序。"
+    "节点工具负责保存内容与顺序。"
 )
 
 NODE_SORT_ORDER_RULES_TEXT = (
-    "sort_order 是必填项：同一父节点下的兄弟节点按它从小到大排列，"
-    "章节顺序、卷顺序、情节顺序都由它决定。请按叙事先后依次给出 1、2、3……"
-    "同级之间不要创建连线来表示顺序。"
+    "sort_order 是必填整数，决定作品内同类型节点的显示顺序。"
+    "章节按叙事先后依次使用 1、2、3……，调整章节顺序时更新 sort_order。"
 )
 
 MISSING_SORT_ORDER_ERROR = (
     "创建节点必须提供 sort_order（同级显示顺序，整数）。"
-    "同一父节点下的兄弟节点按它从小到大排列，请按叙事先后依次给出 1、2、3……"
+    "同一作品内同类型节点按它从小到大排列，请按叙事先后依次给出 1、2、3……"
 )
 
 
@@ -173,5 +161,5 @@ def validate_edge_endpoints(source_type: str, target_type: str, source_scope: st
     if source_scope == "global" or target_scope == "global":
         return "全局节点(scope=global：主角/worldbuilding/note/reviewer_note)禁止创建关联线"
     if source_type == "element" or target_type == "element":
-        return "element 不再是画布节点类型；章节元素请写入 chapter.extra_data.chapter_elements，不要创建 element 连线"
+        return "element 不再是画布节点类型，不要创建 element 连线"
     return None

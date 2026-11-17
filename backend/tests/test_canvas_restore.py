@@ -46,7 +46,7 @@ def _make_work(db, user_id):
 
 
 def _make_node(db, work_id, title="n", layer=0, x=0.0, y=0.0):
-    node = Node(sort_order=0, work_id=work_id, type="outline", title=title, layer=layer,
+    node = Node(sort_order=0, work_id=work_id, type="note", title=title, layer=layer,
                 position_x=x, position_y=y)
     db.add(node)
     db.commit()
@@ -66,7 +66,7 @@ def _make_edge(db, work_id, source_id, target_id, label=""):
 def _node_payload(node, **overrides):
     return {
         "id": node.id,
-        "type": "outline",
+        "type": "note",
         "title": node.title,
         "position_x": overrides.get("position_x", node.position_x),
         "position_y": overrides.get("position_y", node.position_y),
@@ -126,7 +126,7 @@ def test_restore_creates_missing_nodes(mock_auth):
 
         resp = client.post(f"/api/works/{work.id}/canvas/restore", json={
             "nodes": [{
-                "id": new_id, "type": "outline", "title": "restored",
+                "id": new_id, "type": "note", "title": "restored",
                 "position_x": 10, "position_y": 20, "layer": 1,
                 "content": "hello",
             }],

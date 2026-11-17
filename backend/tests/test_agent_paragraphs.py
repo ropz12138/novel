@@ -281,7 +281,7 @@ def test_duplicate_markdown_items_replace_only_the_selected_offset():
 def test_segmentation_follows_node_type_and_notes_field():
     listed = "- 甲\n- 乙"
     assert [item["text"] for item in present_content_record({"type": "chapter", "content": listed})["content_paragraphs"]] == [listed]
-    assert [item["text"] for item in present_content_record({"type": "plot", "content": listed})["content_paragraphs"]] == ["- 甲", "- 乙"]
+    assert [item["text"] for item in present_content_record({"type": "note", "content": listed})["content_paragraphs"]] == ["- 甲", "- 乙"]
     assert [item["text"] for item in present_content_record({"type": "chapter_note", "content": listed})["content_paragraphs"]] == ["- 甲", "- 乙"]
     assert [item["text"] for item in notes_reading_view(listed)["notes_paragraphs"]] == ["- 甲", "- 乙"]
     with pytest.raises(ValueError, match="分段模式"):

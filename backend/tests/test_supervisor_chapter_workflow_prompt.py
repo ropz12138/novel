@@ -9,19 +9,19 @@ PROMPT = (
 
 
 def test_prompt_states_markdown_for_non_chapter_content_and_chapter_notes():
-    assert "非章节节点正文和章节笔记使用 Markdown 格式组织内容，按需要采用标题、列表与自然段；章节正文保持小说正文格式。" in PROMPT
-    assert "局部修改使用工具返回的 content_paragraphs 或 notes_paragraphs 中的 number 选择范围，new 保留选中内容所需的 Markdown 标记与缩进。" in PROMPT
+    assert "非章节节点可用 Markdown，章节正文保持小说排版。" in PROMPT
+    assert "每个 `replacement` 包含 `start_paragraph`、`end_paragraph`、`new`；编号必须来自本次最新读取的 `content_paragraphs`。" in PROMPT
     assert "小说正文必须输出 Markdown" not in PROMPT
 
 
 def test_prompt_limits_node_types():
-    for node_type in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "note"):
+    for node_type in ("character", "chapter", "worldbuilding", "note", "reviewer_note"):
         assert f"`{node_type}`" in PROMPT
     assert "`note`" in PROMPT
     assert "`style`" not in PROMPT
     assert "持续生效" in PROMPT
     assert "- `element`" not in PROMPT
-    assert "`chapter_elements`" in PROMPT
+    assert "`chapter_elements`" not in PROMPT
     assert "`storylines`" in PROMPT
     for removed in (
         "event", "idea", "setting", "conflict", "foreshadow", "theme",
@@ -45,27 +45,26 @@ def test_prompt_removed_sections():
 
 
 def test_prompt_keeps_workflow():
-    assert "## 创作工作流" in PROMPT
+    assert "# 八、写作一章的标准工作流" in PROMPT
     assert "read_todolist" in PROMPT
     assert "update_todolist" in PROMPT
     assert "章节正文以 3000 字为目标" not in PROMPT
     assert "2500–3500 字" not in PROMPT
     assert "`write_chapter`" not in PROMPT
     assert "`edit_chapter_content`" not in PROMPT
-    assert "新章用 `create_node`" in PROMPT
-    assert "所属 plot" in PROMPT
-    assert "`chapter_elements`" in PROMPT
+    assert "新章节用 `create_node` 创建 `content` 为空的 `chapter`" in PROMPT
+    assert "设置真实作品内 `sort_order`" in PROMPT
+    assert "`chapter_elements`" not in PROMPT
     assert "`save_chapter_notes`" in PROMPT
     assert "`save_workflow_record`" not in PROMPT
     assert "`read_workflow_records`" not in PROMPT
 
 
 def test_prompt_limits_word_count_adjustment_to_two_attempts():
-    assert "默认 2000 字左右" in PROMPT
-    assert "新写和整章重写按该篇幅组织正文" in PROMPT
-    assert "局部修改保持本章既有篇幅" in PROMPT
-    assert "针对字数的调整，每次执行最多两次" in PROMPT
-    assert "达到次数后说明当前字数与目标差距" in PROMPT
+    assert "否则默认约 2000 字" in PROMPT
+    assert "章节整章新写或整章重写后，调用 `count_chapter_words`" in PROMPT
+    assert "篇幅调整最多两轮" in PROMPT
+    assert "仍有明显差距时如实说明" in PROMPT
     writer = (
         Path(__file__).resolve().parents[1]
         / "services/agents/skills/references/chapter_writer.txt"
@@ -79,12 +78,11 @@ def test_prompt_limits_word_count_adjustment_to_two_attempts():
 
 
 def test_prompt_analyzes_requests_and_offers_meaningful_choices():
-    assert "## 需求分析与方案选择" in PROMPT
-    assert "先提炼用户真正想获得的结果" in PROMPT
-    assert "提供 2—3 个可执行方案" in PROMPT
-    assert "明确推荐其中一个方案" in PROMPT
-    assert "等待用户选择后执行" in PROMPT
-    assert "执行路径已经明确" in PROMPT
+    assert "# 三、作者意图、方案选择与决策权限" in PROMPT
+    assert "先辨认这是事实查询、讨论建议、设定维护、故事规划、章节新写、局部修改、整章重写、自然化还是独立评审。" in PROMPT
+    assert "提供 2—3 个真正不同的可执行方案" in PROMPT
+    assert "并推荐一个" in PROMPT
+    assert "关键信息足够时，直接执行" in PROMPT
 
 
 def test_revise_chapter_skill_does_not_force_word_count_loop():
@@ -108,8 +106,8 @@ def test_removed_operational_rules_are_available_from_registered_tools():
     tools = {tool.name: tool for tool in SupervisorAgent()._get_tools()}
 
     create_schema_text = str(tools["create_node"].args_schema.model_json_schema())
-    assert "element 不再是节点类型" in create_schema_text
-    assert "chapter_elements" in create_schema_text
+    assert "支持 5 种节点" in create_schema_text
+    assert "chapter_elements" not in create_schema_text
     assert "storylines" in create_schema_text
 
     update_schema_text = str(tools["update_node"].args_schema.model_json_schema())
@@ -124,11 +122,9 @@ def test_removed_operational_rules_are_available_from_registered_tools():
 
 
 def test_prompt_requires_brief_final_user_reply():
-    assert "给用户的最终回答必须简略" in PROMPT
-    assert "控制在几句话以内" in PROMPT
-    assert "正文与过程记录通过工具保存" in PROMPT
-    assert "场景规划" in PROMPT
-    assert "评审证据" in PROMPT
+    assert "最终答复应短而具体" in PROMPT
+    assert "章节正文和过程记录应按系统工具保存，不在消息里重复整章" in PROMPT
+    assert "不要反复展示内部清单、评审过程和写作理论" in PROMPT
 
 
 def test_prompt_leaves_layout_to_frontend():
@@ -142,15 +138,16 @@ def test_prompt_leaves_layout_to_frontend():
 
 
 def test_prompt_explains_how_to_use_research_artifacts():
-    assert "研究成果只提供写作方法参考" in PROMPT
-    assert "当前作品的角色、设定和正文是创作事实依据" in PROMPT
+    assert "研究结论只是方法参考，而不是高于正文和设定的事实。" in PROMPT
+    assert "不得把参考素材当作本作事实。" in PROMPT
+    assert "旧规划和研究材料不能覆盖新正文" in PROMPT
 
 
 def test_prompt_requires_active_note_maintenance():
-    assert "## 笔记维护" in PROMPT
-    assert "自动完整注入" in PROMPT
-    assert "完整可执行条目" in PROMPT
-    assert "同一主题只维护一个笔记节点" in PROMPT
+    assert "## 长期笔记" in PROMPT
+    assert "每轮自动注入的作品笔记视为当前有效的长期材料" in PROMPT
+    assert "应短而完整，记录明确规则、适用范围、例外和关键因果" in PROMPT
+    assert "相同主题只维持一个有效笔记节点" in PROMPT
     assert "回读" in PROMPT
     skill = (
         Path(__file__).resolve().parents[1]
@@ -201,10 +198,10 @@ def test_chapter_writer_treats_scene_plan_as_facts_instead_of_draft_prose():
 
 
 def test_supervisor_writes_chapters_directly_and_reads_back():
-    assert "必须调用 `read_node_content` 重新读取已保存的整章正文" in PROMPT
+    assert "内容保存后用 `read_node_content` 回读整章" in PROMPT
     assert 'mode="replace"' in PROMPT
     assert 'mode="overwrite"' in PROMPT
-    assert "你直接负责章节正文的创作与修订" in PROMPT
+    assert "由 Supervisor 在当前上下文直接成文" in PROMPT
     assert "content_sha256" in PROMPT
     assert "run_writing_agent" not in PROMPT
     assert "write_content" not in PROMPT

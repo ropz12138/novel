@@ -46,14 +46,13 @@ def test_create_node_input_rejects_parent_node_id():
         )
     message = str(exc_info.value)
     assert "parent_node_id" in message
-    assert "assemble_chapter_context" in message
-    assert "create_edge" in message
+    assert "create_node" in message
 
 
 def test_create_node_input_rejects_unknown_field():
     with pytest.raises(ValidationError) as exc_info:
         nt.CreateNodeInput(
-            node_type="plot",
+            node_type="note",
             title="情节",
             sort_order=1,
             unknown_field="x",
@@ -77,14 +76,11 @@ def test_parent_node_id_validation_error_is_structured_for_model_correction():
     assert result["success"] is False
     assert result["error"]["code"] == "tool_argument_validation_failed"
     joined = json.dumps(result, ensure_ascii=False)
-    assert "assemble_chapter_context" in joined
-    assert "create_edge" in joined
+    assert "create_node" in joined
 
 
 def test_create_node_description_rejects_parent_node_id():
-    assert "不接受 parent_node_id" in nt.create_node.description
-    assert "assemble_chapter_context" in nt.create_node.description
-    assert "create_edge" in nt.create_node.description
+    assert "章节直接归属作品" in nt.create_node.description
 
 
 def test_batch_create_nodes_rejects_parent_node_id(tool_work):
@@ -97,8 +93,7 @@ def test_batch_create_nodes_rejects_parent_node_id(tool_work):
         },
     ]))
     assert "error" in result
-    assert "assemble_chapter_context" in result["error"]
-    assert "create_edge" in result["error"]
+    assert "create_node" in result["error"]
     db = database.SessionLocal()
     try:
         count = db.query(Node).filter(Node.work_id == tool_work, Node.title == "第二章：求生之路").count()

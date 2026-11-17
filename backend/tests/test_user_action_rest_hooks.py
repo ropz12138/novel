@@ -54,7 +54,7 @@ def test_content_diff_api_restores_and_reviews_exact_agent_groups(mock_auth):
         work = _make_work(db, mock_auth.id)
         old = "A\n\nB\n\nC"
         new = "X\n\nA′\n\nB′\n\nC′"
-        node = Node(work_id=work.id, type="plot", title="原始分组", content=new, sort_order=1)
+        node = Node(work_id=work.id, type="note", title="原始分组", content=new, sort_order=1)
         db.add(node)
         db.flush()
         record_change(db, node, old, build_replacement_diff(old, [
@@ -226,8 +226,8 @@ def test_update_node_locked_only_does_not_log(mock_auth):
 def _make_two_nodes(work_id):
     db = database.SessionLocal()
     try:
-        # 画布连线使用合法的 plot → chapter 父子关系。
-        a = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 1, "type": "plot", "title": "源", "content": ""}).json()
+        # 章节顺序使用 sort_order，新建章节顺序边应被拒绝。
+        a = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 1, "type": "chapter", "title": "源", "content": ""}).json()
         b = client.post(f"/api/works/{work_id}/nodes", json={"sort_order": 2, "type": "chapter", "title": "目标", "content": ""}).json()
         return a["id"], b["id"]
     finally:
@@ -246,12 +246,8 @@ def test_create_edge_via_rest_logs_action(mock_auth):
             f"/api/works/{work.id}/edges",
             json={"source_id": src, "target_id": tgt, "edge_type": "登场", "label": "首次"},
         )
-        assert res.status_code == 201
-        actions = _actions(db, work.id)
-        assert len(actions) == 1
-        assert actions[0].action_type == "create_edge"
-        assert "源" in actions[0].target_title and "目标" in actions[0].target_title
-        assert "登场" in actions[0].content_preview
+        assert res.status_code == 400
+        assert _actions(db, work.id) == []
     finally:
         db.close()
 
@@ -261,11 +257,11 @@ def test_delete_edge_via_rest_logs_action(mock_auth):
     try:
         work = _make_work(db, mock_auth.id)
         src, tgt = _make_two_nodes(work.id)
-        create_res = client.post(
-            f"/api/works/{work.id}/edges",
-            json={"source_id": src, "target_id": tgt, "edge_type": "推进"},
-        )
-        edge_id = create_res.json()["id"]
+        from models.edge import Edge
+        edge = Edge(work_id=work.id, source_id=src, target_id=tgt, edge_type="推进")
+        db.add(edge)
+        db.commit()
+        edge_id = edge.id
         db.query(UserCanvasAction).delete()
         db.commit()
 
@@ -284,11 +280,11 @@ def test_update_edge_via_rest_logs_action(mock_auth):
     try:
         work = _make_work(db, mock_auth.id)
         src, tgt = _make_two_nodes(work.id)
-        create_res = client.post(
-            f"/api/works/{work.id}/edges",
-            json={"source_id": src, "target_id": tgt, "edge_type": "推进"},
-        )
-        edge_id = create_res.json()["id"]
+        from models.edge import Edge
+        edge = Edge(work_id=work.id, source_id=src, target_id=tgt, edge_type="推进")
+        db.add(edge)
+        db.commit()
+        edge_id = edge.id
         db.query(UserCanvasAction).delete()
         db.commit()
 
@@ -307,11 +303,11 @@ def test_update_edge_extra_data_only_does_not_log(mock_auth):
     try:
         work = _make_work(db, mock_auth.id)
         src, tgt = _make_two_nodes(work.id)
-        create_res = client.post(
-            f"/api/works/{work.id}/edges",
-            json={"source_id": src, "target_id": tgt, "edge_type": "推进"},
-        )
-        edge_id = create_res.json()["id"]
+        from models.edge import Edge
+        edge = Edge(work_id=work.id, source_id=src, target_id=tgt, edge_type="推进")
+        db.add(edge)
+        db.commit()
+        edge_id = edge.id
         db.query(UserCanvasAction).delete()
         db.commit()
 

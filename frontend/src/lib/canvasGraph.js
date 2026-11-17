@@ -7,13 +7,10 @@ import { isHierarchyEdge, isCanvasStructuralType } from "./canvasRelation";
 import { compareSiblings } from "./canvasOrder";
 
 const TYPE_LABELS = {
-  outline: { unit: "个大纲" },
-  volume: { unit: "卷" },
-  plot: { unit: "个情节" },
   chapter: { unit: "章" },
 };
 
-const SUMMARY_ORDER = ["volume", "plot", "chapter"];
+const SUMMARY_ORDER = ["chapter"];
 
 export function buildGraphIndex(nodes, edges) {
   const nodeById = new Map(nodes.map((n) => [n.id, n]));

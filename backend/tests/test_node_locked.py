@@ -34,7 +34,7 @@ def test_update_node_sync_sets_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="n1", layer=0,
+        node = Node(sort_order=0, work_id=work.id, type="note", title="n1", layer=0,
                     position_x=10, position_y=20, locked=False)
         db.add(node)
         db.commit()
@@ -94,7 +94,7 @@ def test_update_node_sync_allows_other_fields_when_locked(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="orig", layer=1,
+        node = Node(sort_order=0, work_id=work.id, type="note", title="orig", layer=1,
                     position_x=10, position_y=20, content="old", locked=True)
         db.add(node)
         db.commit()

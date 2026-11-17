@@ -1,6 +1,6 @@
 import { quoteTextFromRange } from "../../lib/selectionQuote";
 import { Children, cloneElement, createContext, useContext, memo, useState, useEffect, useLayoutEffect, useMemo, useRef, useCallback, useId } from "react";
-import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Zap, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Copy, Undo2, ChevronLeft, ChevronRight, Play, Square, Volume2 } from "lucide-react";
+import { X, Trash2, BookOpen, FileText, User, StickyNote, Map as MapIcon, Layers, Pencil, Plus, Maximize2, Minimize2, Check, Copy, Undo2, ChevronLeft, ChevronRight, Play, Square, Volume2 } from "lucide-react";
 import {
   buildStackedInlineDiffBlocks,
   contentAfterBatches,
@@ -346,9 +346,6 @@ function ChapterPlainParagraphs({ content, appMode }) {
 }
 
 const NODE_TYPE_CONFIG = {
-  outline: { icon: FileText, label: "大纲", bg: "bg-blue-100", text: "text-blue-600", badge: "text-blue-700" },
-  volume: { icon: Layers, label: "卷", bg: "bg-indigo-100", text: "text-indigo-600", badge: "text-indigo-700" },
-  plot: { icon: Zap, label: "情节", bg: "bg-orange-100", text: "text-orange-600", badge: "text-orange-700" },
   chapter: { icon: BookOpen, label: "章节", bg: "bg-green-100", text: "text-green-600", badge: "text-green-700" },
   character: { icon: User, label: "角色", bg: "bg-pink-100", text: "text-pink-600", badge: "text-pink-700" },
   worldbuilding: { icon: MapIcon, label: "世界观", bg: "bg-purple-100", text: "text-purple-600", badge: "text-purple-700" },
@@ -457,32 +454,6 @@ function ChapterCharactersBar({ characters, onCharacterClick, stacked = false })
             >
               <span className="truncate">{name}</span>
             </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function ChapterElementsBar({ elements, stacked = false }) {
-  if (!Array.isArray(elements) || elements.length === 0) return null;
-
-  return (
-    <div className={`flex w-full min-w-0 items-center gap-2 text-left ${stacked ? "" : "border-l border-gray-200 pl-4"}`}>
-      <h2 className="shrink-0 text-xs font-semibold uppercase tracking-wide text-amber-700">本章元素</h2>
-      <span className="shrink-0 text-xs text-amber-700/70">{elements.length} 项</span>
-      <div className="flex min-w-0 flex-1 gap-1.5 overflow-x-auto overscroll-x-contain pb-1">
-        {elements.map((element, index) => {
-          const title = element?.title || element?.content || `元素 ${index + 1}`;
-          const content = element?.content || "";
-          return (
-            <span
-              key={element?.id || `${title}-${index}`}
-              className="inline-flex max-w-40 shrink-0 items-center rounded-full border border-amber-200 bg-amber-50 px-2 py-1 text-xs font-medium text-amber-900"
-              title={content || title}
-            >
-              <span className="truncate">{title}</span>
-            </span>
           );
         })}
       </div>
@@ -920,7 +891,6 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
   const evaluations = generation?.sync_evaluations || [];
   const latestEvaluation = evaluations[evaluations.length - 1];
   const wordCount = (node.content || "").replace(/\s+/g, "").length;
-  const chapterElements = node.extra_data?.chapter_elements || [];
   const chapterCharacters = node.extra_data?.characters || [];
   const characterOccurrenceRef = useRef({ nodeId: node.id, nextIndexByName: new Map() });
   const characterHighlightId = `chapter-character-${useId().replace(/:/g, "")}`;
@@ -932,7 +902,7 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
   }, [node.id, node.content, batches, characterHighlightId]);
 
   const [metaExpanded, setMetaExpanded] = useState(false);
-  const hasChapterMeta = chapterCharacters.length > 0 || chapterElements.length > 0;
+  const hasChapterMeta = chapterCharacters.length > 0;
   const pendingNotesCount = useMemo(() => pendingHunksFromBatches(notesBatches).length, [notesBatches]);
 
   const handleTouchStart = (event) => {
@@ -1022,7 +992,6 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
             {hasChapterMeta && metaExpanded && (
               <div className="flex flex-col gap-1.5">
                 <ChapterCharactersBar stacked characters={chapterCharacters} onCharacterClick={handleCharacterClick} />
-                <ChapterElementsBar stacked elements={chapterElements} />
               </div>
             )}
           </div>
@@ -1052,7 +1021,6 @@ function ChapterReadingView({ node, scrollRef, isFullscreen = false, appMode = f
           </div>
           <div className="flex min-w-0 flex-1 flex-col gap-2">
             <ChapterCharactersBar characters={chapterCharacters} onCharacterClick={handleCharacterClick} />
-            <ChapterElementsBar elements={chapterElements} />
           </div>
         </div>
         )}
@@ -1296,7 +1264,7 @@ function DefaultNodeView({ node, scrollRef, onTextSelect, batches = [], onAccept
             </h4>
             <div className="bg-gray-50 rounded-lg p-4 space-y-2">
               {Object.entries(node.extra_data)
-                .filter(([key]) => key !== "storylines")
+                .filter(([key]) => key !== "storylines" && key !== "chapter_elements")
                 .map(([key, value]) => (
                 <div key={key} className="flex items-start gap-2">
                   <span className="text-xs font-medium text-gray-500 min-w-[80px]">
@@ -1320,11 +1288,9 @@ function EditView({
   content,
   notes,
   isChapter,
-  chapterElements,
   onTitleChange,
   onContentChange,
   onNotesChange,
-  onChapterElementsChange,
   isCharacter,
   storylines,
   onStorylinesChange,
@@ -1367,50 +1333,6 @@ function EditView({
             onChange={(e) => onNotesChange(e.target.value)}
             className="w-full min-h-[180px] border border-gray-300 rounded-lg px-3 py-2 text-sm focus:border-blue-500 focus:outline-none resize-y font-mono"
           />
-        </div>
-      )}
-      {isChapter && (
-        <div data-testid="chapter-elements-editor">
-          <div className="flex items-center justify-between mb-2">
-            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wide">本章元素</label>
-            <span className="text-xs text-gray-400">{chapterElements.length} 项</span>
-          </div>
-          <div className="space-y-3">
-            {chapterElements.map((el, index) => (
-              <div key={el.id || `new-${index}`} className="rounded-lg border border-gray-200 p-3 space-y-2 bg-gray-50/50">
-                <div className="flex items-start gap-2">
-                  <input
-                    value={el.title}
-                    onChange={(e) => onChapterElementsChange(chapterElements.map((x, i) => (i === index ? { ...x, title: e.target.value } : x)))}
-                    placeholder="元素标题"
-                    className="flex-1 border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none bg-white"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => onChapterElementsChange(chapterElements.filter((_, i) => i !== index))}
-                    title="删除元素"
-                    className="p-1 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                </div>
-                <textarea
-                  value={el.content}
-                  onChange={(e) => onChapterElementsChange(chapterElements.map((x, i) => (i === index ? { ...x, content: e.target.value } : x)))}
-                  placeholder="元素内容"
-                  className="w-full min-h-[60px] border border-gray-300 rounded-md px-2 py-1 text-sm focus:border-blue-500 focus:outline-none resize-y bg-white"
-                />
-              </div>
-            ))}
-          </div>
-          <button
-            type="button"
-            onClick={() => onChapterElementsChange([...chapterElements, { title: "", content: "" }])}
-            className="mt-2 inline-flex items-center gap-1 text-sm text-blue-600 hover:text-blue-700"
-          >
-            <Plus className="w-4 h-4" />
-            添加元素
-          </button>
         </div>
       )}
       {isCharacter && (
@@ -1503,7 +1425,7 @@ function ChapterDramaRouterLink({ workId, chapterId }) {
   );
 }
 
-function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes, navigationNodes, onChapterNavigate, onEditingChange }) {
+function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes, navigationNodes, onChapterNavigate, onEditingChange, embedded = false }) {
   const [savedContent, setSavedContent] = useState(null);
   const node = useMemo(() => (
     savedContent?.nodeId === sourceNode.id && savedContent.sourceContent === sourceNode.content
@@ -1549,9 +1471,6 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
   const [editTitle, setEditTitle] = useState(node.label);
   const [editContent, setEditContent] = useState(node.content || "");
   const [editNotes, setEditNotes] = useState(node.notes || "");
-  const [editChapterElements, setEditChapterElements] = useState(() =>
-    isChapter ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el })) : []
-  );
   const [editStorylines, setEditStorylines] = useState(() =>
     isCharacter
       ? (node.extra_data?.storylines || []).map((line) => ({
@@ -1563,7 +1482,7 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
   );
   const [saving, setSaving] = useState(false);
   const [copyStatus, setCopyStatus] = useState("idle");
-  const [isFullscreen, setIsFullscreen] = useState(appMode);
+  const [isFullscreen, setIsFullscreen] = useState(appMode || embedded);
   const [selectionAction, setSelectionAction] = useState(null);
   const [diffBatches, setDiffBatches] = useState(() => contentReviewBatches(sourceNode.type, node.content, contentDiff));
   const [notesDiffBatches, setNotesDiffBatches] = useState(() => hydrateDiffBatches(node.notes || "", notesDiff).batches);
@@ -1670,7 +1589,7 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
   }, [detailScrollRef]);
 
   useEffect(() => {
-    setIsFullscreen(appMode);
+    setIsFullscreen(appMode || embedded);
   }, [appMode]);
 
   useEffect(() => {
@@ -1680,11 +1599,6 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
     setEditTitle(node.label);
     setEditContent(node.content || "");
     setEditNotes(node.notes || "");
-    setEditChapterElements(
-      node.type === "chapter"
-        ? (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }))
-        : []
-    );
     setEditStorylines(
       node.type === "character"
         ? (node.extra_data?.storylines || []).map((line) => ({
@@ -1873,11 +1787,7 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
     };
     if (node.type === "chapter") {
       payload.notes = editNotes;
-      payload.chapter_elements = editChapterElements
-        .map((el) => ({ ...el }))
-        .filter((el) => (el.title || "").trim() || (el.content || "").trim());
       previousPayload.notes = node.notes || "";
-      previousPayload.chapter_elements = (node.extra_data?.chapter_elements || []).map((el) => ({ ...el }));
     }
     if (node.type === "character") {
       payload.storylines = editStorylines
@@ -2204,8 +2114,8 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
   return (
     <div
       data-testid="node-detail-drawer"
-      className={`nodrag nopan nowheel select-text relative flex flex-col shadow-xl animate-in slide-in-from-left ${isChapter ? "bg-amber-50" : "bg-white"} ${
-        isFullscreen
+      className={`nodrag nopan nowheel select-text relative flex flex-col ${embedded ? "" : "shadow-xl animate-in slide-in-from-left"} ${isChapter ? "bg-amber-50" : "bg-white"} ${
+        embedded || isFullscreen
           ? "h-full w-full"
           : isEditing || isChapter || isCharacter
             ? "h-full w-[860px] max-w-[90vw]"
@@ -2336,7 +2246,7 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
               )}
             </>
           )}
-          {!appMode && (
+          {!appMode && !embedded && (
             <button
               onClick={() => setIsFullscreen((value) => !value)}
               className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors"
@@ -2361,11 +2271,9 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
           content={editContent}
           notes={editNotes}
           isChapter={isChapter}
-          chapterElements={editChapterElements}
           onTitleChange={setEditTitle}
           onContentChange={setEditContent}
           onNotesChange={setEditNotes}
-          onChapterElementsChange={setEditChapterElements}
           isCharacter={isCharacter}
           storylines={editStorylines}
           onStorylinesChange={setEditStorylines}
@@ -2424,18 +2332,25 @@ function NodeDetailDrawerInner({ appMode, workId, node: sourceNode, contentDiff,
   );
 }
 
-export default function NodeDetailDrawer({ appMode = false, workId, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate, onEditingChange }) {
+export default function NodeDetailDrawer({ appMode = false, workId, node, contentDiff, notesDiff, agentRunning, onClose, onUpdate, onContentDiffDecision, onNotesDiffDecision, onAddContext, onContentDiffChange, onNotesDiffChange, chapterNodes = [], navigationNodes, onChapterNavigate, onEditingChange, embedded = false }) {
   if (!node) return null;
+
+  const inner = (
+    <DiffNavigationContext.Provider value={node.diffTarget}>
+      <SourceReferenceContext.Provider value={appMode ? null : node.sourceReference}>
+        <NodeDetailDrawerInner embedded={embedded} appMode={appMode} workId={workId} node={node} contentDiff={contentDiff} notesDiff={notesDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onNotesDiffDecision={onNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} onNotesDiffChange={onNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} onEditingChange={onEditingChange} />
+      </SourceReferenceContext.Provider>
+    </DiffNavigationContext.Provider>
+  );
+
+  if (embedded) {
+    return <div className="flex h-full min-h-0 w-full flex-col">{inner}</div>;
+  }
 
   return (
     <div className="absolute inset-0 z-50 flex justify-start">
       <div className="absolute inset-0 bg-black/30" onClick={onClose} />
-
-      <DiffNavigationContext.Provider value={node.diffTarget}>
-      <SourceReferenceContext.Provider value={appMode ? null : node.sourceReference}>
-        <NodeDetailDrawerInner appMode={appMode} workId={workId} node={node} contentDiff={contentDiff} notesDiff={notesDiff} agentRunning={agentRunning} onClose={onClose} onUpdate={onUpdate} onContentDiffDecision={onContentDiffDecision} onNotesDiffDecision={onNotesDiffDecision} onAddContext={onAddContext} onContentDiffChange={onContentDiffChange} onNotesDiffChange={onNotesDiffChange} chapterNodes={chapterNodes} navigationNodes={navigationNodes} onChapterNavigate={onChapterNavigate} onEditingChange={onEditingChange} />
-      </SourceReferenceContext.Provider>
-      </DiffNavigationContext.Provider>
+      {inner}
     </div>
   );
 }

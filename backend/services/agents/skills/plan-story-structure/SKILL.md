@@ -1,12 +1,12 @@
 ---
 name: plan-story-structure
-description: 拆分或调整卷、情节和章节结构。
+description: 规划故事方向、阶段安排和章节顺序。
 ---
 
 # 规划故事结构
 
 本技能由 Supervisor 亲自执行。参考规则通过 `read_skill_reference` 按阶段完整加载，工具仅负责读取与保存。
-参考文件中的结构化输出格式用于组织工作记录；结构节点使用节点工具保存，章节正文通过 `update_node` 保存，用户回复使用 `respond_to_user`。
+参考文件中的结构化输出格式用于组织工作记录；长期规划保存到 note，逐章设计保存到章节笔记，章节正文通过 `update_node` 保存，用户回复使用 `respond_to_user`。
 
 ## 创作参考前置
 
@@ -14,12 +14,12 @@ description: 拆分或调整卷、情节和章节结构。
 
 ## 完成标准
 
-层级及同级顺序清晰，每层承担相应目标，规划与已有正文兼容。
+章节按作品内 sort_order 顺序排列，故事规划保存在笔记，规划与已有正文兼容。
 
 ## 执行流程
 
-1. 读取当前结构、相关章节正文和用户要求；确定新增、插入或续推的范围。
+1. 读取作品笔记、章节目录、相关章节正文和用户完整要求；确定故事方向、阶段目标，以及新增、插入或续推的范围。
 2. 用 `read_skill_reference` 加载 `story_structure.txt`；逐章规划时加载 `chapter_plan.txt`，亲自完成目标、冲突、因果和阶段变化设计。根据具体作品的题材基调、所处阶段与近期章节紧张度，合理调配主线推进与非主线内容（战后消化、世界风物、日常切片、支线奇遇）的节奏排布。
-3. 用 `create_node`、`create_edge` 建立所需结构；已有结构节点的 `content` 局部调整使用 `update_node(mode="replace", replacements=[...])`，整体重构才使用 `mode="overwrite"`；`sort_order` 通过对应参数单独更新。结构内容按本层的目标、关键事件因果和结果写成简明条目，事件细节保存在负责该事件的下级节点。
-4. 已有正文的章节保留 `content`，将新的章节计划写入 `chapter_elements`，逐章调用 `read_chapter_context` 核对前文的数量收支、能力、伤势与时间地点。用 `save_chapter_notes(chapter_node_id, notes=完整章节笔记, expected_content_sha256=回读值)` 保存作者要求、设计与需要延续的连续性事实。章节笔记以紧凑表达保留完整有效要求、计划因果和有用状态，核对过程与设计推演保留在当前任务记录中。
-5. 回读检查层级、节奏和因果；需要改动既有正文时先明确用户授权范围，再执行修改章节技能。
+3. 长期故事规划用 `create_node` 或 `update_node` 保存到同主题 note；逐章规划先用 `create_node` 建立 content 为空的 chapter，设置作品内的 sort_order。已有章节沿用 UUID，顺序调整通过 sort_order 单独更新。规划以目标、关键事件因果和阶段结果组织，完整保留作者要求与必要承接。
+4. 已有正文的章节保留 `content`，将新的章节计划写入章节笔记，逐章调用 `read_chapter_context` 核对前文的数量收支、能力、伤势与时间地点。用 `save_chapter_notes(chapter_node_id, notes=完整章节笔记, expected_content_sha256=回读值)` 保存作者要求、设计与需要延续的连续性事实。章节笔记以紧凑表达保留完整有效要求、计划因果和有用状态，核对过程与设计推演保留在当前任务记录中。
+5. 回读检查章节顺序、节奏和因果；需要改动既有正文时先明确用户授权范围，再执行修改章节技能。

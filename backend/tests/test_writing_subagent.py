@@ -166,7 +166,7 @@ def test_stale_hash_does_not_write_body_or_metadata(writing_context, db_session)
     chapter, *_ = writing_context
     result = invoke("update_node", {
         "node_id": chapter.id, "mode": "overwrite", "title": "未保存标题", "content": "新正文。",
-        "expected_content_sha256": "outdated", "chapter_elements": [{"title": "新元素", "content": "不该出现"}],
+        "expected_content_sha256": "outdated",
     })
     assert result["error_code"] == "content_changed"
     db_session.refresh(chapter)
@@ -177,14 +177,13 @@ def test_stale_hash_does_not_write_body_or_metadata(writing_context, db_session)
 
 def test_metadata_update_does_not_require_content_hash(writing_context, db_session):
     chapter, *_ = writing_context
-    result = invoke("update_node", {"node_id": chapter.id, "title": "第十章：改名", "sort_order": 12,
-                                    "chapter_elements": [{"title": "出门", "content": "陆沉离开房间"}]})
+    result = invoke("update_node", {"node_id": chapter.id, "title": "第十章：改名", "sort_order": 12})
     assert result["success"]
     db_session.refresh(chapter)
     assert chapter.title == "第十章：改名"
     assert chapter.sort_order == 12
     assert chapter.content.startswith("王强")
-    assert chapter.extra_data["chapter_elements"][0]["title"] == "出门"
+    assert "chapter_elements" not in (chapter.extra_data or {})
 
 
 def test_chapter_type_conversion_does_not_bypass_version_protection(writing_context, db_session):

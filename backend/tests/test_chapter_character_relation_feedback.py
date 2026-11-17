@@ -110,7 +110,7 @@ def test_batch_create_chapters_returns_relation_warnings(monkeypatch):
 
         result = json.loads(nt._batch_create_nodes_sync(nodes_data=[
             {"sort_order": 1, "node_type": "chapter", "title": "第四章", "position_x": 500, "position_y": 0},
-            {"sort_order": 1, "node_type": "outline", "title": "总纲", "position_x": 0, "position_y": 400},
+            {"sort_order": 1, "node_type": "note", "title": "总纲", "position_x": 0, "position_y": 400},
         ]))
 
         assert result["success"] is True

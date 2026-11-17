@@ -1,9 +1,4 @@
-"""把一个节点复制到另一部作品。
-
-复制该节点、沿父子层级向下的全部下级，以及这些章节仍然引用得到的角色。
-角色 id 改写到目标作品里新建的角色上。下级之间的父子连线按新 id 重建。
-复制出来的树不挂到目标作品已有节点上。
-"""
+"""复制节点与章节引用的角色到另一部作品，保留正文和章节笔记。"""
 import copy
 import uuid
 from dataclasses import dataclass
@@ -14,7 +9,6 @@ from sqlalchemy.orm import Session
 from models.chapter import Chapter
 from models.edge import Edge
 from models.node import Node
-from services.edge_relation import RELATION_HIERARCHY, derive_relation_kind
 from services.node_content_write_service import write_node_content
 
 
@@ -27,10 +21,8 @@ class NodeCopyResult:
 
 def copy_node_to_work(db: Session, source: Node, target_work_id: str) -> NodeCopyResult:
     source_nodes = db.query(Node).filter(Node.work_id == source.work_id).all()
-    source_edges = db.query(Edge).filter(Edge.work_id == source.work_id).all()
     nodes_by_id = {node.id: node for node in source_nodes}
-    children = _children_by_parent(nodes_by_id, source_edges)
-    structural = [nodes_by_id[node_id] for node_id in _subtree_ids(source.id, children)]
+    structural = [source]
     characters, omitted = _referenced_characters(structural, nodes_by_id)
     copied_sources = structural + characters
     id_map = {node.id: str(uuid.uuid4()) for node in copied_sources}
@@ -40,12 +32,7 @@ def copy_node_to_work(db: Session, source: Node, target_work_id: str) -> NodeCop
     created_pairs = []
     created_nodes = []
     for source_node in copied_sources:
-        if source_node.id == source.id:
-            sort_order = root_sort
-        elif source_node.id in character_sort:
-            sort_order = character_sort[source_node.id]
-        else:
-            sort_order = source_node.sort_order
+        sort_order = root_sort if source_node.id == source.id else character_sort[source_node.id]
         created = Node(
             id=id_map[source_node.id],
             work_id=target_work_id,
@@ -70,63 +57,14 @@ def copy_node_to_work(db: Session, source: Node, target_work_id: str) -> NodeCop
         summary = notes_by_id.get(source_node.id, "") if created.type == "chapter" else None
         write_node_content(db, created, source_node.content or "", summary=summary)
 
-    created_edges = []
-    for edge in source_edges:
-        new_source = id_map.get(edge.source_id)
-        new_target = id_map.get(edge.target_id)
-        if new_source is None or new_target is None:
-            continue
-        origin = nodes_by_id[edge.source_id]
-        dest = nodes_by_id[edge.target_id]
-        if derive_relation_kind(origin.type, dest.type) != RELATION_HIERARCHY:
-            continue
-        created_edges.append(Edge(
-            id=str(uuid.uuid4()),
-            work_id=target_work_id,
-            source_id=new_source,
-            target_id=new_target,
-            edge_type=edge.edge_type,
-            label=edge.label or "",
-            extra_data=copy.deepcopy(edge.extra_data or {}),
-        ))
-    db.add_all(created_edges)
     db.commit()
-    for item in [*created_nodes, *created_edges]:
+    for item in created_nodes:
         db.refresh(item)
     return NodeCopyResult(
         nodes=created_nodes,
-        edges=created_edges,
+        edges=[],
         omitted_character_refs=omitted,
     )
-
-
-def _children_by_parent(nodes_by_id, edges):
-    children = {}
-    for edge in edges:
-        source = nodes_by_id.get(edge.source_id)
-        target = nodes_by_id.get(edge.target_id)
-        if source is None or target is None:
-            continue
-        if derive_relation_kind(source.type, target.type) != RELATION_HIERARCHY:
-            continue
-        children.setdefault(source.id, []).append(target.id)
-    for child_ids in children.values():
-        child_ids.sort(key=lambda node_id: (nodes_by_id[node_id].sort_order, node_id))
-    return children
-
-
-def _subtree_ids(root_id, children):
-    ordered = []
-    seen = set()
-    queue = [root_id]
-    while queue:
-        current = queue.pop(0)
-        if current in seen:
-            continue
-        seen.add(current)
-        ordered.append(current)
-        queue.extend(children.get(current, []))
-    return ordered
 
 
 def _referenced_characters(structural, nodes_by_id):
@@ -156,6 +94,7 @@ def _referenced_characters(structural, nodes_by_id):
 
 def _remap_extra(extra, id_map):
     data = copy.deepcopy(extra or {})
+    data.pop("chapter_elements", None)
     characters = data.get("characters")
     if not isinstance(characters, list):
         return data

@@ -14,7 +14,7 @@ describe("CustomNode chapter status", () => {
     const { container } = render(
       <CustomNode
         id="node-1"
-        data={{ type: "outline", label: "主线", content: "", extra_data: {} }}
+        data={{ type: "chapter", label: "主线", content: "", extra_data: {} }}
       />,
     );
 
@@ -89,7 +89,7 @@ describe("CustomNode chapter status", () => {
 });
 
 describe("CustomNode 展开控件", () => {
-  const baseData = { type: "volume", label: "第一卷", content: "", extra_data: {} };
+  const baseData = { type: "chapter", label: "第一卷", content: "", extra_data: {} };
 
   it("没有结构子节点时不显示展开控件", () => {
     render(<CustomNode id="v0" data={baseData} hasChildren={false} />);
@@ -266,9 +266,9 @@ describe("CustomNode character scope badge", () => {
 
   it("non-character keeps type badge regardless of scope", () => {
     render(
-      <CustomNode id="o1" data={{ type: "outline", label: "主线", content: "", extra_data: {}, scope: "local" }} />,
+      <CustomNode id="o1" data={{ type: "chapter", label: "主线", content: "", extra_data: {}, scope: "local" }} />,
     );
-    expect(screen.getByText("大纲")).toBeDefined();
+    expect(screen.getByText("章节")).toBeDefined();
     expect(screen.queryByText("主角")).toBeNull();
   });
 
@@ -370,7 +370,7 @@ describe("CustomNode markdown preview", () => {
       <CustomNode
         id="outline-md"
         data={{
-          type: "outline",
+          type: "chapter",
           label: "主线",
           content: "# 标题\n\n这是 **加粗** 预览",
           extra_data: {},

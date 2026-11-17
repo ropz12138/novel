@@ -20,7 +20,6 @@ WORKFLOW_SKILLS = {
     "bootstrap-novel": ("premise_architect.txt",),
     "design-worldbuilding": ("worldbuilding.txt",),
     "design-characters": ("character_design.txt",),
-    "plan-outline": ("outline_plan.txt",),
     "plan-story-structure": ("story_structure.txt", "chapter_plan.txt"),
     "plan-chapter-scenes": ("scene_plan.txt",),
     "write-chapter": ("scene_plan.txt", "chapter_writer.txt", "chapter_length_advice.txt",

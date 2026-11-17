@@ -30,7 +30,7 @@ def test_create_node_requires_coordinates(monkeypatch):
         # 不传坐标应失败（Pydantic 校验在工具层，sync 函数会收到 None）
         # 实际测试：传了坐标能正常创建
         result = json.loads(nt._create_node_sync(
-            "outline", "主线", content="x", layer=1, position_x=100, position_y=200
+            "note", "主线", content="x", layer=1, position_x=100, position_y=200
         , sort_order=1))
         assert result["success"] is True
         assert result["node"]["layer"] == 1
@@ -42,7 +42,7 @@ def test_update_node_sync_sets_layer(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="n1", layer=1,
+        node = Node(sort_order=0, work_id=work.id, type="note", title="n1", layer=1,
                     position_x=50, position_y=60)
         db.add(node)
         db.commit()
@@ -110,7 +110,7 @@ def test_create_node_accepts_all_standard_types(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        for t in ("character", "outline", "volume", "plot", "chapter", "worldbuilding", "note"):
+        for t in ("character", "chapter", "worldbuilding", "note", "reviewer_note"):
             result = json.loads(nt._create_node_sync(t, t, position_x=0, position_y=0, sort_order=1))
             assert result["success"] is True, f"{t} 应被接受，实际: {result}"
     finally:
@@ -122,7 +122,7 @@ def test_batch_create_rejects_invalid_type(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync(nodes_data=[
-            {"sort_order": 1, "node_type": "outline", "title": "ok", "position_x": 0, "position_y": 0},
+            {"sort_order": 1, "node_type": "note", "title": "ok", "position_x": 0, "position_y": 0},
             {"sort_order": 1, "node_type": "event", "title": "bad", "position_x": 500, "position_y": 0},
         ]))
         assert result.get("success") is not True
@@ -135,7 +135,7 @@ def test_update_node_rejects_invalid_type(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="n", layer=0,
+        node = Node(sort_order=0, work_id=work.id, type="note", title="n", layer=0,
                     position_x=0, position_y=0)
         db.add(node)
         db.commit()

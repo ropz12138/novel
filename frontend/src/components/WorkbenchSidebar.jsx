@@ -22,9 +22,11 @@ export function WorkbenchSidebar({
   children,
   headerExtra,
   className,
+  fillOnMobile = true,
 }) {
-  const [mobile, setMobile] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
+  const [mobileViewport, setMobileViewport] = useState(() => window.matchMedia(MOBILE_QUERY).matches);
   const dragRef = useRef(null);
+  const mobile = mobileViewport && fillOnMobile;
   const desktopCollapsed = !mobile && collapsed;
   const clampedWidth = clampWidth(width);
   const style = mobile
@@ -35,9 +37,9 @@ export function WorkbenchSidebar({
 
   useEffect(() => {
     const media = window.matchMedia(MOBILE_QUERY);
-    const onChange = () => setMobile(media.matches);
+    const onChange = () => setMobileViewport(media.matches);
     media.addEventListener("change", onChange);
-    setMobile(media.matches);
+    setMobileViewport(media.matches);
     return () => media.removeEventListener("change", onChange);
   }, []);
 

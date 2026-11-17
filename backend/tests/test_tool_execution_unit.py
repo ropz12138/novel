@@ -68,7 +68,7 @@ def test_rollback_discards_node_chapter_and_artifact_from_in_flight_tool(db_sess
 def test_rollback_deletes_chapter_node_created_by_in_flight_tool(db_session):
     user, work = _make_user_work(db_session)
     session = session_store.create_session(user_id=user.id, work_id=work.id)
-    plot = Node(sort_order=0, work_id=work.id, type="plot", title="情节", content="", layer=0)
+    plot = Node(sort_order=0, work_id=work.id, type="note", title="情节", content="", layer=0)
     db_session.add(plot)
     db_session.commit()
 

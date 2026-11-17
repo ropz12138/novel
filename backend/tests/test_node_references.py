@@ -89,7 +89,7 @@ def test_notes_reference_rejects_non_chapter(monkeypatch):
 
 def test_markdown_reference_uses_source_offsets_and_chapter_body_keeps_the_old_protocol():
     content = "# 情节一\n\n- 甲\n- 乙"
-    result = make_reference("n1", "情节", content, 3, 3, "content", "plot")
+    result = make_reference("n1", "情节", content, 3, 3, "content", "note")
     query = parse_qs(urlparse(result["url"]).query)
     assert query["segmentation"] == ["markdown-v1"]
     assert content[int(query["start"][0]):int(query["end"][0])] == "- 乙"

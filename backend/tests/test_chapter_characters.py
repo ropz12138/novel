@@ -64,7 +64,7 @@ def test_create_non_chapter_rejects_characters(monkeypatch):
         work = _make_work(monkeypatch, db, "非章节")
         character = _make_character(db, work.id)
         result = json.loads(nt._create_node_sync(
-            "plot",
+            "note",
             "情节",
             characters=[{"id": character.id, "name": "林川"}],
             sort_order=1,
@@ -137,7 +137,7 @@ def test_update_chapter_characters_preserves_other_extra_data(monkeypatch):
             type="chapter",
             title="第一章",
             sort_order=1,
-            extra_data={"last_generation": {"ok": True}, "chapter_elements": [{"title": "觉醒"}]},
+            extra_data={"last_generation": {"ok": True}, "chapter_elements": [{"title": "觉醒"}], "keep": 1},
         )
         db.add(node)
         db.commit()
@@ -150,7 +150,8 @@ def test_update_chapter_characters_preserves_other_extra_data(monkeypatch):
         assert result["success"] is True, result
         db.refresh(node)
         assert node.extra_data["last_generation"] == {"ok": True}
-        assert node.extra_data["chapter_elements"][0]["title"] == "觉醒"
+        assert "chapter_elements" not in (node.extra_data or {})
+        assert node.extra_data["keep"] == 1
         assert node.extra_data["characters"][0]["name"] == "沈夜"
     finally:
         db.close()

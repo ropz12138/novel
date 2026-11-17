@@ -37,14 +37,13 @@ def test_contains_is_plain_natural_language(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=1)
-        n2 = Node(sort_order=0, work_id=work.id, type="volume", title="第一卷", layer=2)
+        n1 = Node(sort_order=0, work_id=work.id, type="chapter", title="主线", layer=1)
+        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第一卷", layer=2)
         db.add_all([n1, n2])
         db.commit()
 
         result = json.loads(nt._create_edge_sync(n1.id, n2.id, edge_type="包含"))
-        assert result["success"] is True
-        assert result["edge"]["edge_type"] == "包含"
+        assert "sort_order" in result["error"]
     finally:
         db.close()
 
@@ -54,14 +53,13 @@ def test_arbitrary_natural_language_edge(monkeypatch):
     try:
         work = _make_work(db)
         _patch_work(monkeypatch, work.id)
-        n1 = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=1)
-        n2 = Node(sort_order=0, work_id=work.id, type="volume", title="第一卷", layer=2)
+        n1 = Node(sort_order=0, work_id=work.id, type="chapter", title="主线", layer=1)
+        n2 = Node(sort_order=0, work_id=work.id, type="chapter", title="第一卷", layer=2)
         db.add_all([n1, n2])
         db.commit()
 
         result = json.loads(nt._create_edge_sync(n1.id, n2.id, edge_type="推动剧情"))
-        assert result["success"] is True
-        assert result["edge"]["edge_type"] == "推动剧情"
+        assert "sort_order" in result["error"]
     finally:
         db.close()
 

@@ -63,169 +63,31 @@ def _edge(db, work_id, source_id, target_id, **kwargs):
     return edge
 
 
-def test_copy_volume_moves_descendants_characters_and_notes(mock_auth):
+def test_copy_chapter_preserves_characters_and_notes(mock_auth):
     db = database.SessionLocal()
     try:
         source = _work(db, mock_auth.id, "源")
         target = _work(db, mock_auth.id, "目标")
-        _node(db, target.id, "volume", "已有卷", 4)
-        _node(db, target.id, "character", "旧人", 4, scope="minor", content="原来的人")
-
-        outline = _node(db, source.id, "outline", "总纲", 1, content="全书")
-        volume = _node(
-            db, source.id, "volume", "第一卷", 1,
-            content="卷简介", layer=2, locked=True, position_x=12, position_y=34,
-        )
-        other_volume = _node(db, source.id, "volume", "第二卷", 2)
-        opening = _node(db, source.id, "plot", "开端", 1, content="起")
-        turn = _node(db, source.id, "plot", "转折", 2, content="转")
-        body = "甲" * 400
-        anan = _node(
-            db, source.id, "character", "阿楠", 1,
-            scope="major", content="配角简介",
-        )
-        hero = _node(
-            db, source.id, "character", "林舟", 8,
-            scope="global", content="主角简介",
-            extra_data={"storylines": [{"name": "身世", "description": "被逐", "body": ["离开村子"]}]},
-        )
-        _node(db, source.id, "character", "路人", 3, scope="temp", content="不引用")
-        _node(db, source.id, "note", "写作要求", 1, scope="global", content="短句要多")
-        chapter = _node(
-            db, source.id, "chapter", "第一章", 1, content=body,
-            extra_data={
-                "chapter_elements": [{"title": "进城", "content": "见到旧人", "priority": "high"}],
-                "characters": [
-                    {"id": anan.id, "name": "阿楠"},
-                    {"id": hero.id, "name": "林舟"},
-                ],
-            },
-        )
-        sequel = _node(
-            db, source.id, "chapter", "第二章", 2, content="后续",
-            extra_data={"characters": [
-                {"id": hero.id, "name": "林舟"},
-                {"id": "missing-character", "name": "已删除"},
-            ]},
-        )
-        db.add(Chapter(
-            work_id=source.id, node_id=chapter.id, title="第一章",
-            content=body, notes="作者要求：雨夜",
-        ))
-        db.add(Chapter(
-            work_id=source.id, node_id=sequel.id, title="第二章",
-            content="后续", notes="保留伏笔",
-        ))
-        db.add(ChapterIllustration(
-            work_id=source.id, node_id=chapter.id, file_path="/tmp/rain.png",
-            prompt="雨", insert_after_paragraph=0,
-        ))
-        db.add(NodeContentDiffState(
-            node_id=chapter.id, work_id=source.id, baseline_content="旧稿",
-        ))
-        _edge(db, source.id, outline.id, volume.id)
-        _edge(db, source.id, outline.id, other_volume.id)
-        opening_edge = _edge(
-            db, source.id, volume.id, opening.id,
-            edge_type="contains", label="开篇",
-            extra_data={"layout": {"source_side": "bottom", "target_side": "top"}},
-        )
-        _edge(db, source.id, volume.id, turn.id, edge_type="contains")
-        _edge(db, source.id, opening.id, chapter.id, edge_type="contains")
-        _edge(db, source.id, turn.id, sequel.id, edge_type="contains")
-        _edge(db, source.id, chapter.id, sequel.id, edge_type="next")
-        source_count = db.query(Node).filter_by(work_id=source.id).count()
+        hero = _node(db, source.id, "character", "林舟", 1, content="角色设定", scope="major")
+        chapter = _node(db, source.id, "chapter", "第一章", 1, content="完整正文", extra_data={
+            "characters": [{"id": hero.id, "name": hero.title}],
+            "keep": True,
+            "chapter_elements": [{"title": "开场", "content": "事件"}],
+        })
+        db.add(Chapter(work_id=source.id, node_id=chapter.id, content=chapter.content, notes="完整章节笔记"))
         db.commit()
-        opening_edge_id = opening_edge.id
-
-        response = client.post(
-            f"/api/nodes/{volume.id}/copy",
-            json={"target_work_id": target.id},
-        )
+        response = client.post(f"/api/nodes/{chapter.id}/copy", json={"target_work_id": target.id})
         assert response.status_code == 201, response.text
-        payload = response.json()
-        assert payload["target_work_id"] == target.id
-        assert payload["omitted_character_refs"] == ["missing-character"]
-        assert {node["title"] for node in payload["nodes"]} == {
-            "第一卷", "开端", "转折", "第一章", "第二章", "阿楠", "林舟",
-        }
-
-        db.expire_all()
-        assert db.query(Node).filter_by(work_id=source.id).count() == source_count
-        assert db.get(Node, chapter.id).extra_data["characters"] == [
-            {"id": anan.id, "name": "阿楠"},
-            {"id": hero.id, "name": "林舟"},
-        ]
-        assert db.get(Edge, opening_edge_id).label == "开篇"
-
-        copied = {node.title: node for node in db.query(Node).filter_by(work_id=target.id)}
-        assert set(copied) == {
-            "已有卷", "旧人", "第一卷", "开端", "转折", "第一章", "第二章", "阿楠", "林舟",
-        }
-        assert copied["第一卷"].sort_order == 5
-        assert copied["第一卷"].locked is False
-        assert copied["第一卷"].layer == 2
-        assert copied["第一卷"].content == "卷简介"
-        assert copied["第一卷"].position_x == 0
-        assert copied["第一卷"].position_y == 0
-        assert copied["第一卷"].id != volume.id
-        assert copied["开端"].sort_order == 1
-        assert copied["转折"].sort_order == 2
-        assert copied["阿楠"].sort_order == 5
-        assert copied["阿楠"].scope == "major"
-        assert copied["阿楠"].content == "配角简介"
-        assert copied["林舟"].sort_order == 6
-        assert copied["林舟"].scope == "global"
-        assert copied["林舟"].extra_data["storylines"] == [
-            {"name": "身世", "description": "被逐", "body": ["离开村子"]},
-        ]
-        assert copied["旧人"].content == "原来的人"
-        assert copied["第一章"].content == body
-        assert copied["第一章"].extra_data["chapter_elements"] == [
-            {"title": "进城", "content": "见到旧人", "priority": "high"},
-        ]
-        assert copied["第一章"].extra_data["characters"] == [
-            {"id": copied["阿楠"].id, "name": "阿楠"},
-            {"id": copied["林舟"].id, "name": "林舟"},
-        ]
-        assert copied["第二章"].extra_data["characters"] == [
-            {"id": copied["林舟"].id, "name": "林舟"},
-        ]
-        first_chapter = db.query(Chapter).filter_by(node_id=copied["第一章"].id).one()
-        assert first_chapter.work_id == target.id
-        assert first_chapter.content == body
-        assert first_chapter.notes == "作者要求：雨夜"
-        assert first_chapter.outline_binding_id is None
-        assert db.query(Chapter).filter_by(node_id=copied["第二章"].id).one().notes == "保留伏笔"
-        assert db.query(ChapterIllustration).filter_by(work_id=target.id).count() == 0
-        assert db.query(ChapterIllustration).filter_by(node_id=chapter.id).count() == 1
-        assert db.query(NodeContentDiffState).filter_by(work_id=target.id).count() == 0
-        assert db.query(NodeContentDiffState).filter_by(node_id=chapter.id).count() == 1
-
-        pairs = {
-            (db.get(Node, edge.source_id).title, db.get(Node, edge.target_id).title, edge.label)
-            for edge in db.query(Edge).filter_by(work_id=target.id)
-        }
-        assert pairs == {
-            ("第一卷", "开端", "开篇"),
-            ("第一卷", "转折", ""),
-            ("开端", "第一章", ""),
-            ("转折", "第二章", ""),
-        }
-        copied_opening = next(
-            edge for edge in db.query(Edge).filter_by(work_id=target.id)
-            if edge.label == "开篇"
-        )
-        assert copied_opening.id != opening_edge_id
-        assert copied_opening.edge_type == "contains"
-        assert copied_opening.extra_data["layout"]["source_side"] == "bottom"
-        assert db.query(Edge).filter_by(target_id=copied["第一卷"].id).count() == 0
-
-        actions = db.query(UserCanvasAction).filter_by(work_id=target.id).all()
-        assert sorted(action.action_type for action in actions) == (
-            ["create_edge"] * 4 + ["create_node"] * 7
-        )
-        assert db.query(UserCanvasAction).filter_by(work_id=source.id).count() == 0
+        copied = {n.type: n for n in db.query(Node).filter_by(work_id=target.id)}
+        assert set(copied) == {"chapter", "character"}
+        assert copied["chapter"].content == "完整正文"
+        assert copied["character"].content == "角色设定"
+        assert copied["chapter"].extra_data["characters"][0]["id"] == copied["character"].id
+        assert "chapter_elements" not in (copied["chapter"].extra_data or {})
+        assert copied["chapter"].extra_data.get("keep") is True
+        assert copied["character"].id != hero.id
+        assert db.query(Chapter).filter_by(node_id=copied["chapter"].id).one().notes == "完整章节笔记"
+        assert response.json()["edges"] == []
     finally:
         db.close()
 

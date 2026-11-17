@@ -25,11 +25,11 @@ PROMPT_PATH = (
 
 def test_sort_order_rules_text_explains_ordering():
     assert "sort_order" in NODE_SORT_ORDER_RULES_TEXT
-    assert "同级" in NODE_SORT_ORDER_RULES_TEXT
+    assert "作品内" in NODE_SORT_ORDER_RULES_TEXT
 
 
 def test_endpoint_rules_forbid_same_level_edges():
-    assert "同级" in EDGE_ENDPOINT_RULES_TEXT
+    assert "章节顺序" in EDGE_ENDPOINT_RULES_TEXT
     assert "sort_order" in EDGE_ENDPOINT_RULES_TEXT
 
 
@@ -49,8 +49,7 @@ def test_missing_sort_order_error_is_actionable():
 def test_supervisor_prompt_states_sort_order_and_forbids_same_level_edges():
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     assert "sort_order" in prompt
-    assert "使用 `create_edge` 建立父子连线" in prompt
-    assert "同级顺序使用 `sort_order`" in prompt
+    assert "章节顺序使用作品内的 `sort_order`" in prompt
 
 
 def test_create_node_tool_description_requires_sort_order():
@@ -62,4 +61,4 @@ def test_batch_create_nodes_tool_description_requires_sort_order():
 
 
 def test_create_edge_tool_description_forbids_same_level():
-    assert "同级" in nt.create_edge.description
+    assert "sort_order" in nt.create_edge.description

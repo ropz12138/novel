@@ -35,7 +35,7 @@ def test_node_layer_persisted():
     db = database.SessionLocal()
     try:
         work = _make_work(db)
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="主线", layer=2)
+        node = Node(sort_order=0, work_id=work.id, type="note", title="主线", layer=2)
         db.add(node)
         db.commit()
         fetched = db.query(Node).filter_by(id=node.id).first()

@@ -19,9 +19,9 @@ def canvas_owner(db_session):
     work = CanvasWork(user_id=owner.id, title="private")
     db_session.add(work)
     db_session.flush()
-    source = Node(work_id=work.id, type="outline", title="outline", sort_order=1)
-    target = Node(work_id=work.id, type="volume", title="volume", sort_order=1)
-    existing_target = Node(work_id=work.id, type="volume", title="existing", sort_order=2)
+    source = Node(work_id=work.id, type="chapter", title="note", sort_order=1)
+    target = Node(work_id=work.id, type="chapter", title="note", sort_order=1)
+    existing_target = Node(work_id=work.id, type="chapter", title="existing", sort_order=2)
     db_session.add_all([source, target, existing_target])
     db_session.flush()
     edge = Edge(work_id=work.id, source_id=source.id, target_id=existing_target.id, edge_type="contains")
@@ -45,7 +45,7 @@ def test_canvas_crud_requires_work_owner(db_session, canvas_owner, resource, ope
         body = ({"type": "note", "title": "new", "sort_order": 2} if resource == "nodes" else
                 {"source_id": source.id, "target_id": target.id, "edge_type": "contains"})
         response = client.post(collection, json=body)
-        expected = 201
+        expected = 201 if resource == "nodes" else 400
     elif operation == "list":
         response = client.get(collection)
         expected = 200
@@ -60,7 +60,7 @@ def test_canvas_crud_requires_work_owner(db_session, canvas_owner, resource, ope
         db_session.expire_all()
         assert db_session.query(Node).filter_by(work_id=work.id).count() == 3
         assert db_session.query(Edge).filter_by(work_id=work.id).count() == 1
-        assert db_session.get(Node, source.id).title == "outline"
+        assert db_session.get(Node, source.id).title == "note"
         assert db_session.get(Edge, edge.id).label == ""
 
 

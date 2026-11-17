@@ -37,7 +37,7 @@ def test_agent_changes_keep_the_first_unreviewed_baseline(db_session):
 def test_grouped_state_survives_reload_and_review_of_one_group(db_session):
     old = "甲旧。\n\n乙旧。"
     new = "新增。\n\n甲新。\n\n乙新。"
-    node = Node(id="grouped", work_id="work-1", type="plot", title="分组", content=new, sort_order=1)
+    node = Node(id="grouped", work_id="work-1", type="note", title="分组", content=new, sort_order=1)
     db_session.add(node)
     db_session.flush()
     diff = build_replacement_diff(old, [
@@ -63,7 +63,7 @@ def test_grouped_state_survives_reload_and_review_of_one_group(db_session):
 def test_manual_edit_commits_touched_group_and_keeps_other_group(db_session):
     old = "甲旧。\n\n乙旧。"
     new = "甲新。\n\n乙新。"
-    node = Node(id="manual-grouped", work_id="work-1", type="plot", title="分组", content=new, sort_order=1)
+    node = Node(id="manual-grouped", work_id="work-1", type="note", title="分组", content=new, sort_order=1)
     db_session.add(node)
     db_session.flush()
     record_change(db_session, node, old, build_replacement_diff(old, [
@@ -84,7 +84,7 @@ def test_duplicate_plot_list_items_restore_with_markdown_numbers(db_session):
     updated, resolved = apply_paragraph_replacements(old, [{
         "start_paragraph": 2, "end_paragraph": 2, "new": "- 改后",
     }], "markdown")
-    node = Node(id="plot-list", work_id="work-1", type="plot", title="情节", sort_order=1, content=updated)
+    node = Node(id="plot-list", work_id="work-1", type="note", title="情节", sort_order=1, content=updated)
     db_session.add(node)
     db_session.commit()
     diff = build_replacement_diff(old, resolved, "markdown")

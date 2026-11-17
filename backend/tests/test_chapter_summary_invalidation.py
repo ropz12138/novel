@@ -44,7 +44,7 @@ def test_content_write_preserves_existing_notes(db_session):
 
 def test_content_write_creates_no_chapter_row_for_other_types(db_session):
     work = _make_work(db_session)
-    node = Node(sort_order=0, work_id=work.id, type="outline", title="大纲", content="内容")
+    node = Node(sort_order=0, work_id=work.id, type="note", title="大纲", content="内容")
     db_session.add(node)
     db_session.commit()
 

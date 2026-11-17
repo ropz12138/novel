@@ -2,7 +2,7 @@
 
 scope 取 5 值：global / local / major / minor / temp
 - worldbuilding/note：固定 global（全局节点）
-- outline/volume/plot/chapter：固定 local（层级链）
+- chapter：固定 local
 - character：global(主角) / major(主要配角) / minor(次要配角,默认) / temp(临时)，
   不允许 local（局部未细分已废弃）
 """
@@ -54,7 +54,7 @@ def test_default_scope_for_type():
     assert node_types.default_scope_for_type("worldbuilding") == "global"
     assert node_types.default_scope_for_type("note") == "global"
     assert node_types.default_scope_for_type("reviewer_note") == "global"
-    for t in ("outline", "volume", "plot", "chapter"):
+    for t in ("chapter",):
         assert node_types.default_scope_for_type(t) == "local"
     # character 默认 minor（次要配角）
     assert node_types.default_scope_for_type("character") == "minor"
@@ -65,7 +65,7 @@ def test_global_locked_types_include_reviewer_note():
 
 
 def test_local_locked_types_are_hierarchy_chain():
-    assert set(node_types.LOCAL_LOCKED_TYPES) == {"outline", "volume", "plot", "chapter"}
+    assert set(node_types.LOCAL_LOCKED_TYPES) == {"chapter"}
 
 
 def test_character_scopes_exclude_local():
@@ -86,7 +86,7 @@ def test_resolve_scope_locked_global_rejects_local():
 
 
 def test_resolve_scope_hierarchy_forces_local():
-    for t in ("outline", "volume", "plot", "chapter"):
+    for t in ("chapter",):
         assert node_types.resolve_scope(t, None) == "local"
 
 
@@ -121,7 +121,7 @@ def test_node_scope_default_local_at_orm_level():
         work = CanvasWork(user_id=user.id, title="w")
         db.add(work)
         db.commit()
-        node = Node(sort_order=0, work_id=work.id, type="outline", title="主线")
+        node = Node(sort_order=0, work_id=work.id, type="chapter", title="主线")
         db.add(node)
         db.commit()
         db.refresh(node)
@@ -136,8 +136,8 @@ def test_create_node_defaults_scope_by_type(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        # outline 默认 local
-        r = json.loads(nt._create_node_sync("outline", "主线", layer=1, sort_order=1))
+        # chapter 默认 local
+        r = json.loads(nt._create_node_sync("chapter", "主线", layer=1, sort_order=1))
         assert r["success"] is True
         assert r["node"]["scope"] == "local"
 

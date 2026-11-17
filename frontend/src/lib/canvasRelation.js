@@ -1,18 +1,9 @@
-/**
- * 关系类别派生 —— 与 backend/services/edge_relation.py 保持一致。
- *
- * 关系类别不存储在边上，而是从两端节点类型推导。判据必须是"严格降一级"：
- * chapter → chapter 的边两端都属于层级链类型，若只判断"两端是否都在层级链内"，
- * 前一章会被当成后一章的父节点，导致树深度错乱。
- *
- * 同级组合（两端类型相同）一律非法：同级顺序由节点的 sort_order 表达，
- * 用连线表示顺序会让同一件事有两个可能互相矛盾的来源。
- */
+/** 章节直接归属作品；角色和设定在侧栏展示。 */
 
 export const RELATION_HIERARCHY = "hierarchy";
 export const RELATION_REFERENCE = "reference";
 
-export const HIERARCHY_CHAIN = ["outline", "volume", "plot", "chapter"];
+export const HIERARCHY_CHAIN = ["chapter"];
 
 const LEVELS = new Map(HIERARCHY_CHAIN.map((type, level) => [type, level]));
 
@@ -23,12 +14,10 @@ export function hierarchyLevel(nodeType) {
 
 /** 返回关系类别；null 表示该组合非法（同级、跨级或反向）。 */
 export function deriveRelationKind(sourceType, targetType) {
-  const sourceLevel = hierarchyLevel(sourceType);
-  const targetLevel = hierarchyLevel(targetType);
-
-  if (sourceLevel === null || targetLevel === null) return RELATION_REFERENCE;
-  if (targetLevel === sourceLevel + 1) return RELATION_HIERARCHY;
-  return null;
+  const types = ["chapter", "character", "worldbuilding", "note", "reviewer_note"];
+  if (!types.includes(sourceType) || !types.includes(targetType)) return null;
+  if (sourceType === "chapter" && targetType === "chapter") return null;
+  return RELATION_REFERENCE;
 }
 
 export function nodeTypeById(nodes) {
@@ -62,7 +51,7 @@ export function isCanvasStructuralType(nodeType) {
  * "无父边即根节点"处理会全部默认显示，数十条设定就能占满画布。
  */
 export function isIsolatedType(nodeType) {
-  return !isCanvasStructuralType(nodeType);
+  return ["character", "worldbuilding", "note", "reviewer_note"].includes(nodeType);
 }
 
 export function isIsolatedNode(node) {

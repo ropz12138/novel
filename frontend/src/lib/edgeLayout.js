@@ -10,18 +10,6 @@ const SIDE_VECTORS = {
   left: { x: -1, y: 0 },
 };
 
-export const HIERARCHY_CHAIN_TYPES = new Set(["outline", "volume", "plot", "chapter"]);
-
-export function isHierarchyChainEdge(sourceNode, targetNode) {
-  const sourceType = sourceNode?.data?.type;
-  const targetType = targetNode?.data?.type;
-  return HIERARCHY_CHAIN_TYPES.has(sourceType) && HIERARCHY_CHAIN_TYPES.has(targetType);
-}
-
-export function resolveHierarchyChainSides() {
-  return { source_side: "bottom", target_side: "top" };
-}
-
 export function normalizeEdgeLayout(extraData = {}) {
   const layout = extraData?.layout || {};
   return {
@@ -41,10 +29,6 @@ function nodeBounds(node) {
 }
 
 export function resolveOptimalSides(sourceNode, targetNode) {
-  if (isHierarchyChainEdge(sourceNode, targetNode)) {
-    return resolveHierarchyChainSides();
-  }
-
   const sourceBounds = nodeBounds(sourceNode);
   const targetBounds = nodeBounds(targetNode);
   const sx = sourceBounds.x + sourceBounds.width / 2;

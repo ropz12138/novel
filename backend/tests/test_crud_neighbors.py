@@ -30,10 +30,10 @@ def test_create_node_accepts_layer_no_position(monkeypatch):
     db = database.SessionLocal()
     try:
         _make_work(monkeypatch, db)
-        result = json.loads(nt._create_node_sync("outline", "主线", content="x", layer=1, sort_order=1))
+        result = json.loads(nt._create_node_sync("note", "主线", content="x", layer=1, sort_order=1))
         assert result["success"] is True
         assert result["node"]["layer"] == 1
-        assert result["node"]["type"] == "outline"
+        assert result["node"]["type"] == "note"
         assert result["neighbors"] == []
     finally:
         db.close()
@@ -43,7 +43,7 @@ def test_update_node_returns_all_neighbors(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        a = Node(sort_order=0, work_id=work.id, type="note", title="A", layer=1)
         b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
@@ -88,19 +88,16 @@ def test_delete_node_returns_orphaned_neighbors(monkeypatch):
         db.close()
 
 
-def test_create_edge_returns_endpoints_as_neighbors(monkeypatch):
+def test_create_edge_rejects_chapter_sequence(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(sort_order=0, work_id=work.id, type="volume", title="B", layer=2)
-        db.add_all([a, b])
+        nodes = [Node(work_id=work.id, type="chapter", title=f"章{i}", sort_order=i) for i in (1, 2)]
+        db.add_all(nodes)
         db.commit()
-
-        result = json.loads(nt._create_edge_sync(a.id, b.id, edge_type="包含"))
-        assert result["success"] is True
-        neighbor_ids = [nb["node"]["id"] for nb in result["neighbors"]]
-        assert set(neighbor_ids) == {a.id, b.id}
+        result = json.loads(nt._create_edge_sync(nodes[0].id, nodes[1].id, edge_type="接续"))
+        assert "sort_order" in result["error"]
+        assert db.query(Edge).count() == 0
     finally:
         db.close()
 
@@ -109,7 +106,7 @@ def test_neighbor_incoming_direction(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        a = Node(sort_order=0, work_id=work.id, type="note", title="A", layer=1)
         b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
@@ -129,7 +126,7 @@ def test_batch_create_nodes_returns_layer(monkeypatch):
     try:
         _make_work(monkeypatch, db)
         result = json.loads(nt._batch_create_nodes_sync([
-            {"sort_order": 1, "node_type": "outline", "title": "A", "layer": 1, "position_x": 100, "position_y": 200},
+            {"sort_order": 1, "node_type": "note", "title": "A", "layer": 1, "position_x": 100, "position_y": 200},
             {"sort_order": 1, "node_type": "chapter", "title": "B", "layer": 3, "position_x": 300, "position_y": 600},
         ]))
         assert result["success"] is True
@@ -141,21 +138,16 @@ def test_batch_create_nodes_returns_layer(monkeypatch):
         db.close()
 
 
-def test_batch_create_edges_returns_endpoints(monkeypatch):
+def test_batch_create_edges_rejects_chapter_sequence(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
-        b = Node(sort_order=0, work_id=work.id, type="volume", title="B", layer=2)
-        db.add_all([a, b])
+        nodes = [Node(work_id=work.id, type="chapter", title=f"章{i}", sort_order=i) for i in (1, 2)]
+        db.add_all(nodes)
         db.commit()
-
-        result = json.loads(nt._batch_create_edges_sync([
-            {"source_id": a.id, "target_id": b.id, "edge_type": "包含"},
-        ]))
-        assert result["success"] is True
-        neighbor_ids = [nb["id"] for nb in result["neighbors"]]
-        assert set(neighbor_ids) == {a.id, b.id}
+        result = json.loads(nt._batch_create_edges_sync([{"source_id": nodes[0].id, "target_id": nodes[1].id, "edge_type": "接续"}]))
+        assert "error" in result
+        assert db.query(Edge).count() == 0
     finally:
         db.close()
 
@@ -164,7 +156,7 @@ def test_update_edge_returns_endpoints(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        a = Node(sort_order=0, work_id=work.id, type="note", title="A", layer=1)
         b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()
@@ -208,7 +200,7 @@ def test_update_edge_nonexistent(monkeypatch):
     db = database.SessionLocal()
     try:
         work = _make_work(monkeypatch, db)
-        a = Node(sort_order=0, work_id=work.id, type="outline", title="A", layer=1)
+        a = Node(sort_order=0, work_id=work.id, type="note", title="A", layer=1)
         b = Node(sort_order=0, work_id=work.id, type="chapter", title="B", layer=3)
         db.add_all([a, b])
         db.commit()

@@ -57,7 +57,7 @@ class ReadNodeContentInput(BaseModel):
 class GrepNodesInput(BaseModel):
     keywords: list[str] = Field(min_length=1, max_length=10, description="关键词列表")
     node_type: Optional[str] = Field(default=None, description="限制搜索的节点类型")
-    fields: list[Literal["title", "content", "notes", "extra_data.chapter_elements",
+    fields: list[Literal["title", "content", "notes",
                          "extra_data.characters", "extra_data.storylines"]] = Field(
         default_factory=lambda: ["title", "content", "notes"], min_length=1)
     match_mode: Literal["any", "all"] = "any"

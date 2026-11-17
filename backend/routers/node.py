@@ -7,15 +7,15 @@ from models.user import User
 from models.work import CanvasWork
 from services.work_access import require_work_owner
 from services.node_copy_service import copy_node_to_work
-from node_types import resolve_scope, resolve_update_scope
+from node_types import resolve_scope, resolve_update_scope, validate_node_type
 from schemas.edge import EdgeResponse
 from schemas.node import NodeCreate, NodeUpdate, NodeResponse, NodeListResponse
 from routers.auth import get_current_user
 from services.agents.tools.node_tools import (
-    _normalize_chapter_elements,
     _normalize_chapter_characters,
     _normalize_storylines,
     _merge_extra_data_fields,
+    _strip_chapter_elements,
 )
 from services import user_action_service as action_svc
 from services.node_content_write_service import write_node_content
@@ -213,7 +213,7 @@ def create_node(
         type=data.type,
         title=data.title,
         content="",
-        extra_data=data.extra_data,
+        extra_data=_strip_chapter_elements(data.extra_data),
         layer=data.layer,
         sort_order=data.sort_order,
         scope=final_scope,
@@ -239,7 +239,7 @@ def copy_node_across_works(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    """把节点、它的下级和章节引用的角色复制到当前用户的另一部作品。"""
+    """把节点和章节引用的角色复制到当前用户的另一部作品。"""
     node = db.query(Node).filter(Node.id == node_id).first()
     if node is None:
         raise HTTPException(status_code=404, detail="Node not found")
@@ -252,6 +252,10 @@ def copy_node_across_works(
     require_work_owner(db, data.target_work_id, current_user.id)
     if node.work_id == data.target_work_id:
         raise HTTPException(status_code=400, detail="不能复制到当前作品")
+    try:
+        validate_node_type(node.type)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     result = copy_node_to_work(db, node, data.target_work_id)
     response = NodeCopyResponse(
         target_work_id=data.target_work_id,
@@ -306,7 +310,6 @@ def update_node(
     if "content" in update_data and expected_content is not None and expected_content != old_content:
         raise HTTPException(status_code=409, detail="正文已发生变化，请刷新后重试")
     proposed_scope = update_data.pop("scope", None)
-    chapter_elements = update_data.pop("chapter_elements", None)
     notes = update_data.pop("notes", None)
     characters = update_data.pop("characters", None)
     storylines = update_data.pop("storylines", None)
@@ -331,15 +334,6 @@ def update_node(
         old_notes = (existing_chapter.notes if existing_chapter else "") or ""
         write_node_content(db, node, node.content or "", summary=notes)
 
-    if chapter_elements is not None:
-        effective_type = new_type or node.type
-        if effective_type != "chapter":
-            raise HTTPException(status_code=400, detail="chapter_elements 只能用于 chapter 节点")
-        normalized, err = _normalize_chapter_elements(chapter_elements)
-        if err:
-            raise HTTPException(status_code=400, detail=err)
-        node.extra_data = _merge_extra_data_fields(node.extra_data, chapter_elements=normalized)
-
     if characters is not None:
         effective_type = new_type or node.type
         if effective_type != "chapter":
@@ -358,6 +352,9 @@ def update_node(
             raise HTTPException(status_code=400, detail=err)
         node.extra_data = _merge_extra_data_fields(node.extra_data, storylines=normalized)
 
+    if "extra_data" in update_data or (node.extra_data or {}).get("chapter_elements") is not None:
+        node.extra_data = _strip_chapter_elements(node.extra_data)
+
     db.commit()
     db.refresh(node)
     if "content" in update_data and (node.content or "") != old_content:
@@ -367,7 +364,7 @@ def update_node(
     substantial = (
         action_svc.has_substantial_node_change(update_data)
         or notes is not None
-        or chapter_elements is not None
+        or characters is not None
         or storylines is not None
     )
     if substantial:

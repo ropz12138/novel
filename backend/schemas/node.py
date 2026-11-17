@@ -1,11 +1,11 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 
 
 SORT_ORDER_DESC = (
-    "同级显示顺序（必填，整数）。同一父节点下的兄弟节点按此值从小到大排列，"
-    "章节顺序、卷顺序、情节顺序都由它决定。请按叙事先后依次给出 1、2、3……"
+    "作品内同类型节点的显示顺序（必填，整数），按此值从小到大排列。"
+    "章节顺序由它决定。请按叙事先后依次给出 1、2、3……"
 )
 
 
@@ -37,10 +37,6 @@ class NodeUpdate(BaseModel):
     position_x: Optional[float] = None
     position_y: Optional[float] = None
     locked: Optional[bool] = Field(None, description="是否固定节点（固定后坐标不可被 agent 修改）")
-    chapter_elements: Optional[List[dict]] = Field(
-        None,
-        description="仅 chapter 节点：替换 extra_data.chapter_elements，保留 extra_data 中的其它字段",
-    )
     characters: Optional[List[dict]] = Field(
         None,
         description=(
@@ -69,6 +65,13 @@ class NodeResponse(BaseModel):
     locked: bool
     created_at: datetime
     updated_at: datetime
+
+    @field_validator("extra_data", mode="before")
+    @classmethod
+    def drop_removed_extra_fields(cls, value):
+        if isinstance(value, dict) and "chapter_elements" in value:
+            value = {key: item for key, item in value.items() if key != "chapter_elements"}
+        return value or {}
 
     class Config:
         from_attributes = True

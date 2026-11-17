@@ -26,7 +26,6 @@ from node_types import (
     EDGE_CONNECTION_RULES_TEXT,
     resolve_scope,
     resolve_update_scope,
-    validate_node_type,
     validate_edge_endpoints,
 )
 
@@ -85,17 +84,8 @@ def _content_diff_event(node: dict, content_diff: dict) -> tuple[str, dict]:
 # 节点类型白名单，创建/更新时强制校验，禁止 agent 自创
 VALID_NODE_TYPES = list(STANDARD_NODE_TYPES)
 
-CREATE_NODE_PARENT_ID_ERROR = (
-    "create_node 不接受 parent_node_id。"
-    "新建章节请调用 assemble_chapter_context，并传入 parent_node_id、chapter_title、sort_order；"
-    "已有章节请用 create_edge 建立 contains 连线。"
-)
-CREATE_NODE_NO_PARENT_ID_TEXT = (
-    "不接受 parent_node_id。"
-    "新建章节必须调用 assemble_chapter_context（parent_node_id、chapter_title、sort_order），"
-    "禁止用 create_node 建章并指望自动连父节点；"
-    "已有章节与父情节的 contains 关系用 create_edge 建立。"
-)
+CREATE_NODE_PARENT_ID_ERROR = "parent_node_id 参数已移除。章节直接归属作品，使用 create_node 提供 chapter、title 和 sort_order 即可。"
+CREATE_NODE_NO_PARENT_ID_TEXT = "章节直接归属作品，创建时提供 node_type、title 和 sort_order。"
 
 
 # 输入Schema
@@ -112,14 +102,6 @@ class CreateNodeInput(BaseModel):
     node_type: str = Field(description=f"节点类型。{NODE_TYPES_RULES_TEXT}")
     title: str = Field(description="节点标题")
     content: str = Field(default="", description="节点内容")
-    chapter_elements: Optional[list[dict]] = Field(
-        default=None,
-        max_length=50,
-        description=(
-            "chapter 专用：本章情节元素，对象数组，每项含 title 和 content。"
-            "创建章节时把本章元素放在这里。"
-        ),
-    )
     characters: Optional[list[dict]] = Field(
         default=None,
         max_length=50,
@@ -143,7 +125,7 @@ class CreateNodeInput(BaseModel):
         default=0,
         description=f"垂直布局层级（整数，数字小的在上）。{NODE_LAYOUT_RULES_TEXT}",
     )
-    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note/reviewer_note 固定 global，层级链(outline/volume/plot/chapter) 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
+    scope: Optional[str] = Field(default=None, description="角色定位(character专用)：global=主角 / major=主要配角 / minor=次要配角(默认) / temp=临时角色。worldbuilding/note/reviewer_note 固定 global，chapter 固定 local。**改角色定位必须用 scope 字段，不能只改 title 文字**")
     position_x: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
     position_y: Optional[float] = Field(default=None, description=NODE_LAYOUT_RULES_TEXT)
     reason: Optional[str] = Field(default=None, description="调用此工具的原因（仅用于日志分析）")
@@ -189,14 +171,6 @@ class UpdateNodeInput(BaseModel):
     sort_order: Optional[int] = Field(
         default=None,
         description=f"调整同级显示顺序。{NODE_SORT_ORDER_RULES_TEXT}",
-    )
-    chapter_elements: Optional[list[dict]] = Field(
-        default=None,
-        max_length=50,
-        description=(
-            "chapter 专用：更新本章情节元素，对象数组，每项含 title 和 content。"
-            "只更新 extra_data.chapter_elements。"
-        ),
     )
     characters: Optional[list[dict]] = Field(
         default=None,
@@ -289,7 +263,7 @@ class BatchCreateNodesInput(BaseModel):
         description=(
             "节点数据列表，每项必须含 node_type、title、sort_order。"
             f"{CREATE_NODE_NO_PARENT_ID_TEXT}"
-            "创建 chapter 时可带 chapter_elements 与 characters；创建 character 时可带 storylines；不要创建 element 节点。"
+            "创建 chapter 时可带 characters；创建 character 时可带 storylines；不要创建 element 节点。"
             f"{NODE_SORT_ORDER_RULES_TEXT}{NODE_LAYOUT_RULES_TEXT}"
         ),
     )
@@ -411,30 +385,10 @@ def _relation_feedback_fields(db, work_id, nodes) -> dict:
     }
 
 
-def _normalize_chapter_elements(chapter_elements) -> tuple[list[dict], str | None]:
-    if chapter_elements is None:
-        return [], None
-    if not isinstance(chapter_elements, list):
-        return [], "chapter_elements 必须是数组"
-    normalized = []
-    for idx, item in enumerate(chapter_elements):
-        if not isinstance(item, dict):
-            return [], f"chapter_elements[{idx}] 必须是对象"
-        title = str(item.get("title") or "").strip()
-        content = str(item.get("content") or "").strip()
-        if not title and not content:
-            return [], f"chapter_elements[{idx}] 至少需要 title 或 content"
-        normalized.append({
-            "id": str(item.get("id") or f"chapter_element_{idx + 1}"),
-            "title": title,
-            "content": content,
-            **{
-                key: value
-                for key, value in item.items()
-                if key not in ("id", "title", "content")
-            },
-        })
-    return normalized, None
+def _strip_chapter_elements(extra_data) -> dict:
+    data = dict(extra_data or {})
+    data.pop("chapter_elements", None)
+    return data
 
 
 def _normalize_storylines(storylines) -> tuple[list[dict], str | None]:
@@ -510,10 +464,9 @@ def _normalize_chapter_characters(characters, db, work_id: str) -> tuple[list[di
     return normalized, None
 
 
-def _merge_extra_data_fields(extra_data, *, chapter_elements=None, characters=None, storylines=None) -> dict:
+def _merge_extra_data_fields(extra_data, *, characters=None, storylines=None) -> dict:
+    extra_data = _strip_chapter_elements(extra_data)
     data = dict(extra_data or {})
-    if chapter_elements is not None:
-        data["chapter_elements"] = chapter_elements
     if characters is not None:
         data["characters"] = characters
     if storylines is not None:
@@ -521,25 +474,14 @@ def _merge_extra_data_fields(extra_data, *, chapter_elements=None, characters=No
     return data
 
 
-def _extra_data_with_chapter_elements(extra_data, chapter_elements: list[dict] | None) -> dict:
-    return _merge_extra_data_fields(extra_data, chapter_elements=chapter_elements)
-
-
 # 同步实现
-def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
+def _create_node_sync(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, storylines=None, sort_order=None, characters=None):
     if sort_order is None:
         return json.dumps({"error": MISSING_SORT_ORDER_ERROR}, ensure_ascii=False)
     try:
         final_scope = resolve_scope(node_type, scope)
     except ValueError as e:
         return json.dumps({"error": str(e)}, ensure_ascii=False)
-    normalized_elements = None
-    if chapter_elements is not None:
-        if node_type != "chapter":
-            return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
-        normalized_elements, err = _normalize_chapter_elements(chapter_elements)
-        if err:
-            return json.dumps({"error": err}, ensure_ascii=False)
     if characters is not None and node_type != "chapter":
         return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
     normalized_storylines = None
@@ -573,7 +515,6 @@ def _create_node_sync(node_type, title, content="", layer=0, position_x=None, po
             scope=final_scope,
             extra_data=_merge_extra_data_fields(
                 {},
-                chapter_elements=normalized_elements,
                 characters=normalized_characters,
                 storylines=normalized_storylines,
             ),
@@ -617,7 +558,6 @@ def _update_node_sync(
     scope=None,
     locked=None,
     reason=None,
-    chapter_elements=None,
     characters=None,
     storylines=None,
     sort_order=None,
@@ -625,16 +565,6 @@ def _update_node_sync(
     replacements=None,
     expected_content_sha256=None,
 ):
-    if node_type is not None:
-        try:
-            validate_node_type(node_type)
-        except ValueError as e:
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
-    normalized_elements = None
-    if chapter_elements is not None:
-        normalized_elements, err = _normalize_chapter_elements(chapter_elements)
-        if err:
-            return json.dumps({"error": err}, ensure_ascii=False)
     normalized_storylines = None
     if storylines is not None:
         normalized_storylines, err = _normalize_storylines(storylines)
@@ -648,6 +578,11 @@ def _update_node_sync(
         node = query.first()
         if not node:
             return json.dumps({"error": "节点不存在"}, ensure_ascii=False)
+        try:
+            node.scope = _resolve_update_scope(node, node_type, scope)
+        except ValueError as e:
+            db.rollback()
+            return json.dumps({"error": str(e)}, ensure_ascii=False)
         old_content = node.content or ""
         writes_body = content is not None or (mode or "overwrite") == "replace"
         changes_chapter_type = node.type == "chapter" and node_type not in (None, "chapter")
@@ -685,8 +620,6 @@ def _update_node_sync(
         else:
             write_content = content
         final_type_for_elements = node_type or node.type
-        if chapter_elements is not None and final_type_for_elements != "chapter":
-            return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
         if characters is not None and final_type_for_elements != "chapter":
             return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
         if storylines is not None and final_type_for_elements != "character":
@@ -722,18 +655,14 @@ def _update_node_sync(
             normalized_characters, err = _normalize_chapter_characters(characters, db, node.work_id)
             if err:
                 return json.dumps({"error": err}, ensure_ascii=False)
-        if chapter_elements is not None or characters is not None or storylines is not None:
+        if characters is not None or storylines is not None:
             node.extra_data = _merge_extra_data_fields(
                 node.extra_data,
-                chapter_elements=normalized_elements if chapter_elements is not None else None,
                 characters=normalized_characters if characters is not None else None,
                 storylines=normalized_storylines if storylines is not None else None,
             )
-        try:
-            node.scope = _resolve_update_scope(node, node_type, scope)
-        except ValueError as e:
-            db.rollback()
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+        elif (node.extra_data or {}).get("chapter_elements") is not None:
+            node.extra_data = _strip_chapter_elements(node.extra_data)
         grouped_diff = None
         if content is not None and content != old_content:
             from services.chapter_edit_service import build_replacement_diff, build_whole_content_group
@@ -944,12 +873,6 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             resolve_scope(node_type, data.get("scope"))
         except ValueError as e:
             return json.dumps({"error": str(e)}, ensure_ascii=False)
-        if data.get("chapter_elements") is not None:
-            if node_type != "chapter":
-                return json.dumps({"error": "chapter_elements 只能用于 chapter 节点"}, ensure_ascii=False)
-            _, err = _normalize_chapter_elements(data.get("chapter_elements"))
-            if err:
-                return json.dumps({"error": err}, ensure_ascii=False)
         if data.get("characters") is not None and node_type != "chapter":
             return json.dumps({"error": "characters 只能用于 chapter 节点"}, ensure_ascii=False)
         if data.get("storylines") is not None:
@@ -970,9 +893,6 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
             position_x = data.get("position_x")
             position_y = data.get("position_y")
             scope = resolve_scope(node_type, data.get("scope"))
-            normalized_elements = None
-            if data.get("chapter_elements") is not None:
-                normalized_elements, _ = _normalize_chapter_elements(data.get("chapter_elements"))
             normalized_characters = None
             if data.get("characters") is not None:
                 normalized_characters, err = _normalize_chapter_characters(
@@ -992,7 +912,6 @@ def _batch_create_nodes_sync(nodes_data, reason=None):
                 content="",
                 extra_data=_merge_extra_data_fields(
                     {},
-                    chapter_elements=normalized_elements,
                     characters=normalized_characters,
                     storylines=normalized_storylines,
                 ),
@@ -1102,8 +1021,8 @@ async def _emit_nodes_updated(result, label, payload):
     return result
 
 
-async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, chapter_elements=None, storylines=None, sort_order=None, characters=None):
-    result = await asyncio.to_thread(partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, chapter_elements, storylines, sort_order, characters))
+async def _create_node_async(node_type, title, content="", layer=0, position_x=None, position_y=None, scope=None, reason=None, storylines=None, sort_order=None, characters=None):
+    result = await asyncio.to_thread(partial(_create_node_sync, node_type, title, content, layer, position_x, position_y, scope, reason, storylines, sort_order, characters))
     return await _emit_nodes_updated(result, "_create_node_async", lambda data: {"action": "create", "node_type": node_type})
 
 
@@ -1118,7 +1037,6 @@ async def _update_node_async(
     scope=None,
     locked=None,
     reason=None,
-    chapter_elements=None,
     characters=None,
     storylines=None,
     sort_order=None,
@@ -1126,7 +1044,7 @@ async def _update_node_async(
     replacements=None,
     expected_content_sha256=None,
 ):
-    result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, chapter_elements, characters, storylines, sort_order, mode, replacements,
+    result = await asyncio.to_thread(partial(_update_node_sync, node_id, title, content, node_type, layer, position_x, position_y, scope, locked, reason, characters, storylines, sort_order, mode, replacements,
                                            expected_content_sha256=expected_content_sha256))
     try:
         data = json.loads(result)

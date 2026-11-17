@@ -359,13 +359,6 @@ describe("CanvasPage delete work", () => {
     expect(screen.getByTestId("agent-chat-mock")).toBeDefined();
     expect(screen.getByTestId("agent-panel").getAttribute("aria-hidden")).toBe("true");
     expect(screen.getByRole("button", { name: "展开Agent侧边栏" })).toBeDefined();
-    const characters = screen.getByRole("button", { name: "展开角色与设定" });
-    expect(characters.className).toContain("right-3");
-    expect(characters.className).not.toContain("left-3");
-    expect(screen.getByTestId("app-floating-composer").contains(characters)).toBe(false);
-    expect(canvas.dataset.charactersOpen).toBe("false");
-    fireEvent.click(characters);
-    expect(screen.getByTestId("canvas-mock").dataset.charactersOpen).toBe("true");
     expect(screen.queryByRole("button", { name: "展开角色与设定" })).toBeNull();
     expect(screen.queryByRole("button", { name: "检查更新" })).toBeNull();
 
@@ -529,8 +522,11 @@ describe("CanvasPage delete work", () => {
     );
 
     await screen.findByTestId("canvas-mock");
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: "会话列表" }).disabled).toBe(false);
+    });
     fireEvent.click(screen.getByRole("button", { name: "会话列表" }));
-    fireEvent.click(screen.getByRole("button", { name: "上一轮对话" }));
+    fireEvent.click(await screen.findByRole("button", { name: "上一轮对话" }));
     expect(agentChatRefMocks.selectSession).toHaveBeenCalledWith({ id: "s1", title: "上一轮对话" });
 
     fireEvent.click(screen.getByRole("button", { name: "会话列表" }));

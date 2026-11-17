@@ -26,7 +26,7 @@ def _make_work(monkeypatch, db):
     return work
 
 
-def _make_node(db, work_id, title="n", x=0.0, y=0.0, node_type="outline"):
+def _make_node(db, work_id, title="n", x=0.0, y=0.0, node_type="chapter"):
     node = Node(
         sort_order=0,
         work_id=work_id,
@@ -57,48 +57,8 @@ def test_create_edge_sync_has_no_label_parameter():
     assert "label" not in params
 
 
-def test_create_edge_always_empty_label(monkeypatch):
-    db = database.SessionLocal()
-    try:
-        _make_work(monkeypatch, db)
-        wid = nt._get_current_work_id()
-        a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
-
-        result = __import__("json").loads(
-            nt._create_edge_sync(a.id, b.id, edge_type="包含"),
-        )
-
-        assert result["success"] is True
-        assert result["edge"]["label"] == ""
-        edge = db.query(Edge).filter(Edge.id == result["edge"]["id"]).first()
-        assert edge.label == ""
-    finally:
-        db.close()
 
 
-def test_batch_create_edges_ignores_label_in_data(monkeypatch):
-    db = database.SessionLocal()
-    try:
-        _make_work(monkeypatch, db)
-        wid = nt._get_current_work_id()
-        a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
-
-        result = __import__("json").loads(nt._batch_create_edges_sync([
-            {
-                "source_id": a.id,
-                "target_id": b.id,
-                "edge_type": "包含",
-                "label": "不应写入",
-            },
-        ]))
-
-        assert result["success"] is True
-        edge = db.query(Edge).filter(Edge.source_id == a.id).first()
-        assert edge.label == ""
-    finally:
-        db.close()
 
 
 def test_update_edge_can_set_deep_relation_label(monkeypatch):
@@ -107,9 +67,10 @@ def test_update_edge_can_set_deep_relation_label(monkeypatch):
         _make_work(monkeypatch, db)
         wid = nt._get_current_work_id()
         a = _make_node(db, wid, "A", x=0, y=0)
-        b = _make_node(db, wid, "B", x=400, y=0, node_type="volume")
-        nt._create_edge_sync(a.id, b.id, edge_type="包含")
-        edge = db.query(Edge).filter(Edge.source_id == a.id).first()
+        b = _make_node(db, wid, "B", x=400, y=0, node_type="chapter")
+        edge = Edge(work_id=wid, source_id=a.id, target_id=b.id, edge_type="旧连线", label="")
+        db.add(edge)
+        db.commit()
         assert edge.label == ""
 
         deep = "表面师徒，实为监视者"

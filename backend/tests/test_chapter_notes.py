@@ -27,9 +27,9 @@ def chapters(db_session):
     db_session.flush()
     nodes = [Node(work_id=work.id, type='chapter', title=f'第{i}章', sort_order=i,
                   content=f'正文{i}：晶核数量{i}。') for i in range(1, 5)]
-    outline = Node(work_id=work.id, type='outline', title='大纲', sort_order=0)
-    volume = Node(work_id=work.id, type='volume', title='第一卷', sort_order=0)
-    plot = Node(work_id=work.id, type='plot', title='主线', sort_order=0)
+    outline = Node(work_id=work.id, type='note', title='大纲', sort_order=0)
+    volume = Node(work_id=work.id, type='note', title='第一卷', sort_order=0)
+    plot = Node(work_id=work.id, type='note', title='主线', sort_order=0)
     db_session.add_all([outline, volume, plot, *nodes])
     db_session.flush()
     db_session.add_all([

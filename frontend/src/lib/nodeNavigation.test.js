@@ -1,44 +1,15 @@
 import { describe, expect, it } from "vitest";
-import { firstOutlineNode, orderedNavigationNodes } from "./nodeNavigation";
+import { firstChapterNode, orderedNavigationNodes } from "./nodeNavigation";
 
-describe("orderedNavigationNodes", () => {
-  it("visits siblings before the first node of the next level", () => {
-    const nodes = [
-      { id: "chapter", data: { type: "chapter", sort_order: 1 } },
-      { id: "plot", data: { type: "plot", sort_order: 1 } },
-      { id: "volume-2", data: { type: "volume", sort_order: 2 } },
-      { id: "volume-1", data: { type: "volume", sort_order: 1 } },
-      { id: "outline", data: { type: "outline", sort_order: 1 } },
-    ];
-    expect(orderedNavigationNodes(nodes).map((node) => node.id)).toEqual([
-      "outline", "volume-1", "volume-2", "plot", "chapter",
-    ]);
+const node = (id, type, sort_order = 1) => ({ id, data: { type, sort_order } });
+describe("章节导航", () => {
+  it("章节按顺序排列，再列出角色与设定", () => {
+    expect(orderedNavigationNodes([node("c2", "chapter", 2), node("n", "note"), node("c1", "chapter"),
+      node("r", "reviewer_note"), node("w", "worldbuilding"), node("hero", "character")]).map(n => n.id))
+      .toEqual(["c1", "c2", "hero", "w", "n", "r"]);
   });
-
-  it("keeps isolated node groups navigable", () => {
-    const nodes = [
-      { id: "note", data: { type: "note", sort_order: 1 } },
-      { id: "character", data: { type: "character", sort_order: 1 } },
-      { id: "world", data: { type: "worldbuilding", sort_order: 1 } },
-      { id: "review", data: { type: "reviewer_note", sort_order: 1 } },
-    ];
-    expect(orderedNavigationNodes(nodes).map((node) => node.id)).toEqual(["character", "world", "note", "review"]);
-  });
-});
-
-describe("firstOutlineNode", () => {
-  it("picks the earliest outline when several exist", () => {
-    const nodes = [
-      { id: "o2", data: { type: "outline", sort_order: 2 } },
-      { id: "v1", data: { type: "volume", sort_order: 1 } },
-      { id: "o1", data: { type: "outline", sort_order: 1 } },
-    ];
-    expect(firstOutlineNode(nodes)?.id).toBe("o1");
-  });
-
-  it("returns null when the canvas has no outline", () => {
-    expect(firstOutlineNode([
-      { id: "v1", data: { type: "volume", sort_order: 1 } },
-    ])).toBeNull();
+  it("定位首章，空作品返回 null", () => {
+    expect(firstChapterNode([node("c2", "chapter", 2), node("c1", "chapter")]).id).toBe("c1");
+    expect(firstChapterNode([node("n", "note")])).toBeNull();
   });
 });

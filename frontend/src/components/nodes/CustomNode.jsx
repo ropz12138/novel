@@ -1,6 +1,6 @@
 import { memo, useCallback, useRef } from "react";
 import { Handle, Position } from "@xyflow/react";
-import { BookMarked, BookOpen, ChevronDown, ChevronRight, Globe, Library, Lock, Search, StickyNote, User, Zap } from "lucide-react";
+import { BookOpen, ChevronDown, ChevronRight, Globe, Lock, Search, StickyNote, User } from "lucide-react";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { BOUNDARY_HANDLE_STYLES, ELEMENT_SIZE } from "../../lib/nodeDimensions";
@@ -57,9 +57,6 @@ const ELEMENT_POSITIONS = {
 };
 
 const nodeStyles = {
-  outline: { bg: "#dbeafe", border: "#7aa7f7", ink: "#1d4ed8", icon: Library, label: "大纲" },
-  volume: { bg: "#e0e7ff", border: "#8b90f5", ink: "#4338ca", icon: BookMarked, label: "卷" },
-  plot: { bg: "#ffedd5", border: "#f6a15d", ink: "#c2410c", icon: Zap, label: "情节" },
   chapter: { bg: "#dcfce7", border: "#62d28b", ink: "#15803d", icon: BookOpen, label: "章节" },
   character: { bg: "#fce7f3", border: "#ec4899", icon: User, label: "角色" },
   worldbuilding: { bg: "#ede9fe", border: "#8b5cf6", icon: Globe, label: "世界观" },

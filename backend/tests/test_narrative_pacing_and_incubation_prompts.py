@@ -26,8 +26,8 @@ def test_supervisor_prompt_supports_seed_incubation_and_experiential_options():
 def test_bootstrap_and_outline_skills_use_progressive_near_far_planning():
     bootstrap_skill = (SKILLS_ROOT / "bootstrap-novel" / "SKILL.md").read_text(encoding="utf-8")
     premise_ref = (REFERENCES_ROOT / "premise_architect.txt").read_text(encoding="utf-8")
-    outline_skill = (SKILLS_ROOT / "plan-outline" / "SKILL.md").read_text(encoding="utf-8")
-    outline_ref = (REFERENCES_ROOT / "outline_plan.txt").read_text(encoding="utf-8")
+    planning_skill = (SKILLS_ROOT / "plan-story-structure" / "SKILL.md").read_text(encoding="utf-8")
+    assert not (SKILLS_ROOT / "plan-outline" / "SKILL.md").exists()
 
     # 从小想法/局部世界观/场景片段反推孵化，保留种子核心画面感与趣味
     assert "场景片段" in bootstrap_skill
@@ -36,9 +36,8 @@ def test_bootstrap_and_outline_skills_use_progressive_near_far_planning():
 
     # 近景具体可感 + 远景锚点，避免中后期空泛流水账
     assert "近景" in premise_ref and "远景" in premise_ref
-    assert "近景" in outline_ref and "远景" in outline_ref
-    assert "流水账" in outline_ref
-    assert "远景锚点" in outline_skill
+    assert "note" in planning_skill
+    assert "sort_order" in planning_skill
 
 
 def test_worldbuilding_derives_social_ecology_and_side_story_hooks():

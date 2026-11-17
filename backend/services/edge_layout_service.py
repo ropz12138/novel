@@ -7,18 +7,6 @@ DEFAULT_NODE_WIDTH = float(NODE_WIDTH)
 DEFAULT_NODE_HEIGHT = float(NODE_HEIGHT)
 
 VALID_SIDES = frozenset({"top", "right", "bottom", "left"})
-HIERARCHY_CHAIN_TYPES = frozenset({"outline", "volume", "plot", "chapter"})
-
-
-def is_hierarchy_chain_edge(source: Node, target: Node) -> bool:
-    return source.type in HIERARCHY_CHAIN_TYPES and target.type in HIERARCHY_CHAIN_TYPES
-
-
-def resolve_hierarchy_chain_sides() -> dict[str, str]:
-    """结构层级链节点之间固定：源下边界 → 目标上边界。"""
-    return {"source_side": "bottom", "target_side": "top"}
-
-
 def _node_dimensions(node: Node) -> tuple[float, float]:
     if node.type == "element":
         return float(ELEMENT_WIDTH), float(ELEMENT_HEIGHT)
@@ -34,9 +22,6 @@ def _node_center(node: Node) -> tuple[float, float]:
 
 def resolve_optimal_sides(source: Node, target: Node) -> dict[str, str]:
     """根据两节点相对位置选择最自然的连接方向。"""
-    if is_hierarchy_chain_edge(source, target):
-        return resolve_hierarchy_chain_sides()
-
     sx, sy = _node_center(source)
     tx, ty = _node_center(target)
     dx = tx - sx

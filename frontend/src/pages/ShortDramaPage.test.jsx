@@ -64,6 +64,9 @@ beforeEach(() => {
   api.generateDramaPortrait.mockResolvedValue({ id: 'image-1', portrait_id: 'p1', status: 'queued' });
   api.fetchPortraitFile.mockResolvedValue(new Blob(['png'], { type: 'image/png' }));
   api.listDramaVideos.mockResolvedValue([]); api.generateDramaVideos.mockResolvedValue([]);
+  URL.createObjectURL = vi.fn(() => "blob:test-media");
+  URL.revokeObjectURL = vi.fn();
+  api.fetchDramaVideo.mockResolvedValue(new Blob(["video"], { type: "video/mp4" }));
   api.fetchDramaPoster.mockResolvedValue(new Blob(['frame'], { type: 'image/jpeg' }));
 });
 afterEach(() => { cleanup(); mediaListeners.clear(); window.matchMedia = nativeMatchMedia; vi.restoreAllMocks(); });

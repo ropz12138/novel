@@ -186,7 +186,7 @@ def test_create_node_tool_rejects_missing_sort_order(tool_work):
 def test_batch_create_nodes_rejects_item_without_sort_order(tool_work):
     """每项是自由 dict，缺 sort_order 必须报错，不能默认成 0。"""
     result = json.loads(
-        nt._batch_create_nodes_sync([{"node_type": "volume", "title": "第一卷"}])
+        nt._batch_create_nodes_sync([{"node_type": "chapter", "title": "第一卷"}])
     )
     assert "error" in result
     assert "sort_order" in result["error"]
@@ -205,8 +205,8 @@ def test_create_node_tool_persists_sort_order(tool_work):
 def test_batch_create_nodes_tool_persists_sort_order(tool_work):
     result = json.loads(
         nt._batch_create_nodes_sync([
-            {"node_type": "volume", "title": "第一卷", "sort_order": 1},
-            {"node_type": "volume", "title": "第二卷", "sort_order": 2},
+            {"node_type": "chapter", "title": "第一卷", "sort_order": 1},
+            {"node_type": "chapter", "title": "第二卷", "sort_order": 2},
         ])
     )
     assert result.get("success") is True, result

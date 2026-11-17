@@ -394,7 +394,7 @@ describe("NodeDetailDrawer", () => {
     expect(body.querySelector("h1")).toBeNull();
   });
 
-  it("renders chapter elements at the top of chapter detail", () => {
+  it("does not render leftover chapter_elements in chapter detail", () => {
     const node = {
       id: "node-1",
       type: "chapter",
@@ -410,10 +410,9 @@ describe("NodeDetailDrawer", () => {
 
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} />);
 
-    expect(screen.getByText("本章元素")).toBeDefined();
-    expect(screen.getByText("2 项")).toBeDefined();
-    expect(screen.getByText("主角觉醒")).toBeDefined();
-    expect(screen.getByText("仓库逃亡")).toBeDefined();
+    expect(screen.queryByText("本章元素")).toBeNull();
+    expect(screen.queryByText("主角觉醒")).toBeNull();
+    expect(screen.queryByText("仓库逃亡")).toBeNull();
   });
 
   it("renders chapter character names without exposing character ids", () => {
@@ -512,7 +511,7 @@ describe("NodeDetailDrawer", () => {
     expect(header.contains(screen.getByText("第十二章：雨夜来客"))).toBe(true);
     expect(header.contains(screen.getByText("4 字"))).toBe(true);
     expect(header.contains(screen.getByText("出场角色"))).toBe(true);
-    expect(header.contains(screen.getByText("本章元素"))).toBe(true);
+    expect(screen.queryByText("本章元素")).toBeNull();
   });
 
   it("keeps Markdown double-star syntax as ordinary bold text", () => {
@@ -694,7 +693,7 @@ describe("NodeDetailDrawer", () => {
     expect(screen.getByText("出场角色")).toBeDefined();
     expect(title.parentElement.contains(screen.getByRole("button", { name: "收起详情" }))).toBe(true);
     expect(wordCount.compareDocumentPosition(screen.getByText("出场角色")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
-    expect(screen.getByText("出场角色").compareDocumentPosition(screen.getByText("本章元素")) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.queryByText("本章元素")).toBeNull();
   });
 
   it("collapses chapter characters and elements together in App mode", () => {
@@ -1874,104 +1873,23 @@ describe("NodeDetailDrawer", () => {
     cancelFrame.mockRestore();
   });
 
-  it("edits existing chapter_elements in edit mode and includes them in onUpdate payload", async () => {
+  it("does not render a chapter elements editor in edit mode", () => {
     const node = {
       id: "c1",
       type: "chapter",
       label: "第一章",
       content: "正文",
       extra_data: {
-        chapter_elements: [
-          { id: "e1", title: "主角觉醒", content: "林远感知异常" },
-        ],
+        chapter_elements: [{ id: "e1", title: "主角觉醒", content: "林远感知异常" }],
       },
     };
-    const onUpdate = vi.fn().mockResolvedValue(undefined);
-    render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
-
-    fireEvent.click(screen.getByTitle("编辑全文"));
-
-    const titleInput = screen.getByDisplayValue("主角觉醒");
-    fireEvent.change(titleInput, { target: { value: "主角觉醒（改）" } });
-
-    fireEvent.click(screen.getByText("保存"));
-
-    await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith("c1", expect.objectContaining({
-        chapter_elements: [
-          expect.objectContaining({ id: "e1", title: "主角觉醒（改）", content: "林远感知异常" }),
-        ],
-      }));
-    });
-  });
-
-  it("adds a new chapter element in edit mode", async () => {
-    const node = {
-      id: "c2",
-      type: "chapter",
-      label: "第二章",
-      content: "",
-      extra_data: { chapter_elements: [] },
-    };
-    const onUpdate = vi.fn().mockResolvedValue(undefined);
-    render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
-
-    fireEvent.click(screen.getByTitle("编辑全文"));
-
-    fireEvent.click(screen.getByText("添加元素"));
-    const titleInputs = screen.getAllByPlaceholderText("元素标题");
-    fireEvent.change(titleInputs[0], { target: { value: "新元素" } });
-
-    fireEvent.click(screen.getByText("保存"));
-
-    await waitFor(() => {
-      expect(onUpdate).toHaveBeenCalledWith("c2", expect.objectContaining({
-        chapter_elements: [
-          expect.objectContaining({ title: "新元素" }),
-        ],
-      }));
-    });
-  });
-
-  it("removes a chapter element in edit mode", async () => {
-    const node = {
-      id: "c3",
-      type: "chapter",
-      label: "第三章",
-      content: "",
-      extra_data: {
-        chapter_elements: [
-          { id: "e1", title: "保留", content: "" },
-          { id: "e2", title: "删除我", content: "" },
-        ],
-      },
-    };
-    const onUpdate = vi.fn().mockResolvedValue(undefined);
-    render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={onUpdate} />);
-
-    fireEvent.click(screen.getByTitle("编辑全文"));
-
-    const removeButtons = screen.getAllByTitle("删除元素");
-    fireEvent.click(removeButtons[1]);
-
-    fireEvent.click(screen.getByText("保存"));
-
-    await waitFor(() => {
-      const payload = onUpdate.mock.calls[0][1];
-      expect(payload.chapter_elements).toHaveLength(1);
-      expect(payload.chapter_elements[0]).toEqual(expect.objectContaining({ id: "e1", title: "保留" }));
-    });
-  });
-
-  it("does not render chapter elements editor for non-chapter nodes in edit mode", () => {
-    const node = { id: "p1", type: "plot", label: "情节", content: "" };
     render(<NodeDetailDrawer node={node} onClose={vi.fn()} onUpdate={vi.fn()} />);
-
     fireEvent.click(screen.getByTitle("编辑全文"));
-
+    expect(screen.queryByTestId("chapter-elements-editor")).toBeNull();
+    expect(screen.queryByText("本章元素")).toBeNull();
     expect(screen.queryByText("添加元素")).toBeNull();
-    expect(screen.queryByPlaceholderText("元素标题")).toBeNull();
   });
+
 });
 
 

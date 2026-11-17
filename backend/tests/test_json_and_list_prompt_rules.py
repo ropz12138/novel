@@ -37,13 +37,15 @@ def test_preparation_prompts_keep_planning_separate_from_prose_realization():
 
 
 def test_supervisor_prompt_describes_array_fields_as_object_arrays():
-    assert "对象数组" in SUPERVISOR_PROMPT
-    assert "`chapter_elements`" in SUPERVISOR_PROMPT
+    assert "人物 `characters` 使用真实 `{id, name}`" in SUPERVISOR_PROMPT
+    assert "`chapter_elements`" not in SUPERVISOR_PROMPT
     assert "`characters`" in SUPERVISOR_PROMPT
     assert "`storylines`" in SUPERVISOR_PROMPT
     assert "`replacements`" in SUPERVISOR_PROMPT
     assert "write_todolist" in SUPERVISOR_PROMPT
-    assert "`sort_order` 是整数" in SUPERVISOR_PROMPT
+    assert "`sort_order` 为整数" in SUPERVISOR_PROMPT
+    assert "角色发展线 `storylines` 使用 `{name, description, body}`" in SUPERVISOR_PROMPT
+    assert "`replacements` 使用 `{start_paragraph, end_paragraph, new}`" in SUPERVISOR_PROMPT
     assert "JSON 数组字面量" not in SUPERVISOR_PROMPT
     assert "错误示例" not in SUPERVISOR_PROMPT
     assert '"chapter_elements": "[]"' not in SUPERVISOR_PROMPT
@@ -73,7 +75,7 @@ def test_tool_validation_error_is_structured_for_model_correction():
     from services.agents.tools.node_tools import UpdateNodeInput
 
     try:
-        UpdateNodeInput(node_id="n1", chapter_elements='[{"title":"场景"}]')
+        UpdateNodeInput(node_id="n1", characters='[{"id":"c1","name":"林川"}]')
     except ValidationError as exc:
         result = json.loads(_structured_tool_error(exc))
     else:
@@ -81,4 +83,4 @@ def test_tool_validation_error_is_structured_for_model_correction():
 
     assert result["success"] is False
     assert result["error"]["code"] == "tool_argument_validation_failed"
-    assert result["error"]["fields"][0]["path"] == "chapter_elements"
+    assert result["error"]["fields"][0]["path"] == "characters"

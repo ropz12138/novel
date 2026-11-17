@@ -27,9 +27,6 @@ function snapIntensityIndex(ratio) {
 }
 
 const NODE_PILL_COLORS = {
-  outline: "#3b82f6",
-  volume: "#6366f1",
-  plot: "#f97316",
   chapter: "#22c55e",
   character: "#ec4899",
   worldbuilding: "#8b5cf6",
