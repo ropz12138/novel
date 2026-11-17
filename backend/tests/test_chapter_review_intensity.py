@@ -56,10 +56,11 @@ def test_supervisor_prompt_explains_selected_intensity():
 
     agent = SupervisorAgent()
     stable = agent._build_system_prompt()
-    assert "本次章节评审强度为中" in stable
+    assert "默认中档" in stable
     assert "humanize-fiction" in stable
     assert "AI 味" in stable
-    assert "评审与修订次数不限" in stable
+    assert "中档：独立评审后处理有证据的重要问题" in stable
+    assert "对实际最新正文复检" in stable
     assert "run_review_agent" in stable
     assert "tired_reader" in stable
     assert agent._build_in_history_system_prompt(chapter_review_intensity="medium") is None

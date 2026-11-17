@@ -20,4 +20,4 @@ Supervisor 确定范围与完整作者要求，通过 `run_review_agent` 委派�
 5. 单独的只读评估返回报告结论。创作流程按授权范围直接落实采纳建议，涉及场景设计时加载 `plan-chapter-scenes`。持续适用于本章后续修订的决定写入章节笔记；本次评审范围留在 `review_goal` 与 `author_requirements`。
 
 
-异步执行协议：run_review_agent 和 run_reference_agent 派发后返回 task_id。可先处理独立工作，需要等待时单独调用 wait_for_subagents；收到子任务完成通知后，再使用其结果、回读正文和核验任务。运行期间的新要求由 Supervisor 整理，通过 steer_subagent 投递给相关任务。章节正文在当前上下文编写，并用 update_node 保存。
+异步执行协议：run_review_agent 和 run_reference_agent 派发后返回 task_id。可先处理独立工作，需要等待时单独调用 wait_for_subagents；收到子任务完成通知后，再使用其结果、回读正文和核验任务。运行期间的新要求由 Supervisor 整理，通过 steer_subagent 投递给相关任务。章节文学创作通过 compose_chapter 交给独立 Writer，程序沿用现有 update_node 协议保存。

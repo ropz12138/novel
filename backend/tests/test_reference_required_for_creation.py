@@ -1,21 +1,16 @@
-"""New creative work always includes a current reference-agent research stage."""
+"""Writer 接入保留现有 V3 系统提示词及各 Skill 的参考研究约定。"""
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1] / 'services' / 'agents'
 
 
-def test_supervisor_requires_reference_even_for_a_complete_existing_plan():
+def test_writer_integration_preserves_current_supervisor_reference_policy():
     prompt = (ROOT / 'prompts/supervisor_system.txt').read_text()
-    assert '新内容的设计与创作必须经过参考研究' in prompt
-    assert '工具集中有 `run_reference_agent` 时' in prompt
-    assert '本轮未取回章节原文时' in prompt
-    assert '作者或既有规划已经明确完整事件链时，你直接核对并本作化落实' not in prompt
-    assert '尚未固定完整事件链时' not in prompt
-    assert '作者已经提供完整事件链' in prompt
-    assert '参考材料就绪后继续' not in prompt
-    assert '取得成功结果' not in prompt
-    assert '章节原文' in prompt
-    assert '叙事机制和适配方向' not in prompt
+    assert '# 七、参考研究：按需，而非强制' in prompt
+    assert '`run_reference_agent` 仅在当前工具集中可用且参考研究能够解决具体问题时调用' in prompt
+    assert '作者要求借鉴某类作品、场景、节奏或叙事技法' in prompt
+    assert '核心方向变化时再判断是否需要新检索' in prompt
+    assert '研究结论只是方法参考，而不是高于正文和设定的事实' in prompt
 
 
 def test_all_creation_skills_include_the_reference_prerequisite():

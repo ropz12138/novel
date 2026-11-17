@@ -21,10 +21,10 @@ def invoke(name, **kwargs):
     return json.loads(asyncio.run(getattr(module(), name).ainvoke(kwargs)))
 
 
-def test_supervisor_has_no_creative_llm_tools():
+def test_supervisor_uses_explicit_writer_and_review_tools():
     names = {t.name for t in SupervisorAgent()._get_tools()}
     assert {'load_workflow_skill', 'read_skill_reference', 'save_chapter_notes',
-            'update_node', 'read_node_content'} <= names
+            'compose_chapter', 'update_node', 'read_node_content'} <= names
     assert not names.intersection({'save_workflow_record', 'read_workflow_records'})
     assert not names.intersection({
         'evaluate_chapter', 'develop_existing_nodes', 'write_chapter_draft',

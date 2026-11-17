@@ -396,11 +396,12 @@ class SupervisorAgent:
         return messages
 
     def _get_tools(self):
-        """Supervisor 管理作品并直接编写章节，评审与参考通过显式任务调用。"""
+        """Supervisor 管理作品，Writer 编写正文，评审与参考通过显式任务调用。"""
         from services.agents.tools.query_tools import query_tools
         from services.agents.tools.supervisor_node_tools import supervisor_node_tools as node_tools
         from services.agents.tools.subagent_task_tools import steer_subagent, wait_for_subagents
         from services.agents.tools.review_agent_tools import run_review_agent
+        from services.agents.writer import compose_chapter
         from services.agents.tools.chapter_tools import count_chapter_words
         from services.agents.tools.research_tools import research_tools
         from services.agents.tools.workflow_skill_tools import workflow_skill_tools
@@ -412,7 +413,7 @@ class SupervisorAgent:
 
         from services.agents.tools.todo_tools import todo_tools
 
-        return todo_tools + [respond_to_user, run_review_agent, steer_subagent, wait_for_subagents] + reference_tools + query_tools + node_tools + [count_chapter_words] + research_tools + workflow_skill_tools
+        return todo_tools + [respond_to_user, compose_chapter, run_review_agent, steer_subagent, wait_for_subagents] + reference_tools + query_tools + node_tools + [count_chapter_words] + research_tools + workflow_skill_tools
 
     def _load_model_pref(self, user_id: str | None) -> dict | None:
         """读取用户的主/备模型偏好；未设或无 user_id 返回 None。"""

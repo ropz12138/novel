@@ -66,7 +66,7 @@ async def _read_skill_reference(skill_name, reference_name, reason=None):
     if reference_name not in WORKFLOW_SKILLS.get(skill_name, ()):
         return _json(success=False, error="参考文件未在该技能中注册")
     return _json(success=True, skill_name=skill_name, reference_name=reference_name,
-                 usage="将完整参考规则作为当前阶段的质量标准。Supervisor 负责规划、正文创作与修订、评审决策和记忆，阅读评审通过 run_review_agent，章节正文通过 update_node 保存；章节笔记通过 save_chapter_notes 保存，最终回复通过 respond_to_user。",
+                 usage="将完整参考规则作为当前阶段的质量标准。Supervisor 负责规划、Writer 交接、评审决策和记忆，正文创作与文学修订通过 compose_chapter，阅读评审通过 run_review_agent，正文由现有 update_node 协议保存；章节笔记通过 save_chapter_notes 保存，最终回复通过 respond_to_user。",
                  content=(REFERENCE_ROOT / reference_name).read_text(encoding="utf-8"))
 
 
@@ -140,7 +140,7 @@ load_workflow_skill = StructuredTool.from_function(coroutine=_load_workflow_skil
 read_skill_reference = StructuredTool.from_function(coroutine=_read_skill_reference, name="read_skill_reference", args_schema=ReadReferenceInput,
     description="按技能和文件名完整读取一个阶段的参考规则。规则由 Supervisor 在当前对话中执行。")
 save_chapter_notes = StructuredTool.from_function(coroutine=_save_chapter_notes, name="save_chapter_notes", args_schema=SaveChapterNotesInput,
-    description="保存完整章节笔记。事实摘要、作者要求、创作设计和连续性数据按用途简明记录，保留全部有效要求、关键因果及续写所需状态，有内容的类别才展开。章节正文使用 update_node。")
+    description="保存完整章节笔记。事实摘要、作者要求、创作设计和连续性数据按用途简明记录，保留全部有效要求、关键因果及续写所需状态，有内容的类别才展开。章节文学创作使用 compose_chapter，程序沿用现有 update_node 协议保存。")
 workflow_skill_tools = [load_workflow_skill, read_skill_reference, save_chapter_notes]
 
 

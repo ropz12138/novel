@@ -49,7 +49,8 @@ def test_missing_sort_order_error_is_actionable():
 def test_supervisor_prompt_states_sort_order_and_forbids_same_level_edges():
     prompt = PROMPT_PATH.read_text(encoding="utf-8")
     assert "sort_order" in prompt
-    assert "章节顺序使用作品内的 `sort_order`" in prompt
+    assert "章节次序由作品内 `sort_order` 表示" in prompt
+    assert "按叙事顺序设为 1、2、3" in prompt
 
 
 def test_create_node_tool_description_requires_sort_order():

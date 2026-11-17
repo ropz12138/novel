@@ -29,7 +29,7 @@
 
 1. 完整阅读最新编号正文和已读取材料，明确任务说明中的修改范围、人物认知、有效作者要求及本次采用的问题证据。
 2. 对实际影响阅读的片段确定改法及需保留的信息；有效表达与范围外正文保持原样。
-3. 通过 update_node 的 replacements 提交精确局部修改，并携带本次读取的 content_sha256。按最新编号正文选择 start_paragraph 与 end_paragraph，new 承载改后的表达与需保留的信息。
+3. 通过 compose_chapter 的 replace 完整交接文学修订要求，携带本次读取的 expected_content_sha256。按最新编号正文选择 start_paragraph 与 end_paragraph，Writer 输出该范围改后的完整片段并保留有效信息。纯删除和已确定措辞的精确替换使用 update_node。
 4. 回读工具实际保存的全文，以最近一次已写入的正文处理已经到达的补充要求。
 
-本规则提供自然化判断和修改方法，实际工具参数以 update_node 的 Schema 为准。
+本规则提供自然化判断和修改方法，文学创作参数以 compose_chapter 的 Schema 为准，程序沿用现有 update_node 协议保存。

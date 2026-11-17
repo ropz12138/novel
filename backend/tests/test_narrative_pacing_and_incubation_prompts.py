@@ -11,16 +11,17 @@ REFERENCES_ROOT = SKILLS_ROOT / "references"
 def test_supervisor_prompt_supports_seed_incubation_and_experiential_options():
     prompt = (PROMPTS_ROOT / "supervisor_system.txt").read_text(encoding="utf-8")
 
-    # 支持从局部世界观或小场景片段孵化，并向非作者用户提供具体名场面与体验化方案
-    assert "局部世界观" in prompt or "场景片段" in prompt
-    assert "名场面" in prompt
+    # V3 从零散想法反推人物处境，并根据章节功能设计实际阅读回报。
+    assert "作者仅提出零散想法时" in prompt
+    assert "从核心画面、矛盾或人物处境向外补全" in prompt
+    assert "主要场面及其结果" in prompt
     assert "阅读体验" in prompt or "读者体验" in prompt
 
-    # 根据具体作品题材、阶段与近期章节节奏动态调配主线与非主线血肉
-    assert "根据具体作品" in prompt
-    assert "日常切片" in prompt
-    assert "世界风物" in prompt
-    assert "支线" in prompt
+    assert "以题材、故事阶段和前文阅读承诺判断本章功能" in prompt
+    assert "主线、日常、支线" in prompt
+    assert "世界体验或情绪变化" in prompt
+    writer = (PROMPTS_ROOT / "writer_system.txt").read_text(encoding="utf-8")
+    assert "日常、幽默、探索、抒情和情绪消化按本章功能自然展开" in writer
 
 
 def test_bootstrap_and_outline_skills_use_progressive_near_far_planning():

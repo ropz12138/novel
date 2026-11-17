@@ -12,7 +12,7 @@ def test_stable_system_prompt_is_identical_across_calls():
 def test_stable_system_prompt_omits_turn_specific_fields():
     prompt = SupervisorAgent()._build_system_prompt()
     assert "## 用户指定的对话上下文" not in prompt
-    assert "本次章节评审强度为中" in prompt
+    assert "默认中档" in prompt
     assert "humanize-fiction" in prompt
     assert "本次章节评审强度为高" not in prompt
     assert "本次章节评审强度为低" not in prompt
@@ -57,7 +57,7 @@ def test_assemble_appends_in_history_system_after_history_before_new_user():
 
     assert isinstance(messages[0], SystemMessage)
     assert "node-1" not in messages[0].content
-    assert "评审与修订次数不限" in messages[0].content
+    assert "中档：独立评审后处理有证据的重要问题" in messages[0].content
     assert [type(m) for m in messages] == [
         SystemMessage,
         HumanMessage,

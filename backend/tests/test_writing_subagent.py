@@ -58,9 +58,10 @@ def read_hash(node_id):
     return payload["content_sha256"], payload
 
 
-def test_supervisor_registers_update_node_without_writing_agent():
+def test_supervisor_registers_update_node_and_isolated_writer():
     names = set(tools())
     assert "update_node" in names
+    assert "compose_chapter" in names
     assert "run_writing_agent" not in names
     assert "write_content" not in names
     assert "finish_writing" not in names

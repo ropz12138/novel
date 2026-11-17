@@ -1,5 +1,5 @@
 依据最新编号正文、当前修改范围、作者要求和已有评审证据，定位需要调整的片段。先确认每处问题、希望改善的阅读效果及需保留的事实、语气、细节与人物意图。
 
-通过 update_node 的 replace 提交 replacements，并携带本次读取的 content_sha256。每项使用当前编号正文中的 start_paragraph、end_paragraph 和 new；new 是选中范围修改后的完整文本，片段之外的正文保持原样。同段关联改动合为一项，新段落之间用空行分隔。保存后回读。共同创作标准用于判断本次范围内的改法，修改范围由当前任务决定。
+通过 compose_chapter 的 replace 交接修改任务，并携带本次读取的 expected_content_sha256。使用当前编号正文中的 start_paragraph、end_paragraph 指定单个连续范围，Writer 输出该范围修改后的完整文本，片段之外的正文由程序原样保留。纯删除与已确定措辞的精确替换使用 update_node 的 replacements。同段关联改动合为一项，新段落之间用空行分隔。保存后回读。共同创作标准用于判断本次范围内的改法，修改范围由当前任务决定。
 
 通用文学标准完整读取 chapter_writer.txt，当前文件规定本操作的范围与保存方式。

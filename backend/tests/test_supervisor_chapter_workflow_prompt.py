@@ -197,11 +197,12 @@ def test_chapter_writer_treats_scene_plan_as_facts_instead_of_draft_prose():
     assert "根据现场语境独立完成具体措辞、句式、心理呈现和叙述节奏" in prompt
 
 
-def test_supervisor_writes_chapters_directly_and_reads_back():
+def test_supervisor_delegates_prose_to_writer_and_reads_back():
     assert "内容保存后用 `read_node_content` 回读整章" in PROMPT
     assert 'mode="replace"' in PROMPT
     assert 'mode="overwrite"' in PROMPT
-    assert "由 Supervisor 在当前上下文直接成文" in PROMPT
+    assert "## 第四步：交给独立 Writer" in PROMPT
+    assert "compose_chapter" in PROMPT
     assert "content_sha256" in PROMPT
     assert "run_writing_agent" not in PROMPT
     assert "write_content" not in PROMPT
